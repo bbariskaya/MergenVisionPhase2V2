@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Any
 
+import asyncpg
 import pytest
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import create_async_engine
 
 pytestmark = pytest.mark.asyncio(scope="session")
+
+
+def _pg_url() -> str:
+    return os.environ["DATABASE_URL"].replace("postgresql+asyncpg", "postgresql")
 
 
 def _check_sql(constraint: dict[str, Any]) -> str:
@@ -86,3 +92,159 @@ async def test_required_constraints_and_indexes() -> None:
     assert "face_sample" in referred
 
     await engine.dispose()
+
+
+async def test_invalid_inserts_are_rejected_by_constraints() -> None:
+    conn = await asyncpg.connect(_pg_url())
+    try:
+        await conn.execute("DELETE FROM recognition_result")
+        await conn.execute("DELETE FROM face_sample")
+        await conn.execute("DELETE FROM process_record")
+        await conn.execute("DELETE FROM face_identity")
+
+        with pytest.raises(
+            asyncpg.exceptions.IntegrityConstraintViolationError
+        ):  # known without name
+            await conn.execute(
+                "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'known', true, 1)",
+                uuid.uuid4(),
+            )
+
+        with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError):  # version 0
+            await conn.execute(
+                "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 0)",
+                uuid.uuid4(),
+            )
+
+        with pytest.raises(
+            asyncpg.exceptions.IntegrityConstraintViolationError
+        ):  # active with deleted_at
+            await conn.execute(
+                "INSERT INTO face_identity (face_id, status, is_active, version, deleted_at) "
+                "VALUES ($1, 'anonymous', true, 1, now())",
+                uuid.uuid4(),
+            )
+
+        with pytest.raises(
+            asyncpg.exceptions.IntegrityConstraintViolationError
+        ):  # inactive without deleted_at
+            await conn.execute(
+                "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', false, 1)",
+                uuid.uuid4(),
+            )
+
+        with pytest.raises(
+            asyncpg.exceptions.IntegrityConstraintViolationError
+        ):  # pending but active
+            await conn.execute(
+                "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 1)",
+                uuid.uuid4(),
+            )
+            rows = await conn.fetch("SELECT face_id FROM face_identity")
+            face_id = rows[0]["face_id"]
+            await conn.execute(
+                "INSERT INTO face_sample (sample_id, face_id, state, is_active) VALUES ($1, $2, 'pending', true)",
+                uuid.uuid4(),
+                face_id,
+            )
+
+        await conn.execute("DELETE FROM face_identity")
+
+        with pytest.raises(
+            asyncpg.exceptions.IntegrityConstraintViolationError
+        ):  # active sample without bucket
+            await conn.execute(
+                "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 1)",
+                uuid.uuid4(),
+            )
+            rows = await conn.fetch("SELECT face_id FROM face_identity")
+            face_id = rows[0]["face_id"]
+            await conn.execute(
+                "INSERT INTO face_sample (sample_id, face_id, state, is_active, object_key, activated_at) "
+                "VALUES ($1, $2, 'active', true, 'k', now())",
+                uuid.uuid4(),
+                face_id,
+            )
+
+        await conn.execute("DELETE FROM face_sample")
+        await conn.execute("DELETE FROM face_identity")
+
+        with pytest.raises(
+            asyncpg.exceptions.IntegrityConstraintViolationError
+        ):  # failed sample without failure_code
+            await conn.execute(
+                "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 1)",
+                uuid.uuid4(),
+            )
+            rows = await conn.fetch("SELECT face_id FROM face_identity")
+            face_id = rows[0]["face_id"]
+            await conn.execute(
+                "INSERT INTO face_sample (sample_id, face_id, state, is_active) VALUES ($1, $2, 'failed', false)",
+                uuid.uuid4(),
+                face_id,
+            )
+
+        await conn.execute("DELETE FROM face_sample")
+        await conn.execute("DELETE FROM face_identity")
+
+        with pytest.raises(
+            asyncpg.exceptions.IntegrityConstraintViolationError
+        ):  # completed process without face_count
+            await conn.execute(
+                "INSERT INTO process_record (process_id, process_type, status, completed_at) "
+                "VALUES ($1, 'image_recognize', 'completed', now())",
+                uuid.uuid4(),
+            )
+
+        with pytest.raises(
+            asyncpg.exceptions.IntegrityConstraintViolationError
+        ):  # failed process without error_code
+            await conn.execute(
+                "INSERT INTO process_record (process_id, process_type, status, completed_at) "
+                "VALUES ($1, 'image_recognize', 'failed', now())",
+                uuid.uuid4(),
+            )
+
+        # recognition_result confidence out of range
+        await conn.execute(
+            "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 1)",
+            uuid.uuid4(),
+        )
+        await conn.execute(
+            "INSERT INTO process_record (process_id, process_type, status) VALUES ($1, 'image_recognize', 'processing')",
+            uuid.uuid4(),
+        )
+        rows = await conn.fetch("SELECT face_id FROM face_identity")
+        face_id = rows[0]["face_id"]
+        await conn.execute(
+            "INSERT INTO face_sample (sample_id, face_id, state, is_active, bucket, object_key, activated_at) "
+            "VALUES ($1, $2, 'active', true, 'b', 'k', now())",
+            uuid.uuid4(),
+            face_id,
+        )
+        prows = await conn.fetch("SELECT process_id FROM process_record")
+        process_id = prows[0]["process_id"]
+        srows = await conn.fetch("SELECT sample_id FROM face_sample")
+        sample_id = srows[0]["sample_id"]
+
+        with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError):  # confidence < 0
+            await conn.execute(
+                "INSERT INTO recognition_result (result_id, process_id, face_id, sample_id, status, match_confidence) "
+                "VALUES ($1, $2, $3, $4, 'new_anonymous', -0.1)",
+                uuid.uuid4(),
+                process_id,
+                face_id,
+                sample_id,
+            )
+
+        with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError):  # confidence > 1
+            await conn.execute(
+                "INSERT INTO recognition_result (result_id, process_id, face_id, sample_id, status, match_confidence) "
+                "VALUES ($1, $2, $3, $4, 'new_anonymous', 1.1)",
+                uuid.uuid4(),
+                process_id,
+                face_id,
+                sample_id,
+            )
+    finally:
+        await conn.close()

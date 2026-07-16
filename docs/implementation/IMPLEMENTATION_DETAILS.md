@@ -204,4 +204,4 @@ This prevents an active identity with zero active samples.
 make phase1-sprint-01-acceptance
 ```
 
-All targets passed twice on 2026-07-16 (77 tests total: 44 unit + 33 integration, ruff, mypy, format check, Docker build/import, restart probe, git diff --check).
+All targets passed twice on 2026-07-16 (78 tests total: 44 unit + 34 integration, ruff, mypy, format check, Docker build/import, restart probe, git diff --check).

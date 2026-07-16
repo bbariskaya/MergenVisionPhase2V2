@@ -88,7 +88,7 @@ All commands were executed from `/home/user/Workspace/MergenVisionPhase2v2`.
 | `make phase1-sprint-01-static` | `ruff check .` passed; `mypy .` passed (80 files) |
 | `make phase1-sprint-01-format-check` | 80 files already formatted |
 | `make phase1-sprint-01-unit` | 44 passed |
-| `make phase1-sprint-01-full-test` | **77 passed** (44 unit + 33 integration) |
+| `make phase1-sprint-01-full-test` | **78 passed** (44 unit + 34 integration) |
 | `make phase1-sprint-01-restart` | Probe seed/restart/verify passed across PG, MinIO, Qdrant |
 | `make phase1-sprint-01-image-build` | Image built; container import printed `backend-import-ok` |
 | `git diff --check` | Clean |
