@@ -3,16 +3,13 @@ services:
     image: postgres:16.3-alpine
     container_name: mergenvision-postgres
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: mergenvision
-      POSTGRES_USER: mergenvision
-      POSTGRES_PASSWORD: mergenvision
+    env_file: backend/.env
     ports:
       - "5433:5432"
     volumes:
       - mergenvision_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mergenvision -d mergenvision"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -22,9 +19,7 @@ services:
     container_name: mergenvision-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+    env_file: backend/.env
     ports:
       - "9002:9000"
       - "9003:9001"

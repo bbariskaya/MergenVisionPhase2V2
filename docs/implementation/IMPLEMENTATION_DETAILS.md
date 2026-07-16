@@ -119,9 +119,15 @@ The `uuid7` PyPI package is used. It exposes `uuid_extensions.uuid7()`. The wrap
 - Collection: `face_samples_v1`
 - Vector: 512-D cosine
 - Point ID: `sample_id` as string
-- Payload: only `{"face_id": "<uuid>", "active": true}`
+- Payload: `{"sample_id": "<uuid>", "face_id": "<uuid>", "active": true, "model_version": "phase1-sprint-01"}`
 - Search uses the non-deprecated `query_points()` API with an `active=True` filter.
 - PostgreSQL always validates that the candidate identity and sample are active before trusting a Qdrant result.
+
+### 4.5 Docker Compose environment
+
+- PostgreSQL and MinIO credentials are loaded from `backend/.env` via `env_file`.
+- `backend/.env.example` contains documented local-development placeholders.
+- The real `.env` file is ignored by Git.
 
 ## 5. IdentityStorageLifecycleService
 

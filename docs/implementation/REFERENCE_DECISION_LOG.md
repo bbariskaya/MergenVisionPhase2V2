@@ -93,10 +93,10 @@
 | Inspected upstream files/symbols | `AsyncQdrantClient.query_points`, `Filter`, `FieldCondition`, `MatchValue`, `PointStruct` |
 | Behavior adopted | Use `query_points()` with a `must=[FieldCondition(key="active", match=MatchValue(value=True))]` filter. |
 | Behavior explicitly rejected | Deprecated `search()` method. |
-| Local modifications | Payload restricted to `face_id` and `active`. |
+| Local modifications | Payload carries `sample_id`, `face_id`, `active`, and `model_version` to align with `AGENTS.md` §20. |
 | Failing test/reproducer | `tests/integration/vectors/test_qdrant_adapter.py::test_active_filter_excludes_inactive` |
 | Parity/runtime acceptance command | `make phase1-sprint-01-qdrant` |
-| Known limitation | Search result is always cross-checked against PostgreSQL active state. |
+| Known limitation | `model_version` is a static sprint marker until `inference_profile` is introduced. |
 
 ---
 
@@ -197,3 +197,23 @@
 | Failing test/reproducer | `tests/integration/lifecycle/test_identity_storage_lifecycle.py` |
 | Parity/runtime acceptance command | `make phase1-sprint-01-lifecycle` |
 | Known limitation | Does not solve concurrent same-unknown races; deferred. |
+
+---
+
+## DEC-010 — Docker Compose Environment Variables for Local Secrets
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-010 |
+| Local feature/symbol | `docker-compose.yml`, `backend/.env`, `backend/.env.example` |
+| Reference URL | `AGENTS.md` §30 |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | N/A |
+| Behavior adopted | PostgreSQL and MinIO credentials are loaded from `backend/.env` via Docker Compose `env_file`; no hardcoded secrets in `docker-compose.yml`. |
+| Behavior explicitly rejected | Hardcoded database and MinIO passwords in `docker-compose.yml`. |
+| Local modifications | `backend/.env` created with local-dev placeholders (Git-ignored); `backend/.env.example` documents the required variables. |
+| Failing test/reproducer | `make phase1-sprint-01-acceptance` (smoke test for compose env loading) |
+| Parity/runtime acceptance command | `make phase1-sprint-01-acceptance` |
+| Known limitation | `backend/.env` contains local-dev-only values and must not be committed. |

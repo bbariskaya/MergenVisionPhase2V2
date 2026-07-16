@@ -22,6 +22,7 @@ from app.domain.value_objects import FaceId, SampleId
 from app.infrastructure.config import settings
 
 DIMENSION = 512
+MODEL_VERSION = "phase1-sprint-01"
 
 
 class QdrantVectorStore(VectorStore):
@@ -72,7 +73,12 @@ class QdrantVectorStore(VectorStore):
                 PointStruct(
                     id=str(sample_id),
                     vector=list(embedding),
-                    payload={"face_id": str(face_id), "active": True},
+                    payload={
+                        "sample_id": str(sample_id),
+                        "face_id": str(face_id),
+                        "active": True,
+                        "model_version": MODEL_VERSION,
+                    },
                 )
             ],
             wait=True,
