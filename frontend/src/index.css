@@ -1,0 +1,84 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+:root {
+  --color-bg: #0b0f14;
+  --color-surface: #11161d;
+  --color-panel: #0f1419;
+  --color-elevated: #181f28;
+  --color-border: #1f2932;
+  --color-border-light: #2a3540;
+  --color-foreground: #f1f5f9;
+  --color-muted: #94a3b8;
+  --color-dim: #64748b;
+  --color-primary: #10b981;
+  --color-primary-dim: #059669;
+  --color-on-primary: #020617;
+  --color-secondary: #0ea5e9;
+  --color-accent: #f97316;
+  --color-alert: #ef4444;
+  --color-warning: #eab308;
+  --color-success: #22c55e;
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html {
+  font-family: var(--font-sans);
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-bg);
+  color: var(--color-foreground);
+}
+
+pre, code {
+  font-family: var(--font-mono);
+}
+
+.card {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+}
+
+.panel {
+  background-color: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+}
+
+.btn-primary {
+  background-color: var(--color-primary);
+  color: var(--color-on-primary);
+  border-radius: 0.5rem;
+  font-weight: 500;
+  transition: opacity 150ms ease;
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+}
+
+.status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+}
+
+.text-muted { color: var(--color-muted); }
+.text-dim { color: var(--color-dim); }
+.text-primary { color: var(--color-primary); }
+.text-accent { color: var(--color-accent); }
+.text-alert { color: var(--color-alert); }
+.bg-surface { background-color: var(--color-surface); }
+.bg-panel { background-color: var(--color-panel); }
+.bg-elevated { background-color: var(--color-elevated); }
+.border-border { border-color: var(--color-border); }
+.ring-primary { --tw-ring-color: var(--color-primary-dim); }
