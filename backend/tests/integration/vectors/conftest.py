@@ -1,21 +1,20 @@
 """Vectors integration test configuration."""
 
-from collections.abc import AsyncGenerator
+from __future__ import annotations
 
 import pytest
+
+from tests.support.resource_guard import assert_safe_test_environment
+
+assert_safe_test_environment()
+
+from app.infrastructure.vectors.qdrant_adapter import QdrantVectorStore
 
 pytestmark = pytest.mark.asyncio(scope="session")
 
 
 @pytest.fixture(autouse=True)
-async def _clean_qdrant_collection() -> AsyncGenerator[None, None]:
-    from app.infrastructure.vectors.qdrant_adapter import QdrantVectorStore
-
-    store = QdrantVectorStore()
-    try:
-        collections = await store.client.get_collections()
-        if any(c.name == store._collection_name for c in collections.collections):
-            await store.client.delete_collection(collection_name=store._collection_name)
-    except Exception:
-        pass
-    yield
+async def _clean_qdrant_collection(vector_store: QdrantVectorStore) -> None:
+    collections = await vector_store.client.get_collections()
+    if any(c.name == vector_store._collection_name for c in collections.collections):
+        await vector_store.client.delete_collection(collection_name=vector_store._collection_name)

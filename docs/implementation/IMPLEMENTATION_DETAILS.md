@@ -102,6 +102,7 @@ Key state machines:
 - `DeclarativeBase` subclass as the ORM base.
 - `create_async_engine(..., poolclass=NullPool)` is used for the integration-test session to avoid asyncpg greenlet/connection-reuse issues across pytest-asyncio session-scoped tests.
 - `SqlAlchemyUnitOfWork` creates a fresh `AsyncSession` on each `async with` entry, begins a transaction explicitly, and closes the session on exit.
+- A `UnitOfWorkFactory` callable is injected into services so every concurrent workflow receives its own unit-of-work instance instead of a shared mutable object.
 
 ### 4.2 UUIDv7
 
@@ -109,36 +110,42 @@ The `uuid7` PyPI package is used. It exposes `uuid_extensions.uuid7()`. The wrap
 
 ### 4.3 MinIO
 
-- Bucket: `mergenvision-face-samples`
+- Development bucket: `mergenvision-face-samples`; dedicated test bucket: `mergenvision-s01-test-face-samples`.
 - Object key: `faces/{faceId}/{sampleId}/aligned.webp`
 - The official MinIO Python SDK is synchronous; blocking calls are isolated via `asyncio.to_thread`.
-- `upload()` validates the upload by calling `stat()` immediately after.
+- `upload()` computes a SHA-256 checksum, stores it as object metadata, and validates the upload by calling `stat()` immediately after.
+- `upload()` is idempotent for identical key/content: uploading the same bytes to the same key returns the existing object stat. Uploading different bytes to an existing key raises a conflict.
 
 ### 4.4 Qdrant
 
-- Collection: `face_samples_v1`
+- Development collection: `face_samples_v1`; dedicated test collection: `mergenvision_s01_test_face_samples_v1`.
 - Vector: 512-D cosine
 - Point ID: `sample_id` as string
-- Payload: `{"sample_id": "<uuid>", "face_id": "<uuid>", "active": true, "model_version": "phase1-sprint-01"}`
+- Payload: `{"sample_id": "<uuid>", "face_id": "<uuid>", "active": true, "model_version": "<settings.model_version>"}`
 - Search uses the non-deprecated `query_points()` API with an `active=True` filter.
+- Query results are validated: the payload `sample_id` must match the point id and both IDs must be valid UUIDs.
+- Payload indexes are created for `face_id`, `active`, and `model_version`.
 - PostgreSQL always validates that the candidate identity and sample are active before trusting a Qdrant result.
 
 ### 4.5 Docker Compose environment
 
-- PostgreSQL and MinIO credentials are loaded from `backend/.env` via `env_file`.
-- `backend/.env.example` contains documented local-development placeholders.
-- The real `.env` file is ignored by Git.
+- Development services are defined in `docker-compose.yml` and load `backend/.env`.
+- Acceptance tests use `docker-compose.test.yml` with the isolated `mergenvision-s01-test` project, named test-only volumes, and `backend/.env.test`.
+- `backend/.env.example` and `backend/.env.test.example` contain documented placeholders.
+- Real `.env` files are ignored by Git; `backend/.env.test` is tracked because it contains only dummy test credentials.
 
 ## 5. IdentityStorageLifecycleService
 
+The service is constructed with a `UnitOfWorkFactory`, `ObjectStore`, `VectorStore`, `IdGenerator` and an optional `candidate_limit`.
+
 ### 5.1 `resolve_or_create`
 
-1. Validate the embedding (length 512, finite, non-zero norm).
+1. Validate the crop, embedding, bounding box and threshold.
 2. Create a `process_record` with status `processing`.
-3. Query Qdrant for the top candidate.
-4. Discard candidates below `match_threshold`.
-5. Verify the candidate's identity and sample are active in PostgreSQL.
-6. If valid:
+3. Query Qdrant for the top `candidate_limit` candidates.
+4. Skip non-finite scores and candidates below `match_threshold`.
+5. For each remaining candidate, verify in PostgreSQL that the identity and sample are active and that the sample belongs to the identity.
+6. If a candidate is accepted:
    - Persist an `anonymous` or `known` result.
    - Complete the process.
    - Return the existing `face_id`.
@@ -148,23 +155,24 @@ The `uuid7` PyPI package is used. It exposes `uuid_extensions.uuid7()`. The wrap
 
 ### 5.2 `add_sample`
 
-Requires an active identity, creates a new pending sample, uploads the crop, indexes the vector, then marks the sample active.
+Requires an active identity, creates a new pending sample, uploads the crop, indexes the vector, then marks the sample active using the bucket and key returned by `ObjectStat`.
 
 ### 5.3 `enroll_identity`
 
-Creates a `face_enroll` process, requires an active anonymous identity, promotes it to `known` with display name and metadata, increments the optimistic version, and completes the process. Old recognition results remain unchanged.
+Creates a `face_enroll` process, requires an active anonymous identity, promotes it to `known` with display name and metadata, and commits the change using `update_with_expected_version` (optimistic locking). Old recognition results remain unchanged.
 
 ### 5.4 `deactivate_identity`
 
-Creates a `face_delete` process, marks the identity inactive with `deleted_at`, marks all active samples inactive, completes the process, then best-effort disables the corresponding Qdrant points. MinIO crop deletion is best-effort and documented as a limitation.
+Creates a `face_delete` process, marks the identity inactive with `deleted_at` using optimistic locking, marks all active samples inactive, completes the process, then best-effort disables the corresponding Qdrant points. MinIO crop deletion is best-effort and documented as a limitation.
 
-### 5.5 Zombie Prevention
+### 5.5 Cross-store compensation
 
 If MinIO upload or Qdrant upsert fails during the first sample creation of a new identity:
 
 - The sample is marked `failed`.
 - The process is marked `failed`.
 - The newly created identity is deactivated and `deleted_at` is set.
+- The partial MinIO object or Qdrant point is removed best-effort.
 - No recognition result is created.
 
 This prevents an active identity with zero active samples.
@@ -174,17 +182,19 @@ This prevents an active identity with zero active samples.
 - TDD execution order was followed for domain entities, migration, repositories, MinIO, Qdrant and lifecycle flows.
 - Deterministic 512-D unit vectors are used: `vector_a` = `[1,0,0,...]`, `vector_b` = `[0,1,0,...]`.
 - Test-only match threshold: `0.95`.
-- Integration tests run against real Docker services on non-conflicting host ports:
-  - PostgreSQL `5433:5432`
-  - MinIO API `9002:9000`, console `9003:9001`
-  - Qdrant HTTP `6335:6333`, gRPC `6336:6334`
+- Integration tests run against the dedicated `mergenvision-s01-test` Docker Compose namespace on non-conflicting host ports:
+  - PostgreSQL `127.0.0.1:55432:5432`
+  - MinIO API `127.0.0.1:59000:9000`, console `127.0.0.1:59001:9001`
+  - Qdrant HTTP `127.0.0.1:56333:6333`, gRPC `127.0.0.1:56334:6334`
+- `tests/support/resource_guard.py` implements a fail-closed guard that rejects any test run whose environment variables point outside the test namespace.
 - The lifecycle test module uses a synchronous autouse cleanup fixture that runs store cleanup in an isolated `asyncio.run()` loop, while the async tests run under a pytest-asyncio session-scoped event loop. This avoids asyncpg greenlet/connection-reuse failures.
+- The full acceptance command is `make phase1-sprint-01-acceptance`.
 
 ## 7. Known Limitations
 
 - `poolclass=NullPool` is used for the async engine to keep the integration tests stable. A real deployment may prefer a connection pool such as `AsyncAdaptedQueuePool` with proper reset behavior.
 - If PostgreSQL transaction fails after MinIO upload or Qdrant upsert succeeds, an orphan object or vector point may remain. There is no outbox, saga or reconciliation worker in this sprint.
-- MinIO crop deletion during deactivation is best-effort.
+- Sprint 01 does not delete MinIO objects during deactivation; biometric crop retention/deletion policy is deferred.
 - The `0.95` threshold is a test fixture value, not a production-calibrated recognition threshold.
 - No FastAPI endpoints, UI, real detector/recognizer, video pipeline, or GPU path is implemented.
 
@@ -194,4 +204,4 @@ This prevents an active identity with zero active samples.
 make phase1-sprint-01-acceptance
 ```
 
-All targets passed on 2026-07-16.
+All targets passed twice on 2026-07-16 (77 tests total: 44 unit + 33 integration, ruff, mypy, format check, Docker build/import, restart probe, git diff --check).

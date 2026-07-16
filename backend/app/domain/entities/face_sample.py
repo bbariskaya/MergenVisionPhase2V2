@@ -17,7 +17,7 @@ class FaceSample:
     bucket: str | None = None
     object_key: str | None = None
     failure_code: str | None = None
-    is_active: bool = True
+    is_active: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     activated_at: datetime | None = None
     deactivated_at: datetime | None = None
@@ -28,6 +28,7 @@ class FaceSample:
         self.state = "active"
         self.bucket = bucket
         self.object_key = object_key
+        self.is_active = True
         self.activated_at = datetime.now(UTC)
 
     def mark_failed(self, failure_code: str) -> None:

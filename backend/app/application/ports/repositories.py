@@ -23,6 +23,13 @@ class FaceIdentityRepository(ABC):
     async def update(self, identity: FaceIdentity) -> None: ...
 
     @abstractmethod
+    async def update_with_expected_version(
+        self,
+        identity: FaceIdentity,
+        expected_version: int,
+    ) -> FaceIdentity: ...
+
+    @abstractmethod
     async def list_all(self) -> Sequence[FaceIdentity]: ...
 
 

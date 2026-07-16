@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Numeric, String, func, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,11 +21,21 @@ class RecognitionResultOrm(Base):
             "status IN ('known', 'anonymous', 'new_anonymous')",
             name="ck_recognition_result_status",
         ),
+        CheckConstraint(
+            "match_confidence >= 0 AND match_confidence <= 1",
+            name="ck_recognition_result_confidence",
+        ),
+        Index(
+            "recognition_result_face_id_idx",
+            "face_id",
+        ),
+        Index(
+            "recognition_result_sample_id_idx",
+            "sample_id",
+        ),
     )
 
-    result_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    result_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     process_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("process_record.process_id", ondelete="RESTRICT"),

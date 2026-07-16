@@ -296,11 +296,7 @@ Finalde her MCP ve kullanılan skill için gerçekten ne yaptığı veya neden s
 
 Her sprint cohesive, çalışan bir vertical outcome veya açık teknik gate üretir. Report-only sprint açılmaz. Sprint sonunda `CURRENT_SPRINT.md` ve `IMPLEMENTATION_DETAILS.md` güncellenir; meaningful implementation için `docs/implementation/review_packages/SPRINT-<NNN>-CODE-REVIEW-PACKAGE.md` hazırlanır.
 
-Completion verdict yalnız `PASS`, `PARTIAL`, `BLOCKED` veya `NOT_TESTED` olur. Final cevapta çalışan kullanıcı davranışı, exact validation komutları, raw sonuç özeti, changed-source map, known limitations, MCP/skill accountability ve tek önerilen sonraki sprint bulunur. Kanıtsız `production-ready`, `GPU-only`, `600 FPS`, `fully optimized` veya `accuracy verified` denmez.# MergenVision Engineering Constitution
-
-Bu dosya MergenVision repository'sinde çalışan bütün insan ve AI agent'lar için kalıcı çalışma sözleşmesidir. Kullanıcının güncel açık kararı bu dosyadan üstündür. Sprint'e özel hedefler `docs/implementation/CURRENT_SPRINT.md`, kaynak adaptasyon kararları `docs/implementation/REFERENCE_DECISION_LOG.md` içinde tutulur.
-
-## 1. Ürün misyonu
+Completion verdict yalnız `PASS`, `PARTIAL`, `BLOCKED` veya `NOT_TESTED` olur. Final cevapta çalışan kullanıcı davranışı, exact validation komutları, raw sonuç özeti, changed-source map, known limitations, MCP/skill accountability ve tek önerilen sonraki sprint bulunur. Kanıtsız `production-ready`, `GPU-only`, `600 FPS`, `fully optimized` veya `accuracy verified` denmez.
 
 Sistem önce görüntülerde, ardından videolarda çoklu yüz tespiti ve kalıcı yüz kimliği üretir. Her detected yüzün immutable bir `faceId` değeri olur. İlk karşılaşma `new_anonymous`, daha sonraki eşleşme `anonymous`, aynı `faceId` isimlendirildikten sonra `known` sonucunu üretir. Video genişletmesi aynı identity karar motorunu kullanır; tracking yalnız temporal sürekliliği, recognition kalıcı kimliği cevaplar.
 

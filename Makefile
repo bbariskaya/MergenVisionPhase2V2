@@ -1,49 +1,135 @@
-DOCKER_SERVICES := postgres minio qdrant
-PYTHON := $(PWD)/backend/.venv/bin/python
+# MergenVision Phase 1 Sprint 01 — Minimal Identity Storage Foundation
+#
+# All acceptance targets operate against the dedicated test namespace defined
+# in docker-compose.test.yml and backend/.env.test. They never touch the
+# development services in docker-compose.yml or any production resources.
 
-.PHONY: phase1-sprint-01-static phase1-sprint-01-postgres phase1-sprint-01-minio phase1-sprint-01-qdrant phase1-sprint-01-lifecycle phase1-sprint-01-failure phase1-sprint-01-restart phase1-sprint-01-acceptance
+COMPOSE_PROJECT := mergenvision-s01-test
+COMPOSE_FILE    := docker-compose.test.yml
+TEST_COMPOSE    := docker compose -p $(COMPOSE_PROJECT) -f $(COMPOSE_FILE)
+TEST_SERVICES   := postgres-test minio-test qdrant-test
+
+BACKEND_DIR     := backend
+PYTHON          := $(PWD)/$(BACKEND_DIR)/.venv/bin/python
+PYTEST          := $(PYTHON) -m pytest
+RUFF            := $(PYTHON) -m ruff
+MYPY            := $(PYTHON) -m mypy
+ALEMBIC         := $(PYTHON) -m alembic
+
+WITH_TEST_ENV   := set -a && . $(PWD)/$(BACKEND_DIR)/.env.test &&
+TEST_REPORTS    := $(PWD)/test-reports
+
+.PHONY: bootstrap \
+        phase1-sprint-01-preflight \
+        phase1-sprint-01-services \
+        phase1-sprint-01-static phase1-sprint-01-format-check \
+        phase1-sprint-01-unit phase1-sprint-01-integration \
+        phase1-sprint-01-full-test phase1-sprint-01-restart \
+        phase1-sprint-01-image-build \
+        phase1-sprint-01-down phase1-sprint-01-acceptance
+
+# ------------------------------------------------------------------------------
+# Bootstrap
+# ------------------------------------------------------------------------------
+
+bootstrap:
+	@echo "==> Creating local environment files (only if missing)..."
+	test -f $(BACKEND_DIR)/.env.test || cp $(BACKEND_DIR)/.env.test.example $(BACKEND_DIR)/.env.test
+	test -f $(BACKEND_DIR)/.env || cp $(BACKEND_DIR)/.env.example $(BACKEND_DIR)/.env
+	@echo "==> Creating Python virtual environment..."
+	python3.12 -m venv $(BACKEND_DIR)/.venv
+	@echo "==> Installing Python dependencies..."
+	cd $(BACKEND_DIR) && $(PYTHON) -m pip install --upgrade pip
+	cd $(BACKEND_DIR) && $(PYTHON) -m pip install -r requirements.lock
+	cd $(BACKEND_DIR) && $(PYTHON) -m pip check
+	@echo "==> Pulling test service images..."
+	$(TEST_COMPOSE) pull
+	@echo "==> Bootstrap complete. Run 'make phase1-sprint-01-acceptance' to verify."
+
+# ------------------------------------------------------------------------------
+# Preflight / safety
+# ------------------------------------------------------------------------------
+
+phase1-sprint-01-preflight:
+	@echo "==> Preflight: fail-closed guard unit tests..."
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) tests/unit/support/test_resource_guard.py -v
+	@echo "==> Preflight: Docker Compose config validation..."
+	$(TEST_COMPOSE) config > /dev/null
+	docker compose -f docker-compose.yml config > /dev/null
+
+# ------------------------------------------------------------------------------
+# Test infrastructure lifecycle
+# ------------------------------------------------------------------------------
+
+phase1-sprint-01-services:
+	$(TEST_COMPOSE) up -d $(TEST_SERVICES) --wait
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(ALEMBIC) upgrade head
+
+phase1-sprint-01-down:
+	$(TEST_COMPOSE) down
+
+# ------------------------------------------------------------------------------
+# Static analysis
+# ------------------------------------------------------------------------------
 
 phase1-sprint-01-static:
-	cd backend && $(PYTHON) -m ruff check .
-	cd backend && $(PYTHON) -m ruff format --check .
-	cd backend && $(PYTHON) -m mypy .
+	cd $(BACKEND_DIR) && $(RUFF) check .
+	cd $(BACKEND_DIR) && $(MYPY) .
 
-phase1-sprint-01-postgres:
-	docker compose up -d postgres --wait
-	cd backend && $(PYTHON) -m alembic upgrade head
-	cd backend && $(PYTHON) -m pytest tests/integration/persistence/test_migrations.py -v
+phase1-sprint-01-format-check:
+	cd $(BACKEND_DIR) && $(RUFF) format --check .
 
-phase1-sprint-01-minio:
-	docker compose up -d minio --wait
-	cd backend && $(PYTHON) -m pytest tests/integration/storage/test_minio_adapter.py -v
+# ------------------------------------------------------------------------------
+# Test suites
+# ------------------------------------------------------------------------------
 
-phase1-sprint-01-qdrant:
-	docker compose up -d qdrant --wait
-	cd backend && $(PYTHON) -m pytest tests/integration/vectors/test_qdrant_adapter.py -v
+phase1-sprint-01-unit:
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) tests/unit -v
 
-phase1-sprint-01-lifecycle:
-	docker compose up -d $(DOCKER_SERVICES) --wait
-	cd backend && $(PYTHON) -m alembic upgrade head
-	cd backend && $(PYTHON) -m pytest tests/integration/lifecycle/test_identity_storage_lifecycle.py tests/integration/lifecycle/test_multiple_samples.py tests/integration/lifecycle/test_inactive_rejection.py -v
+phase1-sprint-01-integration: phase1-sprint-01-services
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) tests/integration -v
 
-phase1-sprint-01-failure:
-	docker compose up -d $(DOCKER_SERVICES) --wait
-	cd backend && $(PYTHON) -m alembic upgrade head
-	cd backend && $(PYTHON) -m pytest tests/integration/lifecycle/test_failure_paths.py -v
+phase1-sprint-01-full-test: phase1-sprint-01-services
+	@mkdir -p $(TEST_REPORTS)
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) tests -v \
+	    --junitxml=$(TEST_REPORTS)/sprint01.xml
 
-phase1-sprint-01-restart:
-	docker compose up -d $(DOCKER_SERVICES) --wait
-	cd backend && $(PYTHON) -m alembic upgrade head
-	cd backend && $(PYTHON) -m pytest tests/integration/lifecycle/test_restart_persistence.py -v
+# ------------------------------------------------------------------------------
+# Restart persistence probe
+# ------------------------------------------------------------------------------
 
-phase1-sprint-01-acceptance: phase1-sprint-01-static
-	cd backend && $(PYTHON) -m pytest tests/unit/test_domain_dependency_boundary.py -v
-	cd backend && $(PYTHON) -m pytest tests/unit/domain -v
-	$(MAKE) phase1-sprint-01-postgres
-	$(MAKE) phase1-sprint-01-minio
-	$(MAKE) phase1-sprint-01-qdrant
-	$(MAKE) phase1-sprint-01-lifecycle
-	$(MAKE) phase1-sprint-01-failure
-	$(MAKE) phase1-sprint-01-restart
-	cd backend && $(PYTHON) -m ruff check . && $(PYTHON) -m mypy .
+phase1-sprint-01-restart: phase1-sprint-01-services
+	@mkdir -p $(TEST_REPORTS)
+	$(WITH_TEST_ENV) $(PYTHON) -m backend.scripts.restart_persistence_probe seed \
+	    --state-file $(TEST_REPORTS)/restart-probe.json
+	$(TEST_COMPOSE) restart $(TEST_SERVICES)
+	$(TEST_COMPOSE) up -d $(TEST_SERVICES) --wait
+	$(WITH_TEST_ENV) $(PYTHON) -m backend.scripts.restart_persistence_probe verify \
+	    --state-file $(TEST_REPORTS)/restart-probe.json
+
+# ------------------------------------------------------------------------------
+# Container build smoke
+# ------------------------------------------------------------------------------
+
+phase1-sprint-01-image-build:
+	docker build \
+	    -f $(BACKEND_DIR)/Dockerfile \
+	    -t mergenvision-backend:sprint01-check \
+	    .
+	docker run --rm mergenvision-backend:sprint01-check \
+	    python -c "import app; print('backend-import-ok')"
+
+# ------------------------------------------------------------------------------
+# Full acceptance
+# ------------------------------------------------------------------------------
+
+phase1-sprint-01-acceptance: \
+        phase1-sprint-01-preflight \
+        phase1-sprint-01-services \
+        phase1-sprint-01-static \
+        phase1-sprint-01-format-check \
+        phase1-sprint-01-unit \
+        phase1-sprint-01-full-test \
+        phase1-sprint-01-restart \
+        phase1-sprint-01-image-build
 	git diff --check

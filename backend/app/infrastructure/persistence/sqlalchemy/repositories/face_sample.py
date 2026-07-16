@@ -56,6 +56,7 @@ class SqlAlchemyFaceSampleRepository:
             select(FaceSampleOrm)
             .where(FaceSampleOrm.face_id == face_id)
             .where(FaceSampleOrm.is_active.is_(True))
+            .where(FaceSampleOrm.state == "active")
             .order_by(FaceSampleOrm.created_at)
         )
         return [_to_domain(orm) for orm in result.scalars().all()]

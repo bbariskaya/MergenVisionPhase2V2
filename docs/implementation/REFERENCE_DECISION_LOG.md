@@ -217,3 +217,161 @@
 | Failing test/reproducer | `make phase1-sprint-01-acceptance` (smoke test for compose env loading) |
 | Parity/runtime acceptance command | `make phase1-sprint-01-acceptance` |
 | Known limitation | `backend/.env` contains local-dev-only values and must not be committed. |
+
+---
+
+## DEC-011 — Dedicated Test Namespace and Fail-Closed Resource Guard
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-011 |
+| Local feature/symbol | `docker-compose.test.yml`, `backend/tests/support/resource_guard.py`, `backend/.env.test` |
+| Reference URL | `AGENTS.md` §30 |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | N/A |
+| Behavior adopted | Run all acceptance tests against an isolated `mergenvision-s01-test` Compose project and validate the environment before cleanup with `assert_safe_test_environment()`. |
+| Behavior explicitly rejected | Reusing development/production services or relying on "best-effort" cleanup without guardrails. |
+| Local modifications | Added `docker-compose.test.yml`, `backend/.env.test`, `backend/tests/support/resource_guard.py`, and per-test autouse cleanup guards. |
+| Failing test/reproducer | `tests/unit/support/test_resource_guard.py` |
+| Parity/runtime acceptance command | `make phase1-sprint-01-acceptance` |
+| Known limitation | Guard values are hardcoded for Sprint 01; future sprints will need namespace expansion. |
+
+---
+
+## DEC-012 — Unit of Work Factory Pattern
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-012 |
+| Local feature/symbol | `backend/app/application/ports/unit_of_work.py::UnitOfWorkFactory`, `backend/app/infrastructure/persistence/sqlalchemy/unit_of_work.py` |
+| Reference URL | `AGENTS.md` §16 |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | N/A |
+| Behavior adopted | Inject a `UnitOfWorkFactory` callable into services; each workflow creates its own `SqlAlchemyUnitOfWork` instance. |
+| Behavior explicitly rejected | Sharing a single mutable Unit of Work instance across concurrent operations. |
+| Local modifications | Refactored `IdentityStorageLifecycleService.__init__` to accept `unit_of_work_factory` instead of a unit-of-work instance. |
+| Failing test/reproducer | Concurrent integration tests under pytest-asyncio session scope. |
+| Parity/runtime acceptance command | `make phase1-sprint-01-lifecycle` |
+| Known limitation | None. |
+
+---
+
+## DEC-013 — Optimistic Locking for Identity Mutation
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-013 |
+| Local feature/symbol | `backend/app/infrastructure/persistence/sqlalchemy/repositories/face_identity.py::update_with_expected_version` |
+| Reference URL | `AGENTS.md` §19 |
+| Repository commit/tag | SQLAlchemy 2.0.31 |
+| Access date | 2026-07-16 |
+| Repository license | MIT |
+| Inspected upstream files/symbols | `update(...).where(...).values(...).returning(...)` |
+| Behavior adopted | Perform conditional `UPDATE ... WHERE version = expected_version RETURNING version`; raise `ConcurrentUpdateError` when no row is updated. |
+| Behavior explicitly rejected | Blind `UPDATE` without version check or pessimistic row locking. |
+| Local modifications | Added `update_with_expected_version` to `FaceIdentityRepository` and wired it into enrollment/deactivation. |
+| Failing test/reproducer | Concurrent enrollment/deactivation race scenarios. |
+| Parity/runtime acceptance command | `make phase1-sprint-01-acceptance` |
+| Known limitation | Caller must capture `expected_version` before mutating the entity in memory. |
+
+---
+
+## DEC-014 — Cross-Store Synchronous Compensation
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-014 |
+| Local feature/symbol | `backend/app/application/services/identity_storage_lifecycle_service.py` |
+| Reference URL | `AGENTS.md` §23 |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | N/A |
+| Behavior adopted | If MinIO upload or Qdrant upsert fails during new-identity creation, mark the sample/identity failed and best-effort delete partial external state. |
+| Behavior explicitly rejected | Leaving active identities with zero active samples after an external-store failure. |
+| Local modifications | Rewrote `resolve_or_create` and `add_sample` with explicit try/except/compensation blocks and `_persist_resolution_failure`. |
+| Failing test/reproducer | `tests/integration/lifecycle/test_failure_paths.py` |
+| Parity/runtime acceptance command | `make phase1-sprint-01-failure` |
+| Known limitation | Compensation is synchronous and best-effort; orphaned objects/vectors may remain if cleanup fails. |
+
+---
+
+## DEC-015 — Injected `IdGenerator` Port for UUIDv7
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-015 |
+| Local feature/symbol | `backend/app/application/ports/id_generator.py`, `backend/app/infrastructure/uuid7.py::Uuid7Generator` |
+| Reference URL | `AGENTS.md` §14 |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | N/A |
+| Behavior adopted | Define an `IdGenerator` port with `new_uuid7()` and inject a `Uuid7Generator` adapter into services and tests. |
+| Behavior explicitly rejected | Calling `uuid_extensions.uuid7()` directly from application/domain code. |
+| Local modifications | Added port and adapter; updated service constructor and tests to accept `id_generator`. |
+| Failing test/reproducer | `tests/unit/test_domain_dependency_boundary.py` |
+| Parity/runtime acceptance command | `make phase1-sprint-01-acceptance` |
+| Known limitation | None. |
+
+---
+
+## DEC-016 — MinIO Upload Idempotency and SHA-256 Metadata
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-016 |
+| Local feature/symbol | `backend/app/infrastructure/storage/minio_adapter.py` |
+| Reference URL | MinIO Python SDK docs |
+| Repository commit/tag | minio 7.2.20 |
+| Access date | 2026-07-16 |
+| Repository license | Apache-2.0 |
+| Inspected upstream files/symbols | `Minio.put_object`, `Minio.stat_object`, `x-amz-meta-*` |
+| Behavior adopted | Compute SHA-256, store as metadata, verify on stat, and return `ObjectStat(bucket, key, size, sha256)`. Reject same-key/different-content uploads. |
+| Behavior explicitly rejected | Uploading blindly without integrity check or silently overwriting existing objects. |
+| Local modifications | Extended `ObjectStat`, added SHA computation, and added conflict detection. |
+| Failing test/reproducer | `tests/integration/storage/test_minio_adapter.py` |
+| Parity/runtime acceptance command | `make phase1-sprint-01-minio` |
+| Known limitation | None. |
+
+---
+
+## DEC-017 — Qdrant Payload Validation and Indexes
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-017 |
+| Local feature/symbol | `backend/app/infrastructure/vectors/qdrant_adapter.py` |
+| Reference URL | Qdrant documentation |
+| Repository commit/tag | qdrant-client 1.18.0 |
+| Access date | 2026-07-16 |
+| Repository license | Apache-2.0 |
+| Inspected upstream files/symbols | `AsyncQdrantClient.create_payload_index`, `PayloadSchemaType` |
+| Behavior adopted | Validate payload `sample_id` matches point id and create payload indexes for `face_id`, `active`, and `model_version`. |
+| Behavior explicitly rejected | Trusting unvalidated Qdrant payloads or running searches without payload indexes. |
+| Local modifications | Added validation loop in `query()` and explicit payload index creation after collection creation. |
+| Failing test/reproducer | `tests/integration/vectors/test_qdrant_adapter.py` |
+| Parity/runtime acceptance command | `make phase1-sprint-01-qdrant` |
+| Known limitation | `model_version` is a static sprint marker until `inference_profile` is introduced. |
+
+---
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-010 |
+| Local feature/symbol | `docker-compose.yml`, `backend/.env`, `backend/.env.example` |
+| Reference URL | `AGENTS.md` §30 |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | N/A |
+| Behavior adopted | PostgreSQL and MinIO credentials are loaded from `backend/.env` via Docker Compose `env_file`; no hardcoded secrets in `docker-compose.yml`. |
+| Behavior explicitly rejected | Hardcoded database and MinIO passwords in `docker-compose.yml`. |
+| Local modifications | `backend/.env` created with local-dev placeholders (Git-ignored); `backend/.env.example` documents the required variables. |
+| Failing test/reproducer | `make phase1-sprint-01-acceptance` (smoke test for compose env loading) |
+| Parity/runtime acceptance command | `make phase1-sprint-01-acceptance` |
+| Known limitation | `backend/.env` contains local-dev-only values and must not be committed. |

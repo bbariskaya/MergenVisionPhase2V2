@@ -18,11 +18,18 @@ class FaceIdentityOrm(Base):
 
     __table_args__ = (
         CheckConstraint("status IN ('anonymous', 'known')", name="ck_face_identity_status"),
+        CheckConstraint("version >= 1", name="ck_face_identity_version_positive"),
+        CheckConstraint(
+            "status != 'known' OR (display_name IS NOT NULL AND btrim(display_name) != '')",
+            name="ck_face_identity_known_name",
+        ),
+        CheckConstraint(
+            "(is_active = true AND deleted_at IS NULL) OR (is_active = false AND deleted_at IS NOT NULL)",
+            name="ck_face_identity_active_deleted",
+        ),
     )
 
-    face_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    face_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

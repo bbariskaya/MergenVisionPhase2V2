@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from types import TracebackType
-from typing import Self
+from typing import Protocol, Self
 
 from app.application.ports.repositories import (
     FaceIdentityRepository,
@@ -36,3 +36,7 @@ class UnitOfWork(ABC):
 
     @abstractmethod
     async def rollback(self) -> None: ...
+
+
+class UnitOfWorkFactory(Protocol):
+    def __call__(self) -> UnitOfWork: ...

@@ -1,23 +1,22 @@
 """Unit tests for FaceSample state transitions."""
 
-import uuid
-
 import pytest
 
 from app.domain.entities.face_sample import FaceSample
 from app.domain.errors import InvalidTransitionError
 from app.domain.value_objects import FaceId, SampleId
+from app.infrastructure.uuid7 import generate_uuid7
 
 
 def _ids() -> tuple[FaceId, SampleId]:
-    return FaceId(uuid.uuid4()), SampleId(uuid.uuid4())
+    return FaceId(generate_uuid7()), SampleId(generate_uuid7())
 
 
 def test_new_sample_is_pending() -> None:
     face_id, sample_id = _ids()
     sample = FaceSample(sample_id=sample_id, face_id=face_id)
     assert sample.state == "pending"
-    assert sample.is_active is True
+    assert sample.is_active is False
 
 
 def test_mark_active_transitions_from_pending() -> None:
@@ -25,6 +24,7 @@ def test_mark_active_transitions_from_pending() -> None:
     sample = FaceSample(sample_id=sample_id, face_id=face_id)
     sample.mark_active("bucket", "faces/face/sample.webp")
     assert sample.state == "active"
+    assert sample.is_active is True
     assert sample.bucket == "bucket"
     assert sample.object_key == "faces/face/sample.webp"
     assert sample.activated_at is not None

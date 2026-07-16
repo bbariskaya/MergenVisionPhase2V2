@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import uuid
 from collections.abc import Sequence
@@ -12,6 +13,7 @@ from qdrant_client.models import (
     FieldCondition,
     Filter,
     MatchValue,
+    PayloadSchemaType,
     PointStruct,
     VectorParams,
 )
@@ -22,7 +24,6 @@ from app.domain.value_objects import FaceId, SampleId
 from app.infrastructure.config import settings
 
 DIMENSION = 512
-MODEL_VERSION = "phase1-sprint-01"
 
 
 class QdrantVectorStore(VectorStore):
@@ -30,10 +31,13 @@ class QdrantVectorStore(VectorStore):
         self,
         url: str | None = None,
         collection_name: str | None = None,
+        model_version: str | None = None,
     ) -> None:
         self._url = url or settings.qdrant_url
         self._collection_name = collection_name or settings.qdrant_collection_name
+        self._model_version = model_version or settings.model_version
         self._client: AsyncQdrantClient | None = None
+        self._ensure_lock = asyncio.Lock()
 
     @property
     def client(self) -> AsyncQdrantClient:
@@ -51,13 +55,32 @@ class QdrantVectorStore(VectorStore):
             raise ValidationError("Embedding norm must be non-zero")
 
     async def _ensure_collection(self) -> None:
-        collections = await self.client.get_collections()
-        if any(c.name == self._collection_name for c in collections.collections):
-            return
-        await self.client.create_collection(
-            collection_name=self._collection_name,
-            vectors_config=VectorParams(size=DIMENSION, distance=Distance.COSINE),
-        )
+        async with self._ensure_lock:
+            collections = await self.client.get_collections()
+            if any(c.name == self._collection_name for c in collections.collections):
+                return
+            await self.client.create_collection(
+                collection_name=self._collection_name,
+                vectors_config=VectorParams(size=DIMENSION, distance=Distance.COSINE),
+            )
+            await self.client.create_payload_index(
+                collection_name=self._collection_name,
+                field_name="face_id",
+                field_schema=PayloadSchemaType.KEYWORD,
+                wait=True,
+            )
+            await self.client.create_payload_index(
+                collection_name=self._collection_name,
+                field_name="active",
+                field_schema=PayloadSchemaType.BOOL,
+                wait=True,
+            )
+            await self.client.create_payload_index(
+                collection_name=self._collection_name,
+                field_name="model_version",
+                field_schema=PayloadSchemaType.KEYWORD,
+                wait=True,
+            )
 
     async def upsert(
         self,
@@ -77,7 +100,7 @@ class QdrantVectorStore(VectorStore):
                         "sample_id": str(sample_id),
                         "face_id": str(face_id),
                         "active": True,
-                        "model_version": MODEL_VERSION,
+                        "model_version": self._model_version,
                     },
                 )
             ],
@@ -102,13 +125,24 @@ class QdrantVectorStore(VectorStore):
         for point in result.points:
             payload = point.payload or {}
             face_id_str = payload.get("face_id")
-            if face_id_str is None:
+            sample_id_str = payload.get("sample_id")
+            if face_id_str is None or sample_id_str is None:
+                continue
+            if str(point.id) != sample_id_str:
+                continue
+            try:
+                parsed_sample_id = uuid.UUID(str(point.id))
+                parsed_face_id = uuid.UUID(face_id_str)
+            except ValueError:
+                continue
+            score = point.score
+            if not math.isfinite(score):
                 continue
             candidates.append(
                 VectorCandidate(
-                    sample_id=SampleId(uuid.UUID(str(point.id))),
-                    face_id=FaceId(uuid.UUID(face_id_str)),
-                    score=point.score,
+                    sample_id=SampleId(parsed_sample_id),
+                    face_id=FaceId(parsed_face_id),
+                    score=score,
                 )
             )
         return candidates

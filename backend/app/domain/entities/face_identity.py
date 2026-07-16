@@ -47,3 +47,4 @@ class FaceIdentity:
         self.is_active = False
         self.deleted_at = datetime.now(UTC)
         self.updated_at = self.deleted_at
+        self.version += 1

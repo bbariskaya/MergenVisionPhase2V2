@@ -20,12 +20,16 @@ class BoundingBox:
     height: int
 
     def __post_init__(self) -> None:
-        if self.width < 0 or self.height < 0:
-            raise ValueError("BoundingBox width and height must be non-negative")
+        if self.x < 0 or self.y < 0:
+            raise ValueError("BoundingBox x and y must be non-negative")
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("BoundingBox width and height must be positive")
 
 
 @dataclass(frozen=True)
 class ObjectStat:
+    bucket: str
     key: str
     size: int
     content_type: str | None = None
+    sha256: str | None = None
