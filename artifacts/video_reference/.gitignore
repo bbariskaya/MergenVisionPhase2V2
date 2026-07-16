@@ -1,0 +1,4 @@
+# Ignore all generated video-reference artifacts.
+*
+# Keep this placeholder.
+!.gitignore

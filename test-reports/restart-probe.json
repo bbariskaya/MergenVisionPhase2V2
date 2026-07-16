@@ -1,8 +1,8 @@
 {
-  "process_id": "06a58f0e-3069-761c-8000-346af1e28cd7",
-  "face_id": "06a58f0e-3a3f-749e-8000-e6e3b5d7f02c",
-  "sample_id": "06a58f0e-3a3f-76a4-8000-5fc155c03dee",
+  "process_id": "06a58fcd-9f09-7f26-8000-b9461b6a0e98",
+  "face_id": "06a58fcd-aa63-7ec1-8000-8d68ddc6e058",
+  "sample_id": "06a58fcd-aa64-70e4-8000-a1d5c1388a00",
   "bucket": "mergenvision-s01-test-face-samples",
-  "object_key": "faces/06a58f0e-3a3f-749e-8000-e6e3b5d7f02c/06a58f0e-3a3f-76a4-8000-5fc155c03dee/aligned.webp",
+  "object_key": "faces/06a58fcd-aa63-7ec1-8000-8d68ddc6e058/06a58fcd-aa64-70e4-8000-a1d5c1388a00/aligned.webp",
   "byte_size": 68
 }

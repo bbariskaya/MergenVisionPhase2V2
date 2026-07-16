@@ -1,0 +1,5 @@
+# Ignore all gallery images by default.
+*
+# Keep this placeholder and README.
+!.gitignore
+!README.md

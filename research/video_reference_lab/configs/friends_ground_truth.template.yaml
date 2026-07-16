@@ -1,0 +1,17 @@
+schema_version: mv-video-ground-truth/v1
+video_sha256: "<required>"
+anchors:
+  - anchor_id: rachel_early
+    label: Rachel
+    split: calibration
+    frame_index: null
+    observation_id: null
+  - anchor_id: rachel_late
+    label: Rachel
+    split: holdout
+    frame_index: null
+    observation_id: null
+
+cannot_link_pairs: []
+ignored_observation_ids: []
+notes: []

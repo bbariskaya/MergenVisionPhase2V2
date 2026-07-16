@@ -1,0 +1,5 @@
+# Ignore all video inputs by default.
+*
+# Keep this placeholder and README.
+!.gitignore
+!README.md

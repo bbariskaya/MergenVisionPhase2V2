@@ -76,3 +76,25 @@ node_modules/
 
 # Misc project-specific
 interprobe_logo.jpeg
+
+# Model artifacts (large binaries; keep out of Git)
+*.onnx
+*.engine
+*.plan
+backend/artifacts/models/*.pt
+backend/artifacts/models/*.pth
+
+# Sprint 002 video reference lab
+research/video_reference_lab/.venv/
+research/video_reference_lab/.pytest_cache/
+research/video_reference_lab/.mypy_cache/
+research/video_reference_lab/.ruff_cache/
+research/video_reference_lab/**/*.executed.ipynb
+test_videos/*
+!test_videos/.gitignore
+!test_videos/README.md
+test_gallery/*
+!test_gallery/.gitignore
+!test_gallery/README.md
+artifacts/video_reference/*
+!artifacts/video_reference/.gitignore
