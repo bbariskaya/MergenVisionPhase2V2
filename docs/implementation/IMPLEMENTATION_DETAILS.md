@@ -1,0 +1,191 @@
+# Phase 1 Sprint 01 — Implementation Details
+
+## 1. Scope
+
+This document records the concrete implementation choices for the Minimal Identity Storage Foundation sprint. It covers the four-table PostgreSQL schema, the pure Python domain layer, SQLAlchemy 2.0 async infrastructure adapters, MinIO/Qdrant adapters, the lifecycle service and the integration-test strategy.
+
+## 2. PostgreSQL Schema
+
+One Alembic migration creates the tables in this order:
+
+1. `face_identity`
+2. `process_record`
+3. `face_sample`
+4. `recognition_result`
+
+### 2.1 `face_identity`
+
+| Column | Type | Notes |
+|---|---|---|
+| `face_id` | UUID | Primary key. Generated as UUIDv7 in application code. |
+| `status` | VARCHAR(16) | `anonymous` or `known`. |
+| `is_active` | BOOLEAN | `true` for active identities; `false` after deactivation. |
+| `display_name` | VARCHAR(255) | Non-null only after enrollment. |
+| `identity_metadata` | JSONB | `{}` default. |
+| `version` | INTEGER | Optimistic-lock counter. |
+| `created_at` / `updated_at` / `deleted_at` | TIMESTAMPTZ | `deleted_at` set on deactivation. |
+
+Indexes:
+
+- `face_identity_status_is_active_idx`
+- `face_identity_created_at_idx`
+
+### 2.2 `process_record`
+
+| Column | Type | Notes |
+|---|---|---|
+| `process_id` | UUID | Primary key, UUIDv7. |
+| `process_type` | VARCHAR(32) | `image_recognize`, `face_enroll`, `face_delete`. |
+| `status` | VARCHAR(16) | `processing`, `completed`, `failed`. |
+| `face_count` | INTEGER | Number of faces processed, if completed. |
+| `error_code` | VARCHAR(64) | Failure code, if failed. |
+| `details` | JSONB | `{}` default. |
+| `created_at` / `completed_at` | TIMESTAMPTZ | Completion timestamp, when applicable. |
+
+Indexes:
+
+- `process_record_status_created_at_idx`
+- `process_record_process_type_created_at_idx`
+
+### 2.3 `face_sample`
+
+| Column | Type | Notes |
+|---|---|---|
+| `sample_id` | UUID | Primary key, UUIDv7. |
+| `face_id` | UUID | Foreign key to `face_identity` with `ON DELETE RESTRICT`. |
+| `state` | VARCHAR(16) | `pending`, `active`, `failed`, `inactive`. |
+| `bucket` | VARCHAR(64) | MinIO bucket once active. |
+| `object_key` | VARCHAR(512) | MinIO key once active. |
+| `failure_code` | VARCHAR(64) | Set when state becomes `failed`. |
+| `created_at` / `activated_at` / `deactivated_at` | TIMESTAMPTZ | Lifecycle timestamps. |
+
+Indexes:
+
+- `face_sample_face_id_sample_state_idx`
+- `face_sample_bucket_key_unique_idx` (unique)
+
+### 2.4 `recognition_result`
+
+Immutable snapshot of a recognition decision.
+
+| Column | Type | Notes |
+|---|---|---|
+| `result_id` | UUID | Primary key, UUIDv7. |
+| `process_id` | UUID | Foreign key to `process_record`. |
+| `face_id` | UUID | Foreign key to `face_identity`. |
+| `sample_id` | UUID | Foreign key to `face_sample`, nullable. |
+| `status` | VARCHAR(16) | `known`, `anonymous`, `new_anonymous`. |
+| `bounding_box` | JSONB | Bounding box at processing time. |
+| `match_confidence` | NUMERIC(4,3) | Cosine score or highest rejected score. |
+| `result_metadata` | JSONB | `{}` default. |
+| `created_at` | TIMESTAMPTZ | Auto-generated. |
+
+Index:
+
+- `recognition_result_process_id_result_index_idx`
+
+## 3. Domain Layer
+
+The domain layer is pure Python and does not import SQLAlchemy, MinIO, Qdrant, asyncpg or FastAPI. It lives under `backend/app/domain/`.
+
+Key state machines:
+
+- `FaceIdentity`: `anonymous` ↔ `known` via `promote_to_known()`; deactivation via `deactivate()`.
+- `FaceSample`: `pending` → `active`/`failed`/`inactive`.
+- `ProcessRecord`: `processing` → `completed`/`failed`.
+- `RecognitionResult`: immutable snapshot; no update method.
+
+## 4. Infrastructure Adapters
+
+### 4.1 SQLAlchemy 2.0
+
+- `DeclarativeBase` subclass as the ORM base.
+- `create_async_engine(..., poolclass=NullPool)` is used for the integration-test session to avoid asyncpg greenlet/connection-reuse issues across pytest-asyncio session-scoped tests.
+- `SqlAlchemyUnitOfWork` creates a fresh `AsyncSession` on each `async with` entry, begins a transaction explicitly, and closes the session on exit.
+
+### 4.2 UUIDv7
+
+The `uuid7` PyPI package is used. It exposes `uuid_extensions.uuid7()`. The wrapper casts the result to `uuid.UUID(str(uuid7()))` for type safety.
+
+### 4.3 MinIO
+
+- Bucket: `mergenvision-face-samples`
+- Object key: `faces/{faceId}/{sampleId}/aligned.webp`
+- The official MinIO Python SDK is synchronous; blocking calls are isolated via `asyncio.to_thread`.
+- `upload()` validates the upload by calling `stat()` immediately after.
+
+### 4.4 Qdrant
+
+- Collection: `face_samples_v1`
+- Vector: 512-D cosine
+- Point ID: `sample_id` as string
+- Payload: only `{"face_id": "<uuid>", "active": true}`
+- Search uses the non-deprecated `query_points()` API with an `active=True` filter.
+- PostgreSQL always validates that the candidate identity and sample are active before trusting a Qdrant result.
+
+## 5. IdentityStorageLifecycleService
+
+### 5.1 `resolve_or_create`
+
+1. Validate the embedding (length 512, finite, non-zero norm).
+2. Create a `process_record` with status `processing`.
+3. Query Qdrant for the top candidate.
+4. Discard candidates below `match_threshold`.
+5. Verify the candidate's identity and sample are active in PostgreSQL.
+6. If valid:
+   - Persist an `anonymous` or `known` result.
+   - Complete the process.
+   - Return the existing `face_id`.
+7. Otherwise create a new anonymous identity/sample, upload the crop, index the vector, persist a `new_anonymous` result, and complete the process.
+
+`match_confidence` for an unmatched result is the highest rejected candidate score, or `0.0` if no candidate exists.
+
+### 5.2 `add_sample`
+
+Requires an active identity, creates a new pending sample, uploads the crop, indexes the vector, then marks the sample active.
+
+### 5.3 `enroll_identity`
+
+Creates a `face_enroll` process, requires an active anonymous identity, promotes it to `known` with display name and metadata, increments the optimistic version, and completes the process. Old recognition results remain unchanged.
+
+### 5.4 `deactivate_identity`
+
+Creates a `face_delete` process, marks the identity inactive with `deleted_at`, marks all active samples inactive, completes the process, then best-effort disables the corresponding Qdrant points. MinIO crop deletion is best-effort and documented as a limitation.
+
+### 5.5 Zombie Prevention
+
+If MinIO upload or Qdrant upsert fails during the first sample creation of a new identity:
+
+- The sample is marked `failed`.
+- The process is marked `failed`.
+- The newly created identity is deactivated and `deleted_at` is set.
+- No recognition result is created.
+
+This prevents an active identity with zero active samples.
+
+## 6. Testing Strategy
+
+- TDD execution order was followed for domain entities, migration, repositories, MinIO, Qdrant and lifecycle flows.
+- Deterministic 512-D unit vectors are used: `vector_a` = `[1,0,0,...]`, `vector_b` = `[0,1,0,...]`.
+- Test-only match threshold: `0.95`.
+- Integration tests run against real Docker services on non-conflicting host ports:
+  - PostgreSQL `5433:5432`
+  - MinIO API `9002:9000`, console `9003:9001`
+  - Qdrant HTTP `6335:6333`, gRPC `6336:6334`
+- The lifecycle test module uses a synchronous autouse cleanup fixture that runs store cleanup in an isolated `asyncio.run()` loop, while the async tests run under a pytest-asyncio session-scoped event loop. This avoids asyncpg greenlet/connection-reuse failures.
+
+## 7. Known Limitations
+
+- `poolclass=NullPool` is used for the async engine to keep the integration tests stable. A real deployment may prefer a connection pool such as `AsyncAdaptedQueuePool` with proper reset behavior.
+- If PostgreSQL transaction fails after MinIO upload or Qdrant upsert succeeds, an orphan object or vector point may remain. There is no outbox, saga or reconciliation worker in this sprint.
+- MinIO crop deletion during deactivation is best-effort.
+- The `0.95` threshold is a test fixture value, not a production-calibrated recognition threshold.
+- No FastAPI endpoints, UI, real detector/recognizer, video pipeline, or GPU path is implemented.
+
+## 8. Acceptance Command
+
+```bash
+make phase1-sprint-01-acceptance
+```
+
+All targets passed on 2026-07-16.
