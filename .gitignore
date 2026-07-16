@@ -124,3 +124,22 @@ test-reports/video-reference/*
 models/
 .insightface/
 ~/.insightface/
+
+# Large archives / compressed model bundles
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.bz2
+*.7z
+*.rar
+
+# Generic model/binary weight blobs
+*.bin
+*.safetensors
+*.ckpt
+*.weights
+
+# Friends character test image data (large, already removed from working tree)
+research/friends_characters/
