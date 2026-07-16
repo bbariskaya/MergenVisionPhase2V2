@@ -83,6 +83,7 @@ class TemplatesConfig(BaseModel):
     min_temporal_separation_ns: int = 200_000_000
     outlier_mad_scale: float = 3.0
     outlier_absolute_cosine_floor: float = 0.20
+    min_quality_score: float = 0.0
 
 
 class ReconciliationConfig(BaseModel):
@@ -121,6 +122,10 @@ class RenderConfig(BaseModel):
     contact_sheet_columns: int = 4
 
 
+class OutputConfig(BaseModel):
+    base_dir: str = "artifacts/video_reference"
+
+
 class LabConfig(BaseModel):
     schema_version: Literal["mv-video-reference-config/v1"] = CONFIG_SCHEMA_VERSION
     video: VideoConfig
@@ -135,6 +140,7 @@ class LabConfig(BaseModel):
     replay: ReplayConfig = Field(default_factory=ReplayConfig)
     benchmark: BenchmarkConfig = Field(default_factory=BenchmarkConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
+    output: OutputConfig = Field(default_factory=OutputConfig)
 
     @field_validator("schema_version")
     @classmethod
@@ -158,12 +164,38 @@ def config_sha256(config: LabConfig) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _repo_root() -> Path:
+    """Locate the repository root by marker files.
+
+    The repository root is the nearest ancestor of this file that contains a
+    `.git` directory, or that contains both `Makefile` and `pyproject.toml`.
+    This avoids mis-identifying a nested package directory (which may contain
+    its own `pyproject.toml`) as the repository root.
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / ".git").exists():
+            return parent
+        if (parent / "Makefile").exists() and (parent / "pyproject.toml").exists():
+            return parent
+    # Fallback to the original relative depth if no marker is found.
+    return here.parents[4]
+
+
+def resolve_repo_relative_path(path: Path | str) -> Path:
+    """Resolve a path relative to the repository root if not absolute."""
+    p = Path(path)
+    if p.is_absolute():
+        return p
+    return _repo_root() / p
+
+
 def load_config(path: Path | str) -> LabConfig:
     """Load and validate a YAML lab configuration."""
     path = Path(path)
     if not path.exists():
         raise ConfigError(f"config file not found: {path}")
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     if not isinstance(raw, dict):
         raise ConfigError("config file must contain a YAML mapping")

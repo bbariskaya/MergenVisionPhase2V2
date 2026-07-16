@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from pathlib import Path
@@ -20,7 +21,7 @@ class AtomicWriter:
         self.fsync = fsync
         self._temp_path: Path | None = None
 
-    def __enter__(self) -> "AtomicWriter":
+    def __enter__(self) -> AtomicWriter:
         self.final_path.parent.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(
             dir=self.final_path.parent,
@@ -34,6 +35,7 @@ class AtomicWriter:
         if exc_type is not None:
             self._cleanup()
             return
+        assert self._temp_path is not None
         try:
             if self.fsync:
                 with open(self._temp_path, "rb") as f:
@@ -45,10 +47,8 @@ class AtomicWriter:
 
     def _cleanup(self) -> None:
         if self._temp_path is not None and self._temp_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 self._temp_path.unlink()
-            except OSError:
-                pass
 
     @property
     def temp_path(self) -> Path:

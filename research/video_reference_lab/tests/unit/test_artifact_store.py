@@ -12,6 +12,7 @@ from mergenvision_video_lab.contracts import (
     AlignmentContract,
     BBoxXYXY,
     FaceObservation,
+    FrameRecord,
     Landmarks5,
     OnnxModelContract,
     QualityMetrics,
@@ -38,6 +39,7 @@ def _dummy_manifest(obs_count: int = 1, emb_count: int = 1) -> RunManifest:
         time_base_den=30,
         duration_ns=1_000_000_000,
         decoded_frame_count=30,
+        sampled_frame_count=30,
         processed_frame_count=30,
         sampling_contract=SamplingContract(mode="every_frame"),
         detector_contract=OnnxModelContract(
@@ -69,6 +71,26 @@ def _dummy_manifest(obs_count: int = 1, emb_count: int = 1) -> RunManifest:
             "serialization_seconds": 0.1,
             "total_seconds": 0.5,
         },
+    )
+
+
+def _dummy_frame(frame_index: int = 0, sampled: bool = True, processed: bool = True) -> FrameRecord:
+    return FrameRecord(
+        source_id="test.mp4",
+        frame_index=frame_index,
+        pts=frame_index,
+        time_base_num=1,
+        time_base_den=30,
+        pts_ns=frame_index * 33_333_333,
+        coded_width=100,
+        coded_height=100,
+        display_width=100,
+        display_height=100,
+        rotation_applied=0.0,
+        sampled=sampled,
+        processed=processed,
+        scene_change_score=0.0,
+        scene_cut_before=False,
     )
 
 
@@ -134,6 +156,15 @@ def test_write_and_read_observations(tmp_path: Path) -> None:
     assert loaded[0].observation_id == "obs_1"
 
 
+def test_write_and_read_frames(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "run")
+    frames = [_dummy_frame(i) for i in range(3)]
+    store.write_frames(frames)
+    loaded = store.read_frames()
+    assert len(loaded) == 3
+    assert [f.frame_index for f in loaded] == [0, 1, 2]
+
+
 def test_write_and_read_embeddings(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "run")
     embeddings = np.array([[1.0, 0.0] + [0.0] * 510], dtype=np.float32)
@@ -147,6 +178,7 @@ def test_validate_complete_run(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "run")
     manifest = _dummy_manifest(obs_count=2, emb_count=1)
     store.write_manifest(manifest)
+    store.write_frames([_dummy_frame(i) for i in range(30)])
     store.write_observations([_dummy_observation(0), _dummy_observation(None)])
     emb = np.array([[1.0, 0.0] + [0.0] * 510], dtype=np.float32)
     emb /= np.linalg.norm(emb, axis=1, keepdims=True)
@@ -161,6 +193,7 @@ def test_validate_rejects_embedding_index_out_of_range(tmp_path: Path) -> None:
     manifest = _dummy_manifest(obs_count=1, emb_count=1)
     obs = _dummy_observation(embedding_index=5)
     store.write_manifest(manifest)
+    store.write_frames([_dummy_frame(i) for i in range(30)])
     store.write_observations([obs])
     emb = np.array([[1.0, 0.0] + [0.0] * 510], dtype=np.float32)
     emb /= np.linalg.norm(emb, axis=1, keepdims=True)
@@ -174,8 +207,39 @@ def test_validate_rejects_non_unit_embeddings(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "run")
     manifest = _dummy_manifest(obs_count=0, emb_count=1)
     store.write_manifest(manifest)
+    store.write_frames([_dummy_frame(i) for i in range(30)])
     store.write_observations([])
     store.write_embeddings(np.array([[2.0, 0.0] + [0.0] * 510], dtype=np.float32))
+    store.write_checksums()
+    with pytest.raises(ArtifactCorruptError):
+        store.validate()
+
+
+def test_validate_rejects_frame_count_mismatch(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "run")
+    manifest = _dummy_manifest(obs_count=0, emb_count=0)
+    manifest.decoded_frame_count = 30
+    manifest.sampled_frame_count = 30
+    manifest.processed_frame_count = 30
+    store.write_manifest(manifest)
+    store.write_frames([_dummy_frame(i) for i in range(29)])
+    store.write_observations([])
+    store.write_embeddings(np.zeros((0, 512), dtype=np.float32))
+    store.write_checksums()
+    with pytest.raises(ArtifactCorruptError):
+        store.validate()
+
+
+def test_validate_rejects_non_contiguous_frame_indices(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "run")
+    manifest = _dummy_manifest(obs_count=0, emb_count=0)
+    manifest.decoded_frame_count = 3
+    manifest.sampled_frame_count = 3
+    manifest.processed_frame_count = 3
+    store.write_manifest(manifest)
+    store.write_frames([_dummy_frame(0), _dummy_frame(2), _dummy_frame(3)])
+    store.write_observations([])
+    store.write_embeddings(np.zeros((0, 512), dtype=np.float32))
     store.write_checksums()
     with pytest.raises(ArtifactCorruptError):
         store.validate()

@@ -1,0 +1,3 @@
+# Ignore all generated test reports and artifacts in the video-reference lab.
+*
+!.gitignore

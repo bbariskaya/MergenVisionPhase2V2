@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -33,8 +33,8 @@ def bbox_area(x1: float, y1: float, x2: float, y2: float) -> float:
 
 
 def iou_xyxy(
-    a: Sequence[float],
-    b: Sequence[float],
+    a: np.ndarray | Sequence[float],
+    b: np.ndarray | Sequence[float],
 ) -> float:
     """Intersection-over-union for two XYXY boxes."""
     ax1, ay1, ax2, ay2 = a

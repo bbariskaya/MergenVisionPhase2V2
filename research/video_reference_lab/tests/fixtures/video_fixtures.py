@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Generator
-
 from fractions import Fraction
+from pathlib import Path
 
 import av
 import numpy as np
 import pytest
-
 
 FRAME_WIDTH = 160
 FRAME_HEIGHT = 120

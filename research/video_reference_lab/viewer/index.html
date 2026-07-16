@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Reference Lab Viewer</title>
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+<div id="app">
+  <h1>Video Reference Lab Viewer</h1>
+  <p>Original video + frozen overlay metadata. No biometric artifacts are uploaded.</p>
+  <div id="controls">
+    <input type="file" id="videoInput" accept="video/mp4">
+    <input type="file" id="overlayInput" accept="application/json,.jsonl">
+    <button id="playPause">Play/Pause</button>
+  </div>
+  <div id="container">
+    <video id="video" controls crossorigin="anonymous"></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <pre id="stats"></pre>
+</div>
+<script src="viewer.js"></script>
+</body>
+</html>

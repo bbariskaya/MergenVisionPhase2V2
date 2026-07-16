@@ -139,85 +139,155 @@ phase1-sprint-01-acceptance: \
 # ==============================================================================
 
 LAB_DIR         := research/video_reference_lab
-LAB_VENV        := $(PWD)/$(LAB_DIR)/.venv
-LAB_PYTHON      := $(LAB_VENV)/bin/python
+LAB_VENV_CPU    := $(PWD)/$(LAB_DIR)/.venv-cpu
+LAB_VENV_CUDA   := $(PWD)/$(LAB_DIR)/.venv-cuda
+LAB_PYTHON      := $(LAB_VENV_CPU)/bin/python
 LAB_PIP         := $(LAB_PYTHON) -m pip
 LAB_PYTEST      := $(LAB_PYTHON) -m pytest
 LAB_RUFF        := $(LAB_PYTHON) -m ruff
 LAB_MYPY        := $(LAB_PYTHON) -m mypy
-LAB_MV          := $(LAB_VENV)/bin/mv-video-lab
+LAB_MV          := $(LAB_VENV_CPU)/bin/mv-video-lab
 LAB_REPORTS     := $(PWD)/test-reports/video-reference
 
-# Default to CPU extra; override with VIDEO_LAB_EXTRA=cuda for CUDA runtime.
-VIDEO_LAB_EXTRA ?= cpu
+# Default config and environment.
+VIDEO_LAB_CONFIG ?= configs/friends_baseline_cpu.yaml
+VIDEO_LAB_EXTRA  ?= cpu
 
-.PHONY: video-reference-install \
-        video-reference-doctor \
+ifeq ($(VIDEO_LAB_EXTRA),cuda)
+  LAB_PYTHON := $(LAB_VENV_CUDA)/bin/python
+  LAB_PIP    := $(LAB_PYTHON) -m pip
+  LAB_RUFF   := $(LAB_PYTHON) -m ruff
+  LAB_MYPY   := $(LAB_PYTHON) -m mypy
+  LAB_MV     := $(LAB_VENV_CUDA)/bin/mv-video-lab
+endif
+
+.PHONY: video-reference-clean-install-cpu \
+        video-reference-clean-install-cuda \
+        video-reference-cli-smoke \
         video-reference-unit \
-        video-reference-smoke \
-        video-reference-extract-friends \
-        video-reference-replay-friends \
-        video-reference-visualize-friends \
-        video-reference-evaluate-friends \
-        video-reference-benchmark \
-        video-reference-acceptance \
-        video-reference-friends
+        video-reference-synthetic-e2e \
+        video-reference-artifact-integrity \
+        video-reference-chunk-parity \
+        video-reference-static \
+        video-reference-ci \
+        video-reference-models-cpu \
+        video-reference-doctor-cpu \
+        video-reference-real-model-smoke-cpu \
+        video-reference-doctor-cuda \
+        video-reference-real-model-smoke-cuda \
+        video-reference-friends-smoke \
+        video-reference-friends-extract \
+        video-reference-friends-replay \
+        video-reference-friends-visualize \
+        video-reference-friends-evaluate \
+        video-reference-friends-acceptance \
+        video-reference-acceptance
 
-video-reference-install:
-	@echo "==> Creating video reference lab environment..."
-	python3.12 -m venv $(LAB_VENV)
+# ------------------------------------------------------------------------------
+# Installation
+# ------------------------------------------------------------------------------
+
+video-reference-clean-install-cpu:
+	@echo "==> Creating video reference lab CPU environment..."
+	rm -rf $(LAB_VENV_CPU)
+	python3.12 -m venv $(LAB_VENV_CPU)
 	cd $(LAB_DIR) && $(LAB_PIP) install --upgrade pip wheel setuptools
-	cd $(LAB_DIR) && $(LAB_PIP) install -e ".[dev,$(VIDEO_LAB_EXTRA)]"
+	cd $(LAB_DIR) && $(LAB_PIP) install -r requirements-cpu.lock
+	cd $(LAB_DIR) && $(LAB_PIP) install -e ".[dev,cpu]" --no-deps
 	cd $(LAB_DIR) && $(LAB_PIP) check
-	@echo "==> Video reference lab install complete."
+	cd $(LAB_DIR) && $(LAB_MV) --help > /dev/null
+	@echo "==> CPU install complete."
 
-video-reference-doctor:
-	cd $(LAB_DIR) && $(LAB_MV) doctor --config configs/friends_baseline.yaml
+video-reference-clean-install-cuda:
+	@echo "==> Creating video reference lab CUDA environment..."
+	rm -rf $(LAB_VENV_CUDA)
+	python3.12 -m venv $(LAB_VENV_CUDA)
+	cd $(LAB_DIR) && $(LAB_PIP) install --upgrade pip wheel setuptools
+	cd $(LAB_DIR) && $(LAB_PIP) install -r requirements-cuda.lock
+	cd $(LAB_DIR) && $(LAB_PIP) install -e ".[dev,cuda]" --no-deps
+	cd $(LAB_DIR) && $(LAB_PIP) check
+	cd $(LAB_DIR) && $(LAB_MV) --help > /dev/null
+	@echo "==> CUDA install complete."
+
+# ------------------------------------------------------------------------------
+# Smoke / static / unit
+# ------------------------------------------------------------------------------
+
+video-reference-cli-smoke:
+	cd $(LAB_DIR) && $(LAB_MV) --help
+	cd $(LAB_DIR) && $(LAB_MV) doctor --config $(VIDEO_LAB_CONFIG) || true
 
 video-reference-unit:
 	@mkdir -p $(LAB_REPORTS)
 	cd $(LAB_DIR) && $(LAB_PYTEST) tests/unit -v \
 	    --junitxml=$(LAB_REPORTS)/unit.xml
 
-video-reference-smoke:
+video-reference-synthetic-e2e:
 	@mkdir -p $(LAB_REPORTS)
-	cd $(LAB_DIR) && $(LAB_MV) run-friends \
-	    --config configs/friends_baseline.yaml \
-	    --max-frames 32 \
-	    --run-dir $(LAB_REPORTS)/smoke
+	cd $(LAB_DIR) && $(LAB_PYTEST) tests/integration/test_synthetic_pipeline.py -v \
+	    --junitxml=$(LAB_REPORTS)/synthetic-e2e.xml
 
-video-reference-extract-friends:
-	cd $(LAB_DIR) && $(LAB_MV) run-friends \
-	    --config configs/friends_baseline.yaml \
-	    --stages extract
-
-video-reference-replay-friends:
-	cd $(LAB_DIR) && $(LAB_MV) run-friends \
-	    --config configs/friends_baseline.yaml \
-	    --stages replay
-
-video-reference-visualize-friends:
-	cd $(LAB_DIR) && $(LAB_MV) run-friends \
-	    --config configs/friends_baseline.yaml \
-	    --stages visualize
-
-video-reference-evaluate-friends:
-	cd $(LAB_DIR) && $(LAB_MV) evaluate \
-	    --config configs/friends_baseline.yaml
-
-video-reference-benchmark:
-	cd $(LAB_DIR) && $(LAB_MV) benchmark \
-	    --config configs/friends_baseline.yaml
-
-video-reference-acceptance: video-reference-unit
+video-reference-artifact-integrity:
 	@mkdir -p $(LAB_REPORTS)
+	cd $(LAB_DIR) && $(LAB_PYTEST) tests/integration/test_artifact_resume.py -v \
+	    --junitxml=$(LAB_REPORTS)/artifact-integrity.xml
+
+video-reference-chunk-parity:
+	@mkdir -p $(LAB_REPORTS)
+	cd $(LAB_DIR) && $(LAB_PYTEST) tests/unit/test_chunk_invariance.py -v \
+	    --junitxml=$(LAB_REPORTS)/chunk-parity.xml
+
+video-reference-static:
 	cd $(LAB_DIR) && $(LAB_RUFF) check src tests
 	cd $(LAB_DIR) && $(LAB_MYPY) src tests
 	cd $(LAB_DIR) && $(LAB_RUFF) format --check src tests
-	cd $(LAB_DIR) && $(LAB_PYTEST) tests -v \
-	    --junitxml=$(LAB_REPORTS)/acceptance.xml
+
+video-reference-ci: video-reference-static video-reference-unit video-reference-synthetic-e2e video-reference-artifact-integrity video-reference-chunk-parity
 	git diff --check
 
-video-reference-friends:
+# ------------------------------------------------------------------------------
+# Real model targets
+# ------------------------------------------------------------------------------
+
+video-reference-models-cpu:
+	cd $(LAB_DIR) && $(LAB_MV) models acquire \
+	    --name buffalo_l --provider cpu --allow-download
+
+video-reference-doctor-cpu:
+	cd $(LAB_DIR) && $(LAB_MV) doctor --config configs/friends_baseline_cpu.yaml
+
+video-reference-real-model-smoke-cpu:
+	cd $(LAB_DIR) && $(LAB_PYTEST) tests/integration/test_real_model_smoke.py -v
+
+video-reference-doctor-cuda:
+	cd $(LAB_DIR) && VIDEO_LAB_EXTRA=cuda $(LAB_MV) doctor --config configs/friends_baseline_cuda.yaml
+
+video-reference-real-model-smoke-cuda:
+	cd $(LAB_DIR) && VIDEO_LAB_EXTRA=cuda $(LAB_PYTEST) tests/integration/test_real_model_smoke.py -v
+
+# ------------------------------------------------------------------------------
+# Friends targets
+# ------------------------------------------------------------------------------
+
+video-reference-friends-smoke:
+	@mkdir -p $(LAB_REPORTS)/friends-smoke
 	cd $(LAB_DIR) && $(LAB_MV) run-friends \
-	    --config configs/friends_baseline.yaml
+	    --config $(VIDEO_LAB_CONFIG) \
+	    --max-frames 32
+
+video-reference-friends-extract:
+	cd $(LAB_DIR) && $(LAB_MV) extract --config $(VIDEO_LAB_CONFIG)
+
+video-reference-friends-replay:
+	cd $(LAB_DIR) && $(LAB_MV) replay --config $(VIDEO_LAB_CONFIG)
+
+video-reference-friends-visualize:
+	cd $(LAB_DIR) && $(LAB_MV) visualize --config $(VIDEO_LAB_CONFIG)
+
+video-reference-friends-evaluate:
+	cd $(LAB_DIR) && $(LAB_MV) evaluate --config $(VIDEO_LAB_CONFIG)
+
+video-reference-friends-acceptance:
+	cd $(LAB_DIR) && $(LAB_MV) run-friends --config $(VIDEO_LAB_CONFIG)
+
+video-reference-acceptance: video-reference-ci video-reference-doctor-cpu video-reference-real-model-smoke-cpu video-reference-friends-acceptance

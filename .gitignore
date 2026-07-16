@@ -86,10 +86,17 @@ backend/artifacts/models/*.pth
 
 # Sprint 002 video reference lab
 research/video_reference_lab/.venv/
+research/video_reference_lab/.venv-cpu/
+research/video_reference_lab/.venv-cuda/
 research/video_reference_lab/.pytest_cache/
 research/video_reference_lab/.mypy_cache/
 research/video_reference_lab/.ruff_cache/
 research/video_reference_lab/**/*.executed.ipynb
+research/video_reference_lab/models/
+research/video_reference_lab/cache/
+research/video_reference_lab/.model_cache/
+
+# Videos, galleries, crops, embeddings, reports, debug media
 test_videos/*
 !test_videos/.gitignore
 !test_videos/README.md
@@ -98,3 +105,22 @@ test_gallery/*
 !test_gallery/README.md
 artifacts/video_reference/*
 !artifacts/video_reference/.gitignore
+*.npy
+*.npz
+research/video_reference_lab/**/*.npy
+research/video_reference_lab/**/*.npz
+research/video_reference_lab/**/*.mp4
+research/video_reference_lab/**/*.jpg
+research/video_reference_lab/**/*.jpeg
+research/video_reference_lab/**/*.png
+research/video_reference_lab/**/gallery_centroids.json
+research/video_reference_lab/**/embeddings.json
+research/video_reference_lab/**/report*.md
+research/video_reference_lab/**/REPORT.md
+test-reports/video-reference/*
+!test-reports/video-reference/.gitignore
+
+# InsightFace local model cache (may be created by official download)
+models/
+.insightface/
+~/.insightface/

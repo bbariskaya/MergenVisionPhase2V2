@@ -1,0 +1,2170 @@
+Aynen abi, sorun şu: önceki prompt “hangi dosyayı nasıl yazacağını” söylüyor ama “biz niye bu işi yapıyoruz?” kısmını yeterince öğretmiyor. Model de checklist tamamlayan memura dönüşüyor.
+
+Aşağıdaki bölümü verdiğim 50 adımlık promptun en başına, görev kurallarından önce aynen ekle:
+# ÖNCE BUNU ANLA — PROJENİN AMACI, SON ÜRÜN VE BU VIDEO LAB'I NEDEN YAPIYORUZ?
+
+Bu bölüm görev listesinden daha önemlidir. Kod yazmaya başlamadan önce tamamen oku ve kendi raporunda anladığın sistemi birkaç paragrafla yeniden açıkla.
+
+Senin görevin yalnızca bazı Python dosyaları, JSON dosyaları veya testler üretmek değildir. Biz video içindeki yüzlerin zaman boyunca nasıl takip edileceğini, hangi görüntülerin tanıma için güvenilir olduğunu ve parçalanmış track'lerin aynı gerçek kişiye nasıl bağlanacağını doğrulayan, gözle incelenebilir ve deterministik bir referans sistem kuruyoruz.
+
+Bu aşama production GPU pipeline değildir. Bu aşama, daha sonra yazılacak GPU/GStreamer/DeepStream/TensorRT sisteminin doğruluk oracle'ıdır.
+
+## 1. Nihai ürün nedir?
+
+Nihai kullanıcı şunu yapabilmelidir:
+
+1. Arayüzden bir video yükler.
+2. Video orijinal kalitesiyle MinIO'ya kaydedilir.
+3. Worker videoyu analiz eder.
+4. Her karedeki yüzler bulunur.
+5. Aynı yüzün ardışık karelerdeki görüntüleri bir tracklet altında toplanır.
+6. Kamera kesintisi, kısa kaybolma veya tracker parçalanması nedeniyle ayrılmış tracklet'ler gerektiğinde aynı canonical track altında birleştirilir.
+7. Canonical track, gallery'deki bir kişiyle yeterince güvenilir eşleşiyorsa örneğin `Rachel` olarak etiketlenir.
+8. Güvenilir eşleşme yoksa `unknown` kalır.
+9. Frontend orijinal videoyu oynatır ve backend'in ürettiği zamanlanmış bbox/label verisini video üzerine overlay olarak çizer.
+10. Bunun için zorunlu olarak yeni bir MP4 render edilmez. Debug amaçlı annotated MP4 ayrıca üretilebilir.
+11. Kullanıcı zaman çizelgesinde kişinin hangi aralıklarda göründüğünü görebilir.
+12. İleride identity storage ile bağlandığında aynı kalıcı `faceId`, ismi değiştirilse bile korunabilir.
+
+Örnek kullanıcı sonucu:
+
+```text
+00:00.000–00:04.120  canonical_track=17  label=Rachel
+00:04.160–00:05.000  yüz görünmüyor
+00:05.040–00:09.600  canonical_track=17  label=Rachel
+00:10.120–00:12.800  canonical_track=23  label=unknown
+
+
+Burada iki ayrı zaman aralığı aynı gerçek kişiyse canonical_track=17 olarak birleşebilir. Ancak bu karar yalnızca kanıta dayanmalıdır.
+
+2. Sistemin temel veri modeli
+
+Aşağıdaki kavramları kesinlikle birbirine karıştırma:
+
+
+flowchart LR
+    F[Video frame] --> O[Face observation]
+    O --> R[Raw tracklet]
+    R --> C[Canonical track]
+    C --> D{Gallery decision}
+    D -->|strong evidence| K[Known label: Rachel]
+    D -->|insufficient evidence| U[Unknown]
+
+    Face observation
+
+Bir frame'de bulunan tek bir yüzdür.
+
+İçermesi gereken temel bilgi:
+
+observation_id
+frame_index
+pts
+timestamp_seconds
+bbox
+five landmarks
+detector confidence
+alignment/quality ölçümleri
+embedding referansı
+daha sonra atanmışsa raw_tracklet_id
+
+Observation bir insan kimliği değildir. Sadece belirli bir karedeki yüz ölçümüdür.
+
+Raw tracklet
+
+Tracker'ın zaman içinde birbirine bağladığı observation dizisidir.
+
+Örnek:
+
+raw_tracklet=4:
+frame 100, 101, 102, 103, 104
+
+Raw tracklet yalnızca zamansal devamlılık iddiasıdır. “Bu Rachel'dır” anlamına gelmez.
+
+Canonical track
+
+Tracker'ın parçalanmış olabileceği raw tracklet'lerin offline reconciliation sonrasında birleştirilmiş halidir.
+
+Örnek:
+
+raw_tracklet 4  ─┐
+                 ├─ canonical_track 17
+raw_tracklet 9  ─┘
+
+Aynı gerçek yüz kısa süre kaybolduysa veya scene cut sonrasında tekrar geldiyse iki raw tracklet oluşabilir. Görsel ve zamansal kanıt yeterliyse bunlar canonical track altında birleştirilebilir.
+
+Canonical track de doğrudan kalıcı faceId değildir. Bu video içindeki canonical kişi izidir.
+
+Display label
+
+Gallery eşleşmesinden gelen kullanıcıya gösterilecek addır.
+
+canonical_track_id = 17
+display_label      = Rachel
+gallery_known      = true
+
+Eşleşme yeterli değilse:
+
+canonical_track_id = 23
+display_label      = unknown
+gallery_known      = false
+
+top1_name=Rachel bulunması tek başına known=true demek değildir.
+
+3. Tracker ile recognizer aynı şey değildir
+
+Bu projede en fazla karıştırılan konu budur.
+
+Tracker şu soruyu cevaplar:
+
+Birkaç kare önce gördüğüm yüz ile bu karedeki yüz aynı hareket eden nesne mi?
+
+Recognizer şu soruyu cevaplar:
+
+Bu yüz gallery'deki Rachel'a yeterince benziyor mu?
+
+Reconciliation şu soruyu cevaplar:
+
+Tracker'ın ayrı ürettiği iki tracklet, bütün kanıtlar değerlendirildiğinde aynı gerçek kişiye mi ait?
+
+Bunların görevlerini birbirine yükleme.
+
+
+flowchart TD
+    A[Detector: karede yüz nerede?]
+    --> B[Tracker: komşu karelerde aynı yüz hangisi?]
+    --> C[Quality selection: hangi örnekler güvenilir?]
+    --> D[Recognizer: embedding nedir?]
+    --> E[Reconciliation: parçalı tracklet'ler birleşmeli mi?]
+    --> F[Gallery: canonical track kime ait?]
+
+
+
+    Jennifer Aniston'ın bütün video boyunca Jennifer Aniston olarak kalması yalnızca tracker sayesinde sağlanmaz.
+
+Doğru mekanizma:
+
+Tracker kısa süreli hareket devamlılığını sağlar.
+Tracklet içinden kaliteli yüzler seçilir.
+Bu yüzlerin embedding'leri bir track template'e dönüştürülür.
+Ayrılmış tracklet'ler embedding, zaman ve cannot-link kanıtlarıyla değerlendirilir.
+Canonical track gallery ile eşleştirilir.
+Gallery kararı güvenilir değilse isim gösterilmez.
+4. Bu Video Lab'ı neden GPU hot path'ten önce yapıyoruz?
+
+Önce C++/CUDA/GStreamer pipeline yazarsak aynı anda şu sorunlarla uğraşırız:
+
+decoder davranışı
+GPU memory ownership
+NvBufSurface pitch
+batching
+TensorRT binding
+CUDA kernel
+GStreamer metadata lifetime
+tracker
+recognition matematiği
+gallery threshold
+track reconciliation
+rendering
+
+Ortaya yanlış sonuç çıktığında hatanın modelden mi, alignment'tan mı, tracker'dan mı, CUDA kernel'den mi geldiğini anlayamayız.
+
+Bu yüzden önce okunabilir Python reference lab kuruyoruz:
+
+
+
+flowchart LR
+    V[Friends.mp4]
+    --> P[PyAV frame/PTS reader]
+    --> D[Official detector oracle]
+    --> A[Official 5-point alignment]
+    --> E[Official embedding oracle]
+    --> J[Immutable JSONL/NPY artifacts]
+    --> T[Offline tracking]
+    --> R[Offline reconciliation]
+    --> G[Gallery decision]
+    --> X[Metrics + visual diagnostics]
+
+
+   Bu yaklaşımın amacı Python'ı production hot path yapmak değildir.
+
+Amaç:
+
+Beklenen doğru sonucu tanımlamak.
+Ara çıktıları tek tek inceleyebilmek.
+Algoritmayı GPU karmaşıklığı olmadan test etmek.
+Daha sonra GPU pipeline sonucunu bu oracle ile karşılaştırmak.
+CUDA/TensorRT optimizasyonundan önce semantik hataları bulmak.
+
+Production GPU pipeline geldiğinde aynı video için şunları karşılaştıracağız:
+
+frame/PTS parity
+bbox parity
+landmark parity
+aligned crop parity
+embedding cosine parity
+track assignment parity
+gallery decision parity
+final timeline parity
+5. Friends.mp4 burada ne işe yarıyor?
+
+Friends.mp4 yalnızca “kod çalıştı ve video okundu” testi değildir. Bu bizim hedef fixture'ımızdır.
+
+Bu video üzerinden şunları gözle ve sayısal olarak doğrulamak istiyoruz:
+
+Yüzler gerçekten doğru yerde mi?
+Landmark'lar göz, burun ve ağız noktalarına oturuyor mu?
+Alignment crop'ları düzgün mü?
+BGR/RGB veya normalization hatası var mı?
+Aynı kişinin embedding'leri birbirine yakın mı?
+Farklı kişilerin embedding'leri ayrılıyor mu?
+Blur/küçük/yan dönük yüzler kalite filtresinden geçiyor mu?
+Tracker aynı kişiyi kareler boyunca sürdürüyor mu?
+Track kaybolduktan sonra makul şekilde geri kazanılabiliyor mu?
+Aynı karede görünen iki farklı yüz yanlışlıkla birleştiriliyor mu?
+Rachel track'i gallery'deki Rachel örnekleriyle gerçekten eşleşiyor mu?
+Unknown bir yüz yanlışlıkla Rachel etiketi alıyor mu?
+Pipeline iki farklı chunk boyutuyla çalışınca aynı sonucu veriyor mu?
+
+Bu nedenle sadece bir annotated MP4 üretmek başarı değildir. Video güzel görünse bile alttaki ID ve zaman verisi yanlış olabilir.
+
+6. Neden önce immutable frame ve observation artifact'leri üretiyoruz?
+
+Detection ve embedding pahalı aşamalardır. Her tracker değişikliğinde videoyu yeniden infer etmek istemiyoruz.
+
+Önce aşağıdaki katman üretilecek:
+
+frames.jsonl
+observations.jsonl
+embeddings.npy
+artifact_manifest.json
+checksums.json
+
+Sonra tracking ve reconciliation sadece bunları okuyacak:
+
+frames + observations + embeddings
+        ↓
+raw_tracklets.jsonl
+        ↓
+track_templates.jsonl
+        ↓
+canonical_assignments.jsonl
+        ↓
+canonical_tracks.json
+        ↓
+timeline / metrics / overlay
+
+Böylece tracker parametresini değiştirdiğimizde detector ve recognizer yeniden çalışmaz.
+
+Ayrıca hata lokalize edilebilir:
+
+bbox yanlışsa extraction sorunu
+crop yanlışsa alignment sorunu
+cosine düşükse preprocessing/model/quality sorunu
+raw track yanlışsa tracker sorunu
+canonical merge yanlışsa reconciliation sorunu
+isim yanlışsa gallery decision sorunu
+7. frames.jsonl neden zorunludur?
+
+Sadece yüz bulunan kareleri kaydetmek yeterli değildir.
+
+Tracker'ın şunları bilmesi gerekir:
+
+yüz görülmeyen boş frame'ler
+gerçek frame sırası
+PTS
+zaman farkları
+variable frame-rate davranışı
+scene cut
+sampling nedeniyle atlanan kareler
+
+Örnek:
+
+{
+  "frame_index": 421,
+  "pts": 16840,
+  "time_base_num": 1,
+  "time_base_den": 1000,
+  "timestamp_seconds": 16.84,
+  "sampled": true,
+  "scene_cut": false,
+  "observation_count": 0
+}
+
+Boş frame'ler kaybolursa tracker yüzün ne kadar süre görünmediğini anlayamaz. Sonuçlar chunk boyutuna ve işleme biçimine göre değişir.
+
+8. Chunk ne anlama gelir?
+
+Chunk yalnızca I/O ve bellek partition'ıdır. Tracking state'i sıfırlayan semantik video parçası değildir.
+
+Yanlış:
+
+chunk 1 bitti → tracker reset
+chunk 2 başladı → ID counter reset
+
+Doğru:
+
+aynı video timeline'ı
+├── chunk 1: okuma/hesap partition'ı
+├── chunk 2: okuma/hesap partition'ı
+└── tracker state bütün timeline boyunca devam eder
+
+Aynı input farklı chunk size ile işlendiğinde semantik sonuç aynı olmalıdır.
+
+Bu nedenle chunk invariance gate zorunludur.
+
+9. Quality gate neden model seçiminden daha önemlidir?
+
+Recognizer'a kötü crop verirsen güçlü model de düşük cosine üretir.
+
+Düşük cosine gördüğünde ilk tepki threshold düşürmek veya model değiştirmek olmamalıdır.
+
+Önce sırayla kontrol et:
+
+Doğru model gerçekten yüklendi mi?
+Detector bbox koordinatları doğru şekilde original frame'e map edildi mi?
+Landmark order doğru mu?
+Similarity transform yönü doğru mu?
+Alignment crop 112×112 ve doğru canonical template ile mi üretildi?
+Crop RGB/BGR sırası doğru mu?
+Modelin beklediği normalization kullanılıyor mu?
+Embedding finite ve L2-normalized mı?
+Yüz yeterince büyük ve net mi?
+Pose/occlusion kabul edilebilir mi?
+Gallery örnekleri kaliteli ve aynı preprocessing fingerprint'ine sahip mi?
+
+Ancak bunlar doğrulandıktan sonra threshold calibration yapılabilir.
+
+Threshold düşürerek yanlış preprocessing gizlemek yasaktır.
+
+10. Track-level recognition nasıl yapılmalıdır?
+
+Her frame'in recognition sonucunu bağımsız final karar olarak kullanma.
+
+Bir tracklet içinde farklı kalitede yüzler bulunur:
+
+frame 10: blur
+frame 11: yan profil
+frame 12: küçük
+frame 13: net ve önden
+frame 14: göz kapalı
+
+Beklenen yöntem:
+
+Her observation için quality score üret.
+Minimum quality gate'i geçemeyenleri final template'e alma.
+Kalanlar arasından temporal diversity koruyarak en iyi N sample'ı seç.
+Embedding outlier'larını reddet.
+Kalite ağırlıklı centroid hesapla.
+Centroid'i tekrar L2-normalize et.
+Gallery matching'i bu track template üzerinden yap.
+Observation-level skorları diagnostic olarak sakla ama tek kötü frame final kimliği bozmasın.
+
+Örnek:
+
+template =
+normalize(
+    Σ quality_weight_i × embedding_i
+)
+
+Ama yalnızca kaliteli, finite ve uygun observation'lar bu toplama katılabilir.
+
+11. Track reconciliation neyi çözmektedir?
+
+Tracker kusursuz değildir.
+
+Aynı kişi şu nedenlerle birden fazla raw tracklet olabilir:
+
+kısa süre kadraj dışına çıkma
+başka birinin arkasında kalma
+detector miss
+hızlı hareket
+scene cut
+bbox sıçraması
+
+Reconciliation bu tracklet'leri birleştirmeyi deneyebilir. Fakat aşırı merge daha tehlikelidir.
+
+Yanlış merge örneği:
+
+raw_tracklet 5 = Rachel
+raw_tracklet 8 = Monica
+yanlış reconciliation
+→ canonical_track 12 = Rachel + Monica
+
+Bu yüzden birleşme yalnızca güçlü kanıtla yapılmalıdır.
+
+Kullanılabilecek kanıtlar:
+
+track template cosine
+zaman aralığı
+actual same-frame co-occurrence
+bbox/motion continuity
+scene boundary
+template quality
+gallery evidence
+human annotation
+12. Cannot-link ne demektir?
+
+İki tracklet aynı frame'de iki ayrı yüz olarak bulunuyorsa aynı gerçek insan olamaz.
+
+frame 500:
+raw_tracklet 4 = soldaki yüz
+raw_tracklet 9 = sağdaki yüz
+
+Bu durumda:
+
+cannot_link(4, 9) = true
+
+Yalnızca zaman aralıklarının overlap etmesi cannot-link için yeterli değildir. Gerçek aynı-frame observation kanıtı gerekir.
+
+Human label ile “bunlar farklı kişiler” denmişse bu da cannot-link'tir.
+
+Cannot-link, yüksek embedding cosine bulunsa bile merge'i engeller.
+
+13. Neden complete-link yaklaşımı gerekir?
+
+Cosine benzerliği transitive değildir.
+
+Örnek:
+
+A ↔ B = 0.72
+B ↔ C = 0.71
+A ↔ C = 0.31
+
+Sadece bağlantı zincirine bakarsan A, B ve C aynı cluster'a girer. Bu yanlış olabilir.
+
+Complete-link mantığında iki cluster birleştirilmeden önce cluster'lar arasındaki bütün kritik eşleşmeler kabul edilebilir olmalıdır. Bir tane zayıf veya cannot-link ilişki merge'i engelleyebilir.
+
+Amaç agresif şekilde track sayısını azaltmak değil; yanlış insanları birleştirmemektir.
+
+14. Gallery kararı nasıl verilmelidir?
+
+Gallery, bir veya daha fazla kişinin kaliteli referans örneklerini içerir.
+
+Canonical track template'i gallery centroid'leriyle karşılaştırılır.
+
+Final known kararı en az şunları gerektirir:
+
+top1_score >= recognition_threshold
+AND
+top1_score - top2_score >= recognition_margin
+AND
+gallery has sufficient competitors for margin
+AND
+model/preprocess/alignment fingerprint matches
+AND
+track template quality is sufficient
+AND
+matched identity is active
+
+Eğer bu şartlar sağlanmıyorsa:
+
+known = false
+display_label = "unknown"
+
+Şu davranış kesinlikle yasaktır:
+
+top1_name = "Rachel"
+known = false
+display_label = "Rachel"   # YANLIŞ
+
+Top-1 yalnızca en yakın adaydır. Güvenilir identity kararı değildir.
+
+Tek kişilik gallery'de top-2 margin hesaplanamıyorsa bunu sahte 1.0 margin ile PASS yapma. Karar insufficient_competitors, review veya unknown olmalıdır.
+
+15. faceId, track ID ve isim neden farklıdır?
+
+Uzun vadede üç ayrı kimlik vardır:
+
+raw_tracklet_id      = tracker'ın geçici ID'si
+canonical_track_id  = bu video içindeki birleştirilmiş iz
+face_id             = identity storage'daki kalıcı kimlik
+display_name        = kullanıcının değiştirebildiği isim
+
+Rachel ismi değişebilir ama kalıcı faceId değişmez.
+
+Tracker ID başka videoda yeniden kullanılabilir. Bu nedenle tracker ID asla kalıcı identity ID değildir.
+
+Bu reference lab aşamasında otomatik kalıcı faceId yaratma. Lab'ın çıktısı canonical video track ve optional gallery label'dır. Kalıcı identity yaratma/persistence ayrı application workflow'dur.
+
+16. Debug MP4 ile production UI arasındaki fark
+
+Debug MP4 geliştiriciye hızlı görsel inceleme sağlar:
+
+bbox doğru mu?
+raw/canonical ID doğru mu?
+label doğru mu?
+track geçişinde sıçrama var mı?
+
+Ama production ürününde orijinal videoyu yeniden encode etmek zorunda değiliz.
+
+Frontend şu metadata'yı okuyabilir:
+
+{
+  "timestamp_seconds": 12.48,
+  "canonical_track_id": 17,
+  "bbox_xyxy": [420, 180, 612, 430],
+  "label": "Rachel",
+  "known": true,
+  "confidence": 0.73
+}
+
+Frontend video playback time'a göre ilgili overlay'i çizer.
+
+Bu yaklaşım:
+
+orijinal kaliteyi korur
+yeniden encoding zamanını ortadan kaldırır
+label/name düzeltildiğinde videoyu tekrar render etmeyi gerektirmez
+UI filtreleme ve timeline etkileşimini kolaylaştırır
+17. Bu lab'ın başarı kriteri nedir?
+
+Başarı “script exit 0” veya “dosya oluştu” değildir.
+
+Başarı için:
+
+CLI gerçekten import edilip çalışmalı.
+Model acquisition deterministik olmalı.
+Provider gerçekten raporlanmalı.
+Frames ve observations doğru PTS/timestamp ile kaydedilmeli.
+Detection ve alignment görsel olarak doğrulanmalı.
+Same-person ve different-person cosine dağılımları ölçülmeli.
+Tracker lifecycle sentetik testlerde geçmeli.
+Lost track reactivation çalışmalı.
+Chunk-size parity geçmeli.
+Canonical reconciliation cannot-link kurallarına uymalı.
+Unknown hiçbir zaman yanlış isimle gösterilmemeli.
+Gallery kararı threshold ve margin'i gerçekten uygulamalı.
+Evaluator doğru ID namespace'lerini karşılaştırmalı.
+Artifact checksum üretildikten sonra dosya mutasyona uğramamalı.
+Debug MP4 ve timeline source artifact'lerle tutarlı olmalı.
+Friends.mp4 üzerinde insanın inceleyebileceği contact sheet, timeline ve rapor üretilmeli.
+Çalıştırılmayan hiçbir gate PASS yazılmamalı.
+18. Ne yapmamalısın?
+
+Şunlar bu görevin amacına aykırıdır:
+
+Yalnız dosya skeleton'ı üretmek.
+CLI yazmadan pyproject entrypoint tanımlamak.
+Config alanı ekleyip runtime'da kullanmamak.
+Model indirme seçeneği ekleyip implement etmemek.
+Fake embedding ile gerçek model PASS iddiası.
+Unit testler geçiyor diye Friends end-to-end PASS demek.
+Threshold'u düşürerek preprocessing hatasını gizlemek.
+Unknown sonuca top-1 ismini yazmak.
+Tracker ve recognizer'ı aynı kavram gibi kullanmak.
+Chunk sınırında tracker state sıfırlamak.
+Boş frame'leri artifact'ten atmak.
+Scene cut config'i yazıp runtime'da uygulamamak.
+Artifact checksum'dan sonra manifest'i değiştirmek.
+Ground truth olmadan IDF1/HOTA doğrulandı demek.
+Kişi fotoğraflarını, embeddings veya model weight'lerini Git'e eklemek.
+Production GPU performansı hakkında bu Python lab sonucuyla iddia üretmek.
+Raporu kodun yerine teslimat saymak.
+19. Senin bu görevdeki rolün
+
+Sen yalnızca kod üreticisi değilsin. Şu soruların her birine kanıt üreten bir reference-system mühendisisin:
+
+“Video doğru okunuyor mu?”
+“Zaman çizelgesi doğru mu?”
+“Yüz doğru bulunuyor mu?”
+“Crop doğru hizalanıyor mu?”
+“Embedding doğru mu?”
+“Kötü örnekler filtreleniyor mu?”
+“Aynı kişi zaman boyunca korunuyor mu?”
+“Parçalanan track'ler güvenli şekilde birleşiyor mu?”
+“Farklı insanlar yanlışlıkla birleşiyor mu?”
+“Rachel kararı gerçekten kanıtlı mı?”
+“Unknown gerçekten unknown mı kalıyor?”
+“Aynı input tekrar çalıştırıldığında aynı semantik sonuç çıkıyor mu?”
+“GPU implementasyonu daha sonra bununla karşılaştırılabilir mi?”
+
+Her geliştirme kararını bu sorulardan en az birine bağla.
+
+20. Kodlamadan önce zorunlu anlayış özeti
+
+Hiçbir source dosyasını değiştirmeden önce terminal/rapor çıktında aşağıdaki başlıkları kendi cümlelerinle açıkla:
+
+Nihai ürünün kullanıcıya sunduğu deneyim.
+Reference Video Lab'ın production pipeline'dan farkı.
+Observation, raw tracklet, canonical track, faceId ve display label farkları.
+Tracker, recognizer ve reconciliation'ın ayrı sorumlulukları.
+Neden immutable frame/observation artifact'i ürettiğimiz.
+Neden quality gate'in threshold tuning'den önce geldiği.
+Unknown label güvenlik kuralı.
+Chunk invariance beklentisi.
+Bu sprintin neyi kanıtlayacağı.
+Bu sprintin neyi kesinlikle kanıtlamayacağı.
+
+Bu özette kavramları yanlış açıklıyorsan implementation'a başlama. Önce source, requirement ve referansları yeniden incele.
+
+21. Bu görev tamamlandığında beklediğimiz somut hikâye
+
+Görev sonunda yalnızca “kodları yazdım” dememelisin. Şuna benzer, kanıtlı bir sonuç gösterebilmelisin:
+
+Friends.mp4 PyAV ile PTS korunarak okundu. Bütün frame'ler frames.jsonl içinde temsil edildi. Sampled frame'lerde official InsightFace oracle ile yüzler çıkarıldı. Alignment contact sheet ile kontrol edildi. Observation ve embedding artifact'leri checksum ile donduruldu. Tracker bu artifact'lerden replay edilerek raw tracklet'leri üretti. Chunk boyutu değiştirildiğinde aynı raw assignment sonucu alındı. Track-level quality aggregation ile canonical template'ler oluşturuldu. Same-frame cannot-link kullanan reconciliation parçalı track'leri güvenli şekilde birleştirdi. Gallery threshold ve margin şartlarını geçen track'ler bilinen kişi adı aldı; diğerleri unknown kaldı. Timeline JSON, contact sheet ve debug overlay MP4 aynı canonical assignment verisinden üretildi. Çalıştırılamayan doğruluk gate'leri açıkça BLOCKED veya NOT_RUN yazıldı.
+
+Bunu gösteremiyorsan görev bitmiş değildir.
+
+
+Bu açıklamadan sonra önceki 50 adımlık teknik prompt gelsin. Böylece agentın zihnindeki sıra şu olur:
+
+```mermaid
+flowchart LR
+    A[Ürün amacı]
+    --> B[Kimlik ve tracking semantiği]
+    --> C[Reference oracle]
+    --> D[Artifact/replay sistemi]
+    --> E[Algorithm correctness]
+    --> F[Friends.mp4 kanıtı]
+    --> G[Daha sonra GPU parity]
+
+En kritik cümle şu abi: Bu lab production sistem değildir; ilerideki GPU sistemine “doğru sonuç budur” diyecek denetlenebilir oracle'dır. Agent bunu anlamazsa yine dosya sayısını artırıp ürün yapmış gibi rapor verir.
+
+Abi, haklısın: şu anki video lab BLOCKED. “Çok şey yazılmış ama hiçbir şey yapılmamış gibi” hissettirmesinin sebebi de bu: 243 dosya ve 106 bin satır eklenmiş ama çalışan dikey akış bağlanmamış.
+
+En kritik kanıtlar:
+
+CLI entrypoint tanımlı ama cli.py yok; dolayısıyla bütün mv-video-lab Make hedefleri ilk importta kırılıyor. pyproject.toml, Makefile
+Detector coordinate dönüşümü yanlış; kutular birkaç piksele çökebilir. Recognizer da BGR/RGB preprocessing’i yanlış yapıyor olabilir. Bu, düşük cosine’ın doğrudan sebeplerinden biri. oracle
+Tracker ilk kayıpta track’i lost listesine eklemiyor; re-entry çalışamaz.
+Canonical aggregation içinde gerçek pass var. aggregation.py
+Evaluation observation ID ile tracklet ID’yi karşılaştırıyor; ölçümler güvenilmez. evaluation.py
+Manifest checksum yazıldıktan sonra manifest tekrar değiştiriliyor; üretilen artifact kendi validator’ünde bozuk çıkıyor. extraction.py
+Tracking, reconciliation, extraction, gallery, aggregation, evaluation veya chunk invariance için test yok.
+Daha önemlisi repo public ve içine 178 cast fotoğrafı ile isim/landmark/512-D embedding içeren dosyalar commit edilmiş. Örnek annotation. README ise bunları commit etmeyin diyor. README
+
+Önce repoyu private yapmanı öneriyorum. Dosyaları sonraki committe silmek eski committeki kopyaları kaldırmaz; history temizliği ayrı ve dikkatli bir işlem olacak.
+
+Model sorununun cevabı: import insightface yalnız kodu getirir, ağırlıkları değil. buffalo_l yaklaşık 326 MB’lık pack’i FaceAnalysis() ile indirebilir; GPU için ayrıca onnxruntime-gpu gerekir. InsightFace kodu MIT, sağlanan pretrained ağırlıklar ise yalnız non-commercial research içindir. InsightFace resmi dokümantasyonu
+
+Aşağıdaki promptu yeni/fresh bir Claude Code oturumuna ver. Aynı oturum kendi yazdığı kodu savunmaya meyilli olabilir.
+CLAUDE CODE — FRESH SESSION — BUILD MODE
+TASK: Forensic correction and completion of the Offline Video Reference Laboratory
+REPOSITORY: The current git root whose remote is bbariskaya/MergenVisionPhase2V2
+
+THIS IS A CORRECTION TASK, NOT A NEW DESIGN EXERCISE.
+
+Do not start the next product phase. Do not implement production GPU/C++/CUDA/
+DeepStream code. Complete and prove the isolated Python reference laboratory first.
+
+============================================================
+A. EXPLICIT USER AUTHORIZATIONS AND HARD LIMITS
+============================================================
+
+For this task I explicitly authorize:
+
+1. Installation of Python dependencies only inside isolated repository-local
+   virtual environments.
+2. One explicit, one-time download of the official InsightFace `buffalo_l`
+   model pack into a Git-ignored local cache, for this non-commercial reference
+   laboratory only.
+3. Removal from the CURRENT WORKTREE of only these incorrectly generated paths:
+
+   - research/friends_characters/**
+   - prompt2.txt
+
+4. Adding ignore rules preventing those artifacts, models, videos, galleries,
+   crops, embeddings and generated reports from being recommitted.
+
+I do NOT authorize:
+
+- git commit, add, push, merge or tag;
+- force push or Git history rewrite;
+- deleting Friends.mp4;
+- deleting user-provided gallery images;
+- changing backend foundation source;
+- changing PostgreSQL, MinIO or Qdrant;
+- changing CUDA drivers or system packages;
+- downloading celebrity/gallery images or datasets;
+- downloading any model other than official InsightFace buffalo_l;
+- presenting this work as production-ready or Phase 2 complete.
+
+Removing files from the current tree does not remove them from Git history.
+Report the history exposure, but do not rewrite history.
+
+This task is an explicitly approved isolated research exception. It does not
+change the mandatory product implementation order and does not declare product
+Sprint 02 started.
+
+============================================================
+B. KNOWN CURRENT FAILURES — VERIFY, DO NOT ASSUME FIXED
+============================================================
+
+At reviewed HEAD 352fbec4a9fe4dbe19a94013a43c5e637832dec1:
+
+1. pyproject defines `mergenvision_video_lab.cli:app`, but cli.py is absent.
+2. Every Make runtime target invokes that missing CLI.
+3. README claims a notebook that does not exist.
+4. CPU installation is the default while baseline config requires CUDA with
+   CPU fallback disabled.
+5. ModelInventory only searches for local retinaface_r50_dynamic.onnx and
+   glintr100.onnx; allow_model_download is dead config.
+6. Custom detector preprocessing/output decoding is not tied to the actual
+   model contract.
+7. Decoded normalized boxes/landmarks are multiplied by frame_size/det_size
+   instead of display dimensions.
+8. ArcFace recognition receives BGR data without the upstream RGB swap.
+9. Configured alignment values are written to manifests but ignored by runtime.
+10. Paths resolve relative to research/video_reference_lab instead of repo root.
+11. Sampling modes are recorded but not implemented.
+12. processed_frame_count counts faces, not processed frames.
+13. There is no complete frame ledger, including zero-face frames.
+14. Checksums are written before the final manifest mutation.
+15. Lost ByteTrack tracks are never added to the lost list.
+16. removed_tracklets is both an instance attribute and method name.
+17. Global Tracklet ID counters make repetitions/order non-deterministic.
+18. Frame/PTS zero is corrupted by `value or -1` expressions.
+19. There is no replay runner consuming chunk sizes.
+20. aggregate_canonical_tracks contains a literal `pass`.
+21. Unknown gallery matches can still receive the top-1 display label.
+22. Identity evaluation compares observation IDs with raw-tracklet IDs.
+23. Gallery evaluation ignores the actual `known` decision.
+24. Reconciliation margin semantics are mathematically incorrect.
+25. No tracking/reconciliation/gallery/evaluation/extraction integration tests exist.
+26. There is no real Friends runtime artifact or trustworthy acceptance result.
+27. 178 unapproved cast images and biometric-derived files were committed.
+28. Current CI tests only the old backend foundation, not this laboratory.
+
+Verify each finding from the current source. If HEAD has changed, audit the new
+source and produce an equivalent evidence ledger before editing.
+
+============================================================
+C. FROZEN THEORY AND SEMANTICS
+============================================================
+
+You are implementing this exact conceptual pipeline:
+
+Friends.mp4
+  -> PyAV sequential CPU reference decode
+  -> FrameRecord for EVERY decoded/processed frame, including no-face frames
+  -> official InsightFace FaceAnalysis detector + recognizer oracle
+  -> bbox + five landmarks + aligned crop + quality + unit embedding
+  -> freeze frames.jsonl + observations.jsonl + embeddings.npy
+  ----------------------------------------------------------
+                         FREEZE BOUNDARY
+  ----------------------------------------------------------
+  -> replay frames sequentially
+  -> ByteTrack IoU temporal association
+  -> raw tracklets
+  -> select temporally diverse high-quality embeddings
+  -> quality-weighted tracklet templates
+  -> cannot-link constrained offline reconciliation
+  -> canonical video tracks
+  -> optional rights-cleared gallery decision
+  -> overlay metadata + diagnostics + evaluation
+
+Identifiers are frozen as follows:
+
+- observation_id:
+  One detected face in one processed frame.
+
+- raw_tracklet_id:
+  One uninterrupted temporal tracker segment. Scene cut, timeout or long absence
+  may create a new raw tracklet.
+
+- canonical_track_id:
+  An offline cluster of compatible raw tracklets believed to be the same person
+  inside this video.
+
+- face_id:
+  Persistent product identity. This laboratory does NOT create or prove face_id.
+
+- display_label:
+  Optional human/gallery label such as Rachel. It is not the tracker ID and it
+  may only be set after a valid human/gallery decision.
+
+Jennifer Aniston at the beginning and end is NOT expected to retain one raw
+tracklet. Correct behavior is:
+
+  early Rachel -> RT000012
+  late Rachel  -> RT000087
+  reconciliation -> CT000004
+  approved gallery/human decision -> display_label Rachel
+
+Tracking answers temporal continuity. Recognition/reconciliation answers
+same-person evidence. Never use tracker ID as biometric identity.
+
+ByteTrack theory:
+
+1. High-score detections associate with active/lost tracks first.
+2. Remaining active tracks associate with low-score detections second.
+3. Low-score detections can preserve a track but normally do not start a new one.
+4. Empty frames still update tracker time/loss state.
+5. Chunk boundaries are I/O partitioning only; they never reset tracker state.
+6. A scene cut closes raw continuity; later identity reconciliation is separate.
+
+Quality theory:
+
+- A blurry/turned/small face can have an unreliable embedding.
+- That bad frame must not override a high-quality track template.
+- Keep its bbox for tracking/overlay if geometrically valid.
+- Exclude its embedding from recognition evidence if it fails quality gates.
+- Select the best temporally diverse observations from the full tracklet.
+- Once a canonical track passes a known decision, that canonical label may be
+  shown on all its detections, including blurry frames, with provenance stating
+  the decision came from selected track-level evidence.
+
+Do not use L2-normalized embedding norm as image quality.
+
+For unit embeddings:
+
+  cosine(a, b) = dot(a, b)
+
+Tracklet template:
+
+  T = normalize(sum(q_i * e_i) / sum(q_i))
+
+where e_i is a unit embedding and q_i is a transparent quality weight.
+
+Do not create a transitive identity cluster merely because:
+
+  cosine(A,B) passes
+  cosine(B,C) passes
+  cosine(A,C) fails
+
+Use complete-link or an equally strict all-cross-pair gate.
+
+Cannot-link:
+
+- Two observations of different faces in the same frame are absolute cannot-link.
+- Human-declared cannot-links are absolute.
+- Mere interval overlap without actual same-frame co-occurrence is not enough.
+- Cannot-link cannot be overridden by high cosine.
+
+Gallery decision:
+
+  known =
+      top1_score >= calibrated_threshold
+      AND top1_score - top2_score >= calibrated_margin
+      AND enough valid gallery identities/samples exist
+      AND model/preprocess/alignment fingerprints match
+
+If `known` is false:
+
+- display_label MUST be null or `unknown`;
+- never display top1_label as the identity;
+- top1 remains diagnostic evidence only.
+
+A single-identity gallery does not provide meaningful top1/top2 margin. Treat it
+as insufficient competitors unless an explicitly separate 1:1 verification
+mode is implemented and calibrated.
+
+Thresholds are model/gallery/dataset specific. Do not fix low cosine by randomly
+lowering thresholds. First prove preprocessing, alignment and model consistency.
+
+============================================================
+D. REQUIRED PRIMARY REFERENCES
+============================================================
+
+Read and record the exact symbols used from these sources before implementing:
+
+1. InsightFace Python package, model packs and weight license:
+   https://github.com/deepinsight/insightface/tree/master/python-package
+
+2. InsightFace FaceAnalysis:
+   https://github.com/deepinsight/insightface/blob/master/python-package/insightface/app/face_analysis.py
+
+3. InsightFace ArcFace ONNX preprocessing:
+   https://github.com/deepinsight/insightface/blob/658b034e7fc0f4b08a01e11347b6118d8d04c76b/python-package/insightface/model_zoo/arcface_onnx.py
+
+4. InsightFace five-point alignment:
+   https://github.com/deepinsight/insightface/blob/658b034e7fc0f4b08a01e11347b6118d8d04c76b/python-package/insightface/utils/face_align.py
+
+5. FoundationVision ByteTrack pinned source:
+   https://github.com/FoundationVision/ByteTrack/tree/d1bf0191adff59bc8fcfeaa0b33d3d1642552a99
+
+6. ByteTrack paper:
+   https://arxiv.org/abs/2110.06864
+
+7. TrackEval and tracking metric semantics:
+   https://github.com/JonathonLuiten/TrackEval
+   https://arxiv.org/abs/2009.07736
+
+8. PyAV:
+   https://pyav.org/docs/stable/
+
+9. ONNX Runtime execution providers:
+   https://onnxruntime.ai/docs/execution-providers/
+
+10. SciPy linear_sum_assignment:
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linear_sum_assignment.html
+
+11. OpenCV geometric transforms:
+    https://docs.opencv.org/4.x/da/d54/group__imgproc__transform.html
+
+Do not implement model preprocessing or tracker lifecycle from memory.
+
+============================================================
+E. MANDATORY MCP AND SKILL WORKFLOW
+============================================================
+
+Use these tools honestly:
+
+- GitHub MCP/plugin:
+  Verify repository visibility, HEAD, compare, current source and upstream files.
+
+- codebase-memory-mcp:
+  Discover all lab source, callers, tests, Make targets and documentation.
+  Verify findings against actual files before editing.
+
+- context7:
+  Verify exact installed APIs for PyAV, ONNX Runtime, OpenCV, scikit-image,
+  SciPy, Pydantic and Typer.
+
+- deepwiki:
+  Inspect InsightFace and ByteTrack architecture/call paths, then verify the
+  exact pinned upstream source files.
+
+- exa:
+  Use only for missing official model provenance/license/release information.
+
+- postman:
+  SKIPPED_NOT_RELEVANT.
+
+- playwright:
+  SKIPPED_NOT_RELEVANT.
+
+- 21st:
+  FORBIDDEN_NOT_USED.
+
+- Ruflo:
+  FORBIDDEN_NOT_USED.
+
+Required skill flow:
+
+1. using-superpowers
+2. receiving-code-review
+3. codebase-memory
+4. context7-mcp
+5. systematic-debugging
+6. test-driven-development
+7. executing-plans
+8. verification-before-completion
+9. requesting-code-review
+
+Do not use subagents or parallel editing. One agent owns this correction.
+
+Do not claim a tool was used unless it was actually called. Record the query,
+source/result and the concrete code decision it affected.
+
+============================================================
+F. ALLOWED CHANGED-FILE BOUNDARY
+============================================================
+
+You may modify:
+
+- .gitignore
+- Makefile
+- .github/workflows/video-reference-lab.yml
+- research/video_reference_lab/**
+- test_gallery/README.md
+- test_videos/README.md
+- docs/implementation/CURRENT_SPRINT.md only to add an explicitly isolated
+  technical-spike exception; do not change Sprint 01 product status
+- docs/implementation/REFERENCE_DECISION_LOG.md
+- docs/implementation/review_packages/VIDEO-REFERENCE-LAB-CORRECTION.md
+
+You may remove:
+
+- research/friends_characters/**
+- prompt2.txt
+
+Do not modify backend production source, database schema, Docker storage
+foundation, requirements or API code.
+
+Add this exact governance meaning to CURRENT_SPRINT:
+
+“User-approved isolated video reference correctness spike. This does not begin
+product Sprint 02, does not alter the mandatory product implementation order,
+and cannot claim production video/GPU completion.”
+
+============================================================
+G. REQUIRED ARTIFACT CONTRACT
+============================================================
+
+Every real extraction run must produce:
+
+raw/frames.jsonl
+  - schema_version
+  - source_id
+  - frame_index
+  - pts
+  - time_base_num
+  - time_base_den
+  - pts_ns
+  - coded_width/coded_height
+  - display_width/display_height
+  - rotation_applied
+  - sampled
+  - processed
+  - scene_change_score
+  - scene_cut_before
+
+raw/observations.jsonl
+  - schema_version
+  - observation_id
+  - source_id
+  - frame_index
+  - pts_ns
+  - detection_ordinal
+  - bbox_xyxy in original display-space half-open pixels
+  - detector_score
+  - five landmarks with explicit image-left/image-right semantics
+  - raw transparent quality metrics
+  - tracking_eligible
+  - recognition_eligible
+  - rejection reasons
+  - embedding_index
+  - provenance=reference_oracle
+
+raw/embeddings.npy
+  - float32
+  - shape [N, 512]
+  - finite
+  - each row unit-normalized
+  - never JSON-encoded
+  - never committed
+
+raw/manifest.json
+  - video SHA/metadata
+  - model pack
+  - every ONNX filename/SHA/input/output contract
+  - provider requested
+  - provider/session actually observed
+  - exact preprocess/alignment contract
+  - package versions
+  - config
+  - decoded/sample/processed/face/embedding counters
+  - timing scopes
+  - limitations
+
+raw/checksums.sha256
+  - written LAST
+  - covers final immutable raw artifacts
+
+replay/<strategy>/assignments.jsonl
+  - observation_id
+  - frame_index
+  - pts_ns
+  - strategy
+  - raw_tracklet_id
+  - assignment stage
+  - IoU/appearance evidence where applicable
+
+tracks/raw_tracklets.jsonl
+tracks/tracklet_templates.npz
+tracks/tracklet_template_evidence.jsonl
+tracks/reconciliation_pairs.jsonl
+tracks/canonical_tracks.json
+
+canonical_tracks.json must include:
+
+- canonical_track_id
+- raw_tracklet_ids
+- observation_ids
+- first_seen_pts_ns
+- last_seen_pts_ns
+- appearances
+- detections
+- selected template evidence IDs
+- rejected evidence IDs/reasons
+- decision_status: known | unknown | unresolved
+- top1/top2/margin
+- display_label only when known or explicitly human-labeled
+- decision provenance
+
+evaluation/metrics.json
+evaluation/quality_diagnostics.json
+evaluation/review_queue.json
+visual/contact_sheet.jpg
+visual/timeline.html
+visual/overlay.jsonl
+visual/annotated_debug.mp4, only if rendering succeeds
+REPORT.md
+
+No raw embeddings, face crops, videos, model weights or giant logs may enter Git.
+
+============================================================
+H. EXACT 50-STEP IMPLEMENTATION ORDER
+============================================================
+
+Do these steps in this order. Every production fix starts with a failing test or
+minimal reproducer. Do not skip to the Friends full run.
+
+1. Resolve the real git root, remote, branch, HEAD and dirty status. Save the
+   baseline in the report. If another agent is modifying overlapping files,
+   stop with BLOCKED_CONCURRENT_WORK.
+
+2. Read AGENTS.md, CURRENT_SPRINT, both requirement files, references.md,
+   REFERENCE_DECISION_LOG, existing lab README/config/source/tests and the
+   reviewed commit completely.
+
+3. Run the existing Phase 1 Sprint 01 acceptance command without changing its
+   files. Record PASS/FAIL. A failure is reported independently; do not hide it
+   with lab changes.
+
+4. Use GitHub MCP and codebase-memory-mcp to create a complete source/caller/test
+   ledger for every file under research/video_reference_lab. Verify the graph
+   against actual source.
+
+5. Reproduce the current failures before fixing: missing CLI import, wrong root
+   paths, checksum invalidation, tracker first-miss loss, aggregation placeholder
+   and invalid evaluation ID mapping.
+
+6. Remove only `research/friends_characters/**` and `prompt2.txt` from the
+   current tree. Add scoped ignore rules. Record that old Git history still
+   contains them; do not rewrite history.
+
+7. Add the isolated-research-exception paragraph to CURRENT_SPRINT without
+   changing Sprint 01 status or claiming product Sprint 02.
+
+8. Repair `.gitignore` for lab caches, `.venv-cpu`, `.venv-cuda`, model packs,
+   videos, gallery images, crops, NPY/NPZ artifacts, reports and debug media.
+   Add a test/script that fails if these become tracked again.
+
+9. Read the mandatory primary references through Context7/DeepWiki/GitHub and
+   update REFERENCE_DECISION_LOG with exact URL, commit/tag, license, symbols,
+   adopted behavior, rejected behavior and local tests.
+
+10. Freeze identifier, bbox, landmark, PTS, quality, tracker, reconciliation,
+    gallery and decision semantics in code contracts. Use `image_left_eye` and
+    `image_right_eye` or equally unambiguous landmark names.
+
+11. Implement and test the exact artifact schemas listed above. Validate IDs,
+    finite coordinates, bbox bounds, PTS/time base, embedding index one-to-one
+    integrity and schema versions.
+
+12. Implement one central repo-root path resolver. Config paths resolve from
+    repository root regardless of CWD. Add tests running config load from root,
+    lab directory and a temporary unrelated directory.
+
+13. Split explicit CPU and CUDA configs. CPU must never silently request CUDA;
+    CUDA must never silently claim CPU work as CUDA. Keep separate `.venv-cpu`
+    and `.venv-cuda` environments.
+
+14. Make dependency installation reproducible. Install the committed CPU/CUDA
+    lock appropriate to the environment, then editable package with `--no-deps`,
+    run `pip check`, CLI import and version inventory. Do not maintain a lock
+    that Make never consumes.
+
+15. Implement the missing Typer CLI with:
+    `doctor`, `models inspect`, `models acquire`, `extract`, `validate`,
+    `replay`, `templates`, `reconcile`, `gallery`, `evaluate`, `visualize`,
+    `benchmark`, and `run-friends`. Add CliRunner tests for every command.
+
+16. Implement `doctor` as a real fail-closed diagnostic: input path, output
+    path, ffprobe/PyAV, package versions, provider availability, model presence,
+    model license notice and gallery status. Missing prerequisites must produce
+    an explicit non-zero status.
+
+17. Implement explicit model acquisition. Normal imports/runs must not download.
+    Only `models acquire --name buffalo_l --allow-download` may trigger the
+    authorized official download into a Git-ignored cache.
+
+18. Build a model manifest after acquisition: pack name, local files, SHA-256,
+    sizes, model tasks, ONNX input/output name/shape/dtype and official
+    non-commercial-weight limitation. Never commit the pack.
+
+19. Replace the current handwritten detector decoder in the active reference
+    path with a thin `FaceAnalysisOracle` using official InsightFace
+    `FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])`.
+    Keep no second custom decoding path unless it has full golden parity tests.
+
+20. Configure providers explicitly and inspect each actual ONNX session. Never
+    claim GPU-only merely because CUDAExecutionProvider appears in an available
+    provider list. Record actual session providers and limitations.
+
+21. Add oracle parity tests:
+    - upstream `norm_crop` versus local alignment: MAE <= 0.5 uint8 levels,
+      max error <= 3;
+    - same aligned crop through upstream/local recognizer path:
+      embedding cosine >= 0.9999;
+    - explicit BGR/RGB A/B test;
+    - five-landmark overlay/contact-sheet verification;
+    - model fingerprint mismatch hard failure.
+
+22. Run a real-model smoke on a small locally generated or repository-safe test
+    image. Prove a real detector/recognizer session ran. A fake oracle test is
+    only pipeline-mechanics evidence and must be labeled synthetic.
+
+23. Fix VideoReader using PyAV context-managed decode. Select the correct global
+    video stream, apply or explicitly normalize rotation, preserve frame PTS and
+    time base, handle VFR and close resources on errors. Add audio-first,
+    rotation, no-PTS, VFR and PTS-regression tests.
+
+24. Write FrameRecord for every decoded frame including no-face frames. Implement
+    every_frame, every_n_frames and frames_per_second sampling exactly and test
+    them against hand-calculated frame/PTS sequences.
+
+25. Run extraction in one sequential frame loop. Preserve geometrically valid
+    detections for tracking even if alignment/embedding fails. Do not discard a
+    bbox merely because recognition evidence is invalid.
+
+26. Separate counters and timing:
+    decoded_frame_count, sampled_frame_count, processed_frame_count,
+    face_observation_count and valid_embedding_count. Measure decode, oracle,
+    quality and serialization scopes honestly.
+
+27. Make quality transparent. Record detector score, aligned 112x112 Laplacian
+    variance, brightness/clipping, bbox size, interocular distance, landmark
+    geometry and alignment residual. Do not call an unvalidated heuristic true
+    yaw/pitch degrees.
+
+28. Finalize raw artifacts atomically. Write the final manifest once, then write
+    checksums last. Validate corruption, truncated JSONL, wrong embedding shape,
+    duplicate IDs, missing frames and stale checksums.
+
+29. Include video SHA, config SHA, model fingerprints and preprocess/alignment
+    fingerprint in the extraction cache key or resume comparison. A model change
+    must invalidate the old frozen observations.
+
+30. Add extraction integration tests for:
+    full synthetic run -> validate -> resume without inference; sampling;
+    zero-face frames; multiple faces; invalid alignment; artifact corruption;
+    model/config mismatch and interrupted write recovery.
+
+31. Repair the ByteTrack baseline by following the pinned upstream lifecycle:
+    activated, unconfirmed, tracked, lost, reactivated and removed lists;
+    low-score second association; duplicate suppression; proper timeouts.
+    Use instance-local deterministic IDs.
+
+32. Add exact tracker tests for:
+    stable face, two simultaneous faces, crossing, low-score recovery, empty
+    frame, short occlusion/re-entry, timeout/new tracklet, scene cut, frame zero,
+    PTS zero, PTS regression, duplicate observation, equal-cost determinism and
+    two tracker instances.
+
+33. Keep hybrid appearance association experimental only. Its second low-score
+    stage remains geometry-only. It cannot replace the IoU baseline or become a
+    PASS gate unless labeled A/B metrics improve without cannot-link violations.
+
+34. Implement replay over `frames.jsonl`, not merely face observations. Call one
+    persistent tracker once per ordered frame. Write the first-class mapping:
+    observation -> raw_tracklet, including frame and PTS.
+
+35. Prove chunk invariance for chunk sizes 1, 8, 17 and 64, two repetitions per
+    strategy. Start a fresh tracker per repetition, but never per chunk.
+    Normalized assignments/tracklets must be byte-identical and hash-identical.
+
+36. Implement tracklet evidence selection:
+    recognition-eligible only, quality-ranked, minimum temporal separation over
+    every selected sample, top-K bounded, medoid/outlier rejection, weighted
+    centroid and final L2 normalization.
+
+37. Add template tests covering temporal diversity, all-equal timestamps,
+    singleton policy, blur rejection, non-selected reasons, outliers, diagonal
+    self-similarity exclusion, zero/NaN weights and deterministic ties.
+
+38. Build cannot-links from actual same-frame co-occurrence plus human-declared
+    cannot-links. Do not infer cannot-link solely from broad interval overlap.
+    Validate no duplicate observations or mixed strategy namespaces.
+
+39. Implement deterministic complete-link reconciliation. For every considered
+    pair write cosine, temporal relation, cannot-link status, accepted/rejected,
+    exact reason, component minimum and centroid-member minimum. Canonical IDs
+    sort by earliest PTS/frame and stable member key.
+
+40. Remove the incorrect same-cluster “top1/top2 margin”. Margin belongs to
+    competing gallery identities or competing reconciliation candidates.
+    Add A~B, B~C, A!~C and high-cosine cannot-link tests.
+
+41. Implement rights-cleared local gallery loading only from Git-ignored
+    `test_gallery/<label>/`. Each sample must contain exactly one valid,
+    quality-passing face. Store model/preprocess/alignment fingerprint and reject
+    mismatches.
+
+42. Enforce decision semantics:
+    `known`, `unknown`, `unresolved`. Set display_label only for known or explicit
+    human labels. A rejected match must never display its top1 candidate name.
+
+43. Replace aggregation placeholders with real assignment-driven aggregation:
+    exact observations, original detections, first/last PTS, appearance
+    intervals, visible duration and selected evidence. No zero placeholders or
+    empty strings in limitations.
+
+44. Repair ground-truth and evaluation:
+    anchors require observation_id or frame+ordinal/bbox; never choose the
+    highest-quality face automatically. Verify video SHA, apply ignored IDs and
+    human cannot-links, separate calibration and holdout, map observations to
+    raw and canonical tracks correctly, and guard all zero denominators.
+
+45. Produce hand-calculated synthetic evaluation tests for pairwise precision,
+    recall/F1, cluster purity, false merge, fragmentation, known/unknown gallery
+    decisions and calibration/holdout leakage. Do not report HOTA/IDF1 without
+    sufficient real frame-level ground truth.
+
+46. Generate diagnostics from frozen artifacts without rerunning inference:
+    selected/rejected crop contact sheet, quality histograms, cosine matrices,
+    reconciliation graph/pair table, timeline HTML, review queue and overlay
+    JSONL. Add a thin notebook that only reads artifacts and calls library code.
+
+47. Generate optional annotated_debug.mp4 by decoding the original video and
+    applying frozen overlay metadata. Validate frame count, duration, resolution
+    and playability with ffprobe. Never treat the debug MP4 as the primary
+    product output.
+
+48. Implement benchmark scopes separately:
+    extraction FPS and per-stage timings; frozen replay p50/p95/p99; template and
+    reconciliation time; RSS. “600 FPS” is informational only for frozen replay
+    and is never evidence for production GPU throughput.
+
+49. Wire the complete CLI pipeline and Make/CI gates. CI uses only hermetic
+    synthetic artifacts; real Friends/model tests are separate local gates.
+    No target may exit 0 after silently skipping its mandatory behavior.
+
+50. Run the real procedure on `test_videos/Friends.mp4`, produce the complete
+    report/review package, inspect all visual artifacts, run all acceptance
+    commands and stop. Do not begin the next phase. Return PASS only if every
+    required runtime and labeled holdout gate passed; otherwise return the exact
+    PARTIAL/BLOCKED verdict.
+
+============================================================
+I. REQUIRED TEST FILES
+============================================================
+
+At minimum add real tests for:
+
+tests/unit/test_cli.py
+tests/unit/test_paths.py
+tests/unit/test_model_manager.py
+tests/unit/test_oracle_contract.py
+tests/unit/test_video_reader.py
+tests/unit/test_sampling.py
+tests/unit/test_extraction.py
+tests/unit/test_tracker_lifecycle.py
+tests/unit/test_chunk_invariance.py
+tests/unit/test_tracklet_templates.py
+tests/unit/test_reconciliation.py
+tests/unit/test_gallery.py
+tests/unit/test_aggregation.py
+tests/unit/test_ground_truth.py
+tests/unit/test_evaluation.py
+tests/unit/test_rendering.py
+
+tests/integration/test_synthetic_pipeline.py
+tests/integration/test_artifact_resume.py
+tests/integration/test_real_model_smoke.py
+tests/integration/test_friends_smoke.py
+
+Mark real-model and Friends tests explicitly, but never silently skip them inside
+the full real acceptance target.
+
+============================================================
+J. REQUIRED MAKE TARGETS
+============================================================
+
+Implement and actually run:
+
+make video-reference-clean-install-cpu
+make video-reference-cli-smoke
+make video-reference-unit
+make video-reference-synthetic-e2e
+make video-reference-artifact-integrity
+make video-reference-chunk-parity
+make video-reference-static
+make video-reference-ci
+
+For the authorized model:
+
+ALLOW_MODEL_DOWNLOAD=1 make video-reference-models-cpu
+make video-reference-doctor-cpu
+make video-reference-real-model-smoke-cpu
+
+If CUDA is available:
+
+make video-reference-clean-install-cuda
+make video-reference-doctor-cuda
+make video-reference-real-model-smoke-cuda
+
+For Friends:
+
+make video-reference-friends-smoke
+make video-reference-friends-extract
+make video-reference-friends-replay
+make video-reference-friends-visualize
+make video-reference-friends-evaluate
+make video-reference-friends-acceptance
+
+Full local acceptance:
+
+make video-reference-acceptance
+
+Target semantics:
+
+- `video-reference-ci` is hermetic and model/video independent.
+- `video-reference-friends-acceptance` requires real model + Friends.mp4.
+- `video-reference-acceptance` chains core and real Friends acceptance.
+- Missing model/video is non-zero BLOCKED, never an implicit skip.
+- No Make target may depend on a nonexistent command or undocumented local path.
+
+============================================================
+K. FRIENDS RUN AND HUMAN-LABEL CHECKPOINT
+============================================================
+
+Run in this order:
+
+1. 32-frame CPU real-model smoke.
+2. Inspect bbox/landmark/alignment contact sheet.
+3. 300-frame smoke using the explicitly selected provider.
+4. Validate artifacts and resume without inference.
+5. Replay chunks 1/8/17/64 twice.
+6. Inspect raw-track fragmentation and cannot-links.
+7. Run full every-frame extraction exactly once.
+8. Replay from frozen data thereafter.
+9. Generate top-quality tracklet contact sheets.
+10. Generate a labeling queue.
+
+Do not download cast photos.
+
+If `test_gallery/` contains no user-provided rights-cleared gallery:
+
+- canonical clustering may be evaluated;
+- names remain unknown;
+- produce `PARTIAL_NEEDS_HUMAN_LABELS`;
+- never fabricate Rachel/Monica/etc.
+
+Rachel early/late may PASS only when:
+
+- both anchors were explicitly human-labeled;
+- one is calibration and one is holdout;
+- both resolve to real observations;
+- observation -> raw tracklet -> canonical track mapping exists;
+- they share the same canonical track;
+- no different-label conflict exists in that cluster;
+- no cannot-link is violated;
+- thresholds were frozen before holdout evaluation.
+
+This proves same canonical video identity only. It does not prove one raw track
+ID or persistent product face_id.
+
+============================================================
+L. LOW-COSINE DIAGNOSTIC ORDER
+============================================================
+
+When cosine is low, investigate in this exact order:
+
+1. Same model pack used for both gallery and video?
+2. Model/preprocess/alignment fingerprint identical?
+3. BGR input converted exactly as upstream ArcFace expects?
+4. Landmark order correct?
+5. Alignment crop parity passed?
+6. Embedding unit normalization finite?
+7. Face sufficiently large?
+8. Blur/exposure/alignment quality passed?
+9. Same-person tracklet sample distribution?
+10. Different-person/impostor distribution?
+11. Top1/top2 margin?
+12. Only then consider threshold or model changes.
+
+Never compare buffalo_l embeddings with old GlintR100/gallery centroids.
+
+Do not switch to AdaFace or another model in this correction.
+
+============================================================
+M. COMPLETION VERDICTS
+============================================================
+
+PASS:
+- core tests/static/CI pass;
+- real official model ran;
+- Friends full extraction completed;
+- final artifacts validate and resume;
+- tracker/reconciliation/aggregation/rendering completed;
+- chunk invariance passed;
+- populated calibration + holdout labels/gallery exist;
+- declared labeled correctness gates passed;
+- no fabricated labels or biometric artifacts are tracked.
+
+PARTIAL_NEEDS_HUMAN_LABELS:
+- implementation, real extraction, replay, visualization and invariants pass;
+- but approved labels/gallery are absent or insufficient.
+
+BLOCKED_MODEL_ARTIFACT:
+- core synthetic implementation passes;
+- official model cannot be safely acquired/loaded.
+
+BLOCKED_INPUT_VIDEO:
+- Friends.mp4 is missing/unreadable.
+
+BLOCKED_REFERENCE_ENVIRONMENT:
+- compatible isolated runtime cannot be established.
+
+BLOCKED_CORRECTION:
+- mandatory correctness/integrity gates remain failing.
+
+Do not use:
+production-ready, Phase 2 complete, GPU-only, accuracy verified,
+600 FPS product, Rachel recognized
+
+unless the corresponding exact evidence exists.
+
+============================================================
+N. REQUIRED FINAL REPORT
+============================================================
+
+Write:
+
+research/video_reference_lab/REPORT.md
+
+and:
+
+docs/implementation/review_packages/VIDEO-REFERENCE-LAB-CORRECTION.md
+
+Then return these exact sections in Turkish:
+
+1. VERDICT
+2. WHAT ACTUALLY WORKS
+3. WHAT IS STILL NOT PROVEN
+4. REPOSITORY BASELINE
+5. PUBLIC MEDIA/BIOMETRIC REMEDIATION
+6. CHANGED-FILE MAP
+7. REFERENCE DECISIONS
+8. MODEL ACQUISITION AND LICENSE
+9. MODEL BINDING/PREPROCESS/ALIGNMENT EVIDENCE
+10. INPUT VIDEO EVIDENCE
+11. EXTRACTION COUNTS AND TIMINGS
+12. ARTIFACT INTEGRITY/RESUME EVIDENCE
+13. TRACKER LIFECYCLE EVIDENCE
+14. CHUNK-INVARIANCE HASHES
+15. TEMPLATE/RECONCILIATION EVIDENCE
+16. GALLERY/HUMAN-LABEL EVIDENCE
+17. RACHEL EARLY/LATE EVIDENCE OR NOT_EVALUATED
+18. QUALITY/COSINE DIAGNOSTICS
+19. VISUAL ARTIFACT PATHS AND CHECKSUMS
+20. BENCHMARK SCOPES
+21. EXACT COMMANDS, EXIT CODES AND CONCISE RAW OUTPUT
+22. TESTS: WHAT EACH PROVES AND DOES NOT PROVE
+23. GIT STATUS/DIFF/ACCIDENTAL-BINARY CHECK
+24. KNOWN LIMITATIONS
+25. MCP ACCOUNTABILITY
+26. SKILL ACCOUNTABILITY
+27. SINGLE RECOMMENDED NEXT ACTION
+
+For every failed or unexecuted command write FAIL, BLOCKED, NOT_RUN or SKIPPED
+honestly. Do not substitute file existence, mocks, static checks or generated
+reports for real runtime evidence.
+
+Do not commit or push. Stop after the report so a senior reviewer can inspect it.
+
+
+Aynen abi, sorun şu: önceki prompt “hangi dosyayı nasıl yazacağını” söylüyor ama “biz niye bu işi yapıyoruz?” kısmını yeterince öğretmiyor. Model de checklist tamamlayan memura dönüşüyor.
+
+Aşağıdaki bölümü verdiğim 50 adımlık promptun en başına, görev kurallarından önce aynen ekle:
+# ÖNCE BUNU ANLA — PROJENİN AMACI, SON ÜRÜN VE BU VIDEO LAB'I NEDEN YAPIYORUZ?
+
+Bu bölüm görev listesinden daha önemlidir. Kod yazmaya başlamadan önce tamamen oku ve kendi raporunda anladığın sistemi birkaç paragrafla yeniden açıkla.
+
+Senin görevin yalnızca bazı Python dosyaları, JSON dosyaları veya testler üretmek değildir. Biz video içindeki yüzlerin zaman boyunca nasıl takip edileceğini, hangi görüntülerin tanıma için güvenilir olduğunu ve parçalanmış track'lerin aynı gerçek kişiye nasıl bağlanacağını doğrulayan, gözle incelenebilir ve deterministik bir referans sistem kuruyoruz.
+
+Bu aşama production GPU pipeline değildir. Bu aşama, daha sonra yazılacak GPU/GStreamer/DeepStream/TensorRT sisteminin doğruluk oracle'ıdır.
+
+## 1. Nihai ürün nedir?
+
+Nihai kullanıcı şunu yapabilmelidir:
+
+1. Arayüzden bir video yükler.
+2. Video orijinal kalitesiyle MinIO'ya kaydedilir.
+3. Worker videoyu analiz eder.
+4. Her karedeki yüzler bulunur.
+5. Aynı yüzün ardışık karelerdeki görüntüleri bir tracklet altında toplanır.
+6. Kamera kesintisi, kısa kaybolma veya tracker parçalanması nedeniyle ayrılmış tracklet'ler gerektiğinde aynı canonical track altında birleştirilir.
+7. Canonical track, gallery'deki bir kişiyle yeterince güvenilir eşleşiyorsa örneğin `Rachel` olarak etiketlenir.
+8. Güvenilir eşleşme yoksa `unknown` kalır.
+9. Frontend orijinal videoyu oynatır ve backend'in ürettiği zamanlanmış bbox/label verisini video üzerine overlay olarak çizer.
+10. Bunun için zorunlu olarak yeni bir MP4 render edilmez. Debug amaçlı annotated MP4 ayrıca üretilebilir.
+11. Kullanıcı zaman çizelgesinde kişinin hangi aralıklarda göründüğünü görebilir.
+12. İleride identity storage ile bağlandığında aynı kalıcı `faceId`, ismi değiştirilse bile korunabilir.
+
+Örnek kullanıcı sonucu:
+
+```text
+00:00.000–00:04.120  canonical_track=17  label=Rachel
+00:04.160–00:05.000  yüz görünmüyor
+00:05.040–00:09.600  canonical_track=17  label=Rachel
+00:10.120–00:12.800  canonical_track=23  label=unknown
+
+
+Burada iki ayrı zaman aralığı aynı gerçek kişiyse canonical_track=17 olarak birleşebilir. Ancak bu karar yalnızca kanıta dayanmalıdır.
+
+2. Sistemin temel veri modeli
+
+Aşağıdaki kavramları kesinlikle birbirine karıştırma:
+
+
+flowchart LR
+    F[Video frame] --> O[Face observation]
+    O --> R[Raw tracklet]
+    R --> C[Canonical track]
+    C --> D{Gallery decision}
+    D -->|strong evidence| K[Known label: Rachel]
+    D -->|insufficient evidence| U[Unknown]
+
+    Face observation
+
+Bir frame'de bulunan tek bir yüzdür.
+
+İçermesi gereken temel bilgi:
+
+observation_id
+frame_index
+pts
+timestamp_seconds
+bbox
+five landmarks
+detector confidence
+alignment/quality ölçümleri
+embedding referansı
+daha sonra atanmışsa raw_tracklet_id
+
+Observation bir insan kimliği değildir. Sadece belirli bir karedeki yüz ölçümüdür.
+
+Raw tracklet
+
+Tracker'ın zaman içinde birbirine bağladığı observation dizisidir.
+
+Örnek:
+
+raw_tracklet=4:
+frame 100, 101, 102, 103, 104
+
+Raw tracklet yalnızca zamansal devamlılık iddiasıdır. “Bu Rachel'dır” anlamına gelmez.
+
+Canonical track
+
+Tracker'ın parçalanmış olabileceği raw tracklet'lerin offline reconciliation sonrasında birleştirilmiş halidir.
+
+Örnek:
+
+raw_tracklet 4  ─┐
+                 ├─ canonical_track 17
+raw_tracklet 9  ─┘
+
+Aynı gerçek yüz kısa süre kaybolduysa veya scene cut sonrasında tekrar geldiyse iki raw tracklet oluşabilir. Görsel ve zamansal kanıt yeterliyse bunlar canonical track altında birleştirilebilir.
+
+Canonical track de doğrudan kalıcı faceId değildir. Bu video içindeki canonical kişi izidir.
+
+Display label
+
+Gallery eşleşmesinden gelen kullanıcıya gösterilecek addır.
+
+canonical_track_id = 17
+display_label      = Rachel
+gallery_known      = true
+
+Eşleşme yeterli değilse:
+
+canonical_track_id = 23
+display_label      = unknown
+gallery_known      = false
+
+top1_name=Rachel bulunması tek başına known=true demek değildir.
+
+3. Tracker ile recognizer aynı şey değildir
+
+Bu projede en fazla karıştırılan konu budur.
+
+Tracker şu soruyu cevaplar:
+
+Birkaç kare önce gördüğüm yüz ile bu karedeki yüz aynı hareket eden nesne mi?
+
+Recognizer şu soruyu cevaplar:
+
+Bu yüz gallery'deki Rachel'a yeterince benziyor mu?
+
+Reconciliation şu soruyu cevaplar:
+
+Tracker'ın ayrı ürettiği iki tracklet, bütün kanıtlar değerlendirildiğinde aynı gerçek kişiye mi ait?
+
+Bunların görevlerini birbirine yükleme.
+
+
+flowchart TD
+    A[Detector: karede yüz nerede?]
+    --> B[Tracker: komşu karelerde aynı yüz hangisi?]
+    --> C[Quality selection: hangi örnekler güvenilir?]
+    --> D[Recognizer: embedding nedir?]
+    --> E[Reconciliation: parçalı tracklet'ler birleşmeli mi?]
+    --> F[Gallery: canonical track kime ait?]
+
+
+
+    Jennifer Aniston'ın bütün video boyunca Jennifer Aniston olarak kalması yalnızca tracker sayesinde sağlanmaz.
+
+Doğru mekanizma:
+
+Tracker kısa süreli hareket devamlılığını sağlar.
+Tracklet içinden kaliteli yüzler seçilir.
+Bu yüzlerin embedding'leri bir track template'e dönüştürülür.
+Ayrılmış tracklet'ler embedding, zaman ve cannot-link kanıtlarıyla değerlendirilir.
+Canonical track gallery ile eşleştirilir.
+Gallery kararı güvenilir değilse isim gösterilmez.
+4. Bu Video Lab'ı neden GPU hot path'ten önce yapıyoruz?
+
+Önce C++/CUDA/GStreamer pipeline yazarsak aynı anda şu sorunlarla uğraşırız:
+
+decoder davranışı
+GPU memory ownership
+NvBufSurface pitch
+batching
+TensorRT binding
+CUDA kernel
+GStreamer metadata lifetime
+tracker
+recognition matematiği
+gallery threshold
+track reconciliation
+rendering
+
+Ortaya yanlış sonuç çıktığında hatanın modelden mi, alignment'tan mı, tracker'dan mı, CUDA kernel'den mi geldiğini anlayamayız.
+
+Bu yüzden önce okunabilir Python reference lab kuruyoruz:
+
+
+
+flowchart LR
+    V[Friends.mp4]
+    --> P[PyAV frame/PTS reader]
+    --> D[Official detector oracle]
+    --> A[Official 5-point alignment]
+    --> E[Official embedding oracle]
+    --> J[Immutable JSONL/NPY artifacts]
+    --> T[Offline tracking]
+    --> R[Offline reconciliation]
+    --> G[Gallery decision]
+    --> X[Metrics + visual diagnostics]
+
+
+   Bu yaklaşımın amacı Python'ı production hot path yapmak değildir.
+
+Amaç:
+
+Beklenen doğru sonucu tanımlamak.
+Ara çıktıları tek tek inceleyebilmek.
+Algoritmayı GPU karmaşıklığı olmadan test etmek.
+Daha sonra GPU pipeline sonucunu bu oracle ile karşılaştırmak.
+CUDA/TensorRT optimizasyonundan önce semantik hataları bulmak.
+
+Production GPU pipeline geldiğinde aynı video için şunları karşılaştıracağız:
+
+frame/PTS parity
+bbox parity
+landmark parity
+aligned crop parity
+embedding cosine parity
+track assignment parity
+gallery decision parity
+final timeline parity
+5. Friends.mp4 burada ne işe yarıyor?
+
+Friends.mp4 yalnızca “kod çalıştı ve video okundu” testi değildir. Bu bizim hedef fixture'ımızdır.
+
+Bu video üzerinden şunları gözle ve sayısal olarak doğrulamak istiyoruz:
+
+Yüzler gerçekten doğru yerde mi?
+Landmark'lar göz, burun ve ağız noktalarına oturuyor mu?
+Alignment crop'ları düzgün mü?
+BGR/RGB veya normalization hatası var mı?
+Aynı kişinin embedding'leri birbirine yakın mı?
+Farklı kişilerin embedding'leri ayrılıyor mu?
+Blur/küçük/yan dönük yüzler kalite filtresinden geçiyor mu?
+Tracker aynı kişiyi kareler boyunca sürdürüyor mu?
+Track kaybolduktan sonra makul şekilde geri kazanılabiliyor mu?
+Aynı karede görünen iki farklı yüz yanlışlıkla birleştiriliyor mu?
+Rachel track'i gallery'deki Rachel örnekleriyle gerçekten eşleşiyor mu?
+Unknown bir yüz yanlışlıkla Rachel etiketi alıyor mu?
+Pipeline iki farklı chunk boyutuyla çalışınca aynı sonucu veriyor mu?
+
+Bu nedenle sadece bir annotated MP4 üretmek başarı değildir. Video güzel görünse bile alttaki ID ve zaman verisi yanlış olabilir.
+
+6. Neden önce immutable frame ve observation artifact'leri üretiyoruz?
+
+Detection ve embedding pahalı aşamalardır. Her tracker değişikliğinde videoyu yeniden infer etmek istemiyoruz.
+
+Önce aşağıdaki katman üretilecek:
+
+frames.jsonl
+observations.jsonl
+embeddings.npy
+artifact_manifest.json
+checksums.json
+
+Sonra tracking ve reconciliation sadece bunları okuyacak:
+
+frames + observations + embeddings
+        ↓
+raw_tracklets.jsonl
+        ↓
+track_templates.jsonl
+        ↓
+canonical_assignments.jsonl
+        ↓
+canonical_tracks.json
+        ↓
+timeline / metrics / overlay
+
+Böylece tracker parametresini değiştirdiğimizde detector ve recognizer yeniden çalışmaz.
+
+Ayrıca hata lokalize edilebilir:
+
+bbox yanlışsa extraction sorunu
+crop yanlışsa alignment sorunu
+cosine düşükse preprocessing/model/quality sorunu
+raw track yanlışsa tracker sorunu
+canonical merge yanlışsa reconciliation sorunu
+isim yanlışsa gallery decision sorunu
+7. frames.jsonl neden zorunludur?
+
+Sadece yüz bulunan kareleri kaydetmek yeterli değildir.
+
+Tracker'ın şunları bilmesi gerekir:
+
+yüz görülmeyen boş frame'ler
+gerçek frame sırası
+PTS
+zaman farkları
+variable frame-rate davranışı
+scene cut
+sampling nedeniyle atlanan kareler
+
+Örnek:
+
+{
+  "frame_index": 421,
+  "pts": 16840,
+  "time_base_num": 1,
+  "time_base_den": 1000,
+  "timestamp_seconds": 16.84,
+  "sampled": true,
+  "scene_cut": false,
+  "observation_count": 0
+}
+
+Boş frame'ler kaybolursa tracker yüzün ne kadar süre görünmediğini anlayamaz. Sonuçlar chunk boyutuna ve işleme biçimine göre değişir.
+
+8. Chunk ne anlama gelir?
+
+Chunk yalnızca I/O ve bellek partition'ıdır. Tracking state'i sıfırlayan semantik video parçası değildir.
+
+Yanlış:
+
+chunk 1 bitti → tracker reset
+chunk 2 başladı → ID counter reset
+
+Doğru:
+
+aynı video timeline'ı
+├── chunk 1: okuma/hesap partition'ı
+├── chunk 2: okuma/hesap partition'ı
+└── tracker state bütün timeline boyunca devam eder
+
+Aynı input farklı chunk size ile işlendiğinde semantik sonuç aynı olmalıdır.
+
+Bu nedenle chunk invariance gate zorunludur.
+
+9. Quality gate neden model seçiminden daha önemlidir?
+
+Recognizer'a kötü crop verirsen güçlü model de düşük cosine üretir.
+
+Düşük cosine gördüğünde ilk tepki threshold düşürmek veya model değiştirmek olmamalıdır.
+
+Önce sırayla kontrol et:
+
+Doğru model gerçekten yüklendi mi?
+Detector bbox koordinatları doğru şekilde original frame'e map edildi mi?
+Landmark order doğru mu?
+Similarity transform yönü doğru mu?
+Alignment crop 112×112 ve doğru canonical template ile mi üretildi?
+Crop RGB/BGR sırası doğru mu?
+Modelin beklediği normalization kullanılıyor mu?
+Embedding finite ve L2-normalized mı?
+Yüz yeterince büyük ve net mi?
+Pose/occlusion kabul edilebilir mi?
+Gallery örnekleri kaliteli ve aynı preprocessing fingerprint'ine sahip mi?
+
+Ancak bunlar doğrulandıktan sonra threshold calibration yapılabilir.
+
+Threshold düşürerek yanlış preprocessing gizlemek yasaktır.
+
+10. Track-level recognition nasıl yapılmalıdır?
+
+Her frame'in recognition sonucunu bağımsız final karar olarak kullanma.
+
+Bir tracklet içinde farklı kalitede yüzler bulunur:
+
+frame 10: blur
+frame 11: yan profil
+frame 12: küçük
+frame 13: net ve önden
+frame 14: göz kapalı
+
+Beklenen yöntem:
+
+Her observation için quality score üret.
+Minimum quality gate'i geçemeyenleri final template'e alma.
+Kalanlar arasından temporal diversity koruyarak en iyi N sample'ı seç.
+Embedding outlier'larını reddet.
+Kalite ağırlıklı centroid hesapla.
+Centroid'i tekrar L2-normalize et.
+Gallery matching'i bu track template üzerinden yap.
+Observation-level skorları diagnostic olarak sakla ama tek kötü frame final kimliği bozmasın.
+
+Örnek:
+
+template =
+normalize(
+    Σ quality_weight_i × embedding_i
+)
+
+Ama yalnızca kaliteli, finite ve uygun observation'lar bu toplama katılabilir.
+
+11. Track reconciliation neyi çözmektedir?
+
+Tracker kusursuz değildir.
+
+Aynı kişi şu nedenlerle birden fazla raw tracklet olabilir:
+
+kısa süre kadraj dışına çıkma
+başka birinin arkasında kalma
+detector miss
+hızlı hareket
+scene cut
+bbox sıçraması
+
+Reconciliation bu tracklet'leri birleştirmeyi deneyebilir. Fakat aşırı merge daha tehlikelidir.
+
+Yanlış merge örneği:
+
+raw_tracklet 5 = Rachel
+raw_tracklet 8 = Monica
+yanlış reconciliation
+→ canonical_track 12 = Rachel + Monica
+
+Bu yüzden birleşme yalnızca güçlü kanıtla yapılmalıdır.
+
+Kullanılabilecek kanıtlar:
+
+track template cosine
+zaman aralığı
+actual same-frame co-occurrence
+bbox/motion continuity
+scene boundary
+template quality
+gallery evidence
+human annotation
+12. Cannot-link ne demektir?
+
+İki tracklet aynı frame'de iki ayrı yüz olarak bulunuyorsa aynı gerçek insan olamaz.
+
+frame 500:
+raw_tracklet 4 = soldaki yüz
+raw_tracklet 9 = sağdaki yüz
+
+Bu durumda:
+
+cannot_link(4, 9) = true
+
+Yalnızca zaman aralıklarının overlap etmesi cannot-link için yeterli değildir. Gerçek aynı-frame observation kanıtı gerekir.
+
+Human label ile “bunlar farklı kişiler” denmişse bu da cannot-link'tir.
+
+Cannot-link, yüksek embedding cosine bulunsa bile merge'i engeller.
+
+13. Neden complete-link yaklaşımı gerekir?
+
+Cosine benzerliği transitive değildir.
+
+Örnek:
+
+A ↔ B = 0.72
+B ↔ C = 0.71
+A ↔ C = 0.31
+
+Sadece bağlantı zincirine bakarsan A, B ve C aynı cluster'a girer. Bu yanlış olabilir.
+
+Complete-link mantığında iki cluster birleştirilmeden önce cluster'lar arasındaki bütün kritik eşleşmeler kabul edilebilir olmalıdır. Bir tane zayıf veya cannot-link ilişki merge'i engelleyebilir.
+
+Amaç agresif şekilde track sayısını azaltmak değil; yanlış insanları birleştirmemektir.
+
+14. Gallery kararı nasıl verilmelidir?
+
+Gallery, bir veya daha fazla kişinin kaliteli referans örneklerini içerir.
+
+Canonical track template'i gallery centroid'leriyle karşılaştırılır.
+
+Final known kararı en az şunları gerektirir:
+
+top1_score >= recognition_threshold
+AND
+top1_score - top2_score >= recognition_margin
+AND
+gallery has sufficient competitors for margin
+AND
+model/preprocess/alignment fingerprint matches
+AND
+track template quality is sufficient
+AND
+matched identity is active
+
+Eğer bu şartlar sağlanmıyorsa:
+
+known = false
+display_label = "unknown"
+
+Şu davranış kesinlikle yasaktır:
+
+top1_name = "Rachel"
+known = false
+display_label = "Rachel"   # YANLIŞ
+
+Top-1 yalnızca en yakın adaydır. Güvenilir identity kararı değildir.
+
+Tek kişilik gallery'de top-2 margin hesaplanamıyorsa bunu sahte 1.0 margin ile PASS yapma. Karar insufficient_competitors, review veya unknown olmalıdır.
+
+15. faceId, track ID ve isim neden farklıdır?
+
+Uzun vadede üç ayrı kimlik vardır:
+
+raw_tracklet_id      = tracker'ın geçici ID'si
+canonical_track_id  = bu video içindeki birleştirilmiş iz
+face_id             = identity storage'daki kalıcı kimlik
+display_name        = kullanıcının değiştirebildiği isim
+
+Rachel ismi değişebilir ama kalıcı faceId değişmez.
+
+Tracker ID başka videoda yeniden kullanılabilir. Bu nedenle tracker ID asla kalıcı identity ID değildir.
+
+Bu reference lab aşamasında otomatik kalıcı faceId yaratma. Lab'ın çıktısı canonical video track ve optional gallery label'dır. Kalıcı identity yaratma/persistence ayrı application workflow'dur.
+
+16. Debug MP4 ile production UI arasındaki fark
+
+Debug MP4 geliştiriciye hızlı görsel inceleme sağlar:
+
+bbox doğru mu?
+raw/canonical ID doğru mu?
+label doğru mu?
+track geçişinde sıçrama var mı?
+
+Ama production ürününde orijinal videoyu yeniden encode etmek zorunda değiliz.
+
+Frontend şu metadata'yı okuyabilir:
+
+{
+  "timestamp_seconds": 12.48,
+  "canonical_track_id": 17,
+  "bbox_xyxy": [420, 180, 612, 430],
+  "label": "Rachel",
+  "known": true,
+  "confidence": 0.73
+}
+
+Frontend video playback time'a göre ilgili overlay'i çizer.
+
+Bu yaklaşım:
+
+orijinal kaliteyi korur
+yeniden encoding zamanını ortadan kaldırır
+label/name düzeltildiğinde videoyu tekrar render etmeyi gerektirmez
+UI filtreleme ve timeline etkileşimini kolaylaştırır
+17. Bu lab'ın başarı kriteri nedir?
+
+Başarı “script exit 0” veya “dosya oluştu” değildir.
+
+Başarı için:
+
+CLI gerçekten import edilip çalışmalı.
+Model acquisition deterministik olmalı.
+Provider gerçekten raporlanmalı.
+Frames ve observations doğru PTS/timestamp ile kaydedilmeli.
+Detection ve alignment görsel olarak doğrulanmalı.
+Same-person ve different-person cosine dağılımları ölçülmeli.
+Tracker lifecycle sentetik testlerde geçmeli.
+Lost track reactivation çalışmalı.
+Chunk-size parity geçmeli.
+Canonical reconciliation cannot-link kurallarına uymalı.
+Unknown hiçbir zaman yanlış isimle gösterilmemeli.
+Gallery kararı threshold ve margin'i gerçekten uygulamalı.
+Evaluator doğru ID namespace'lerini karşılaştırmalı.
+Artifact checksum üretildikten sonra dosya mutasyona uğramamalı.
+Debug MP4 ve timeline source artifact'lerle tutarlı olmalı.
+Friends.mp4 üzerinde insanın inceleyebileceği contact sheet, timeline ve rapor üretilmeli.
+Çalıştırılmayan hiçbir gate PASS yazılmamalı.
+18. Ne yapmamalısın?
+
+Şunlar bu görevin amacına aykırıdır:
+
+Yalnız dosya skeleton'ı üretmek.
+CLI yazmadan pyproject entrypoint tanımlamak.
+Config alanı ekleyip runtime'da kullanmamak.
+Model indirme seçeneği ekleyip implement etmemek.
+Fake embedding ile gerçek model PASS iddiası.
+Unit testler geçiyor diye Friends end-to-end PASS demek.
+Threshold'u düşürerek preprocessing hatasını gizlemek.
+Unknown sonuca top-1 ismini yazmak.
+Tracker ve recognizer'ı aynı kavram gibi kullanmak.
+Chunk sınırında tracker state sıfırlamak.
+Boş frame'leri artifact'ten atmak.
+Scene cut config'i yazıp runtime'da uygulamamak.
+Artifact checksum'dan sonra manifest'i değiştirmek.
+Ground truth olmadan IDF1/HOTA doğrulandı demek.
+Kişi fotoğraflarını, embeddings veya model weight'lerini Git'e eklemek.
+Production GPU performansı hakkında bu Python lab sonucuyla iddia üretmek.
+Raporu kodun yerine teslimat saymak.
+19. Senin bu görevdeki rolün
+
+Sen yalnızca kod üreticisi değilsin. Şu soruların her birine kanıt üreten bir reference-system mühendisisin:
+
+“Video doğru okunuyor mu?”
+“Zaman çizelgesi doğru mu?”
+“Yüz doğru bulunuyor mu?”
+“Crop doğru hizalanıyor mu?”
+“Embedding doğru mu?”
+“Kötü örnekler filtreleniyor mu?”
+“Aynı kişi zaman boyunca korunuyor mu?”
+“Parçalanan track'ler güvenli şekilde birleşiyor mu?”
+“Farklı insanlar yanlışlıkla birleşiyor mu?”
+“Rachel kararı gerçekten kanıtlı mı?”
+“Unknown gerçekten unknown mı kalıyor?”
+“Aynı input tekrar çalıştırıldığında aynı semantik sonuç çıkıyor mu?”
+“GPU implementasyonu daha sonra bununla karşılaştırılabilir mi?”
+
+Her geliştirme kararını bu sorulardan en az birine bağla.
+
+20. Kodlamadan önce zorunlu anlayış özeti
+
+Hiçbir source dosyasını değiştirmeden önce terminal/rapor çıktında aşağıdaki başlıkları kendi cümlelerinle açıkla:
+
+Nihai ürünün kullanıcıya sunduğu deneyim.
+Reference Video Lab'ın production pipeline'dan farkı.
+Observation, raw tracklet, canonical track, faceId ve display label farkları.
+Tracker, recognizer ve reconciliation'ın ayrı sorumlulukları.
+Neden immutable frame/observation artifact'i ürettiğimiz.
+Neden quality gate'in threshold tuning'den önce geldiği.
+Unknown label güvenlik kuralı.
+Chunk invariance beklentisi.
+Bu sprintin neyi kanıtlayacağı.
+Bu sprintin neyi kesinlikle kanıtlamayacağı.
+
+Bu özette kavramları yanlış açıklıyorsan implementation'a başlama. Önce source, requirement ve referansları yeniden incele.
+
+21. Bu görev tamamlandığında beklediğimiz somut hikâye
+
+Görev sonunda yalnızca “kodları yazdım” dememelisin. Şuna benzer, kanıtlı bir sonuç gösterebilmelisin:
+
+Friends.mp4 PyAV ile PTS korunarak okundu. Bütün frame'ler frames.jsonl içinde temsil edildi. Sampled frame'lerde official InsightFace oracle ile yüzler çıkarıldı. Alignment contact sheet ile kontrol edildi. Observation ve embedding artifact'leri checksum ile donduruldu. Tracker bu artifact'lerden replay edilerek raw tracklet'leri üretti. Chunk boyutu değiştirildiğinde aynı raw assignment sonucu alındı. Track-level quality aggregation ile canonical template'ler oluşturuldu. Same-frame cannot-link kullanan reconciliation parçalı track'leri güvenli şekilde birleştirdi. Gallery threshold ve margin şartlarını geçen track'ler bilinen kişi adı aldı; diğerleri unknown kaldı. Timeline JSON, contact sheet ve debug overlay MP4 aynı canonical assignment verisinden üretildi. Çalıştırılamayan doğruluk gate'leri açıkça BLOCKED veya NOT_RUN yazıldı.
+
+Bunu gösteremiyorsan görev bitmiş değildir.
+
+
+Bu açıklamadan sonra önceki 50 adımlık teknik prompt gelsin. Böylece agentın zihnindeki sıra şu olur:
+
+```mermaid
+flowchart LR
+    A[Ürün amacı]
+    --> B[Kimlik ve tracking semantiği]
+    --> C[Reference oracle]
+    --> D[Artifact/replay sistemi]
+    --> E[Algorithm correctness]
+    --> F[Friends.mp4 kanıtı]
+    --> G[Daha sonra GPU parity]
+
+En kritik cümle şu abi: Bu lab production sistem değildir; ilerideki GPU sistemine “doğru sonuç budur” diyecek denetlenebilir oracle'dır. Agent bunu anlamazsa yine dosya sayısını artırıp ürün yapmış gibi rapor verir.

@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 from skimage.transform import SimilarityTransform
 
-
 # ArcFace 112x112 canonical five-point template.
 # Order: left_eye, right_eye, nose, left_mouth, right_mouth.
 # "left" means subject-left (image-right for a front-facing subject).
@@ -46,7 +45,7 @@ def _to_bgr_for_processing(
     if color_order == "BGR":
         return image
     if color_order == "RGB":
-        return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        return np.asarray(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     raise AlignmentError(f"unsupported color_order: {color_order}")
 
 
@@ -58,7 +57,7 @@ def _to_original_color_order(
     if color_order == "BGR":
         return image
     if color_order == "RGB":
-        return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        return np.asarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     raise AlignmentError(f"unsupported color_order: {color_order}")
 
 
@@ -92,10 +91,10 @@ def align_face(
         tform = SimilarityTransform.from_estimate(landmarks_5, dst)
     except AttributeError:
         # scikit-image <0.26 fallback
-        tform = SimilarityTransform()
+        tform = SimilarityTransform()  # type: ignore[no-untyped-call]
         success = tform.estimate(landmarks_5, dst)
         if not success:
-            raise AlignmentError("could not estimate similarity transform")
+            raise AlignmentError("could not estimate similarity transform") from None
 
     matrix = tform.params[0:2, :].astype(np.float32)
 

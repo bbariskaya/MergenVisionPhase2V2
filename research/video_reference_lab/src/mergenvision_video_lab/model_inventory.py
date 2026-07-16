@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +11,6 @@ import onnxruntime as ort
 from mergenvision_video_lab.contracts import OnnxModelContract
 from mergenvision_video_lab.errors import ConfigError, ModelArtifactError
 from mergenvision_video_lab.hashing import sha256_file
-
 
 DEFAULT_DETECTOR_BASENAMES = ["retinaface_r50_dynamic.onnx"]
 DEFAULT_RECOGNIZER_BASENAMES = ["glintr100.onnx"]
@@ -73,9 +71,7 @@ def _inspect_onnx(path: Path) -> dict[str, Any]:
             {
                 "name": inp.name,
                 "shape": shape,
-                "dtype": onnx.helper.tensor_dtype_to_np_dtype(
-                    tensor_type.elem_type
-                ).name,
+                "dtype": onnx.helper.tensor_dtype_to_np_dtype(tensor_type.elem_type).name,
             }
         )
 
@@ -90,9 +86,7 @@ def _inspect_onnx(path: Path) -> dict[str, Any]:
             {
                 "name": out.name,
                 "shape": shape,
-                "dtype": onnx.helper.tensor_dtype_to_np_dtype(
-                    tensor_type.elem_type
-                ).name,
+                "dtype": onnx.helper.tensor_dtype_to_np_dtype(tensor_type.elem_type).name,
             }
         )
 
@@ -148,7 +142,7 @@ class ModelInventory:
 def available_providers() -> list[str]:
     """Return ONNX Runtime available execution providers."""
     try:
-        return ort.get_available_providers()
+        return list(ort.get_available_providers())
     except Exception as exc:
         raise ConfigError(f"cannot query ONNX Runtime providers: {exc}") from exc
 

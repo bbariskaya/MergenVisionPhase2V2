@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import av
 import numpy as np
@@ -71,10 +73,8 @@ def _read_rotation(stream: av.video.stream.VideoStream) -> float:
     if rotation == 0.0:
         rotate_tag = stream.metadata.get("rotate") if stream.metadata else None
         if rotate_tag is not None:
-            try:
+            with contextlib.suppress(ValueError):
                 rotation = float(rotate_tag)
-            except ValueError:
-                pass
     return rotation
 
 
@@ -151,7 +151,9 @@ def probe_video(path: Path | str) -> VideoProbeResult:
         rotation_degrees=rotation,
         sample_aspect_ratio=_sar_to_tuple(video_stream.sample_aspect_ratio),
         display_aspect_ratio=_sar_to_tuple(video_stream.display_aspect_ratio),
-        avg_frame_rate=float(avg_rate) if avg_rate is not None and avg_rate.denominator != 0 else 0.0,
+        avg_frame_rate=float(avg_rate)
+        if avg_rate is not None and avg_rate.denominator != 0
+        else 0.0,
         real_frame_rate=real_frame_rate,
         time_base_num=int(time_base.numerator) if time_base is not None else 1,
         time_base_den=int(time_base.denominator) if time_base is not None else 1,

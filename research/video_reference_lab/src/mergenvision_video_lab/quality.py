@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import cv2
 import numpy as np
 
@@ -38,7 +40,7 @@ def compute_quality(
     landmarks_5: np.ndarray,
     detector_score: float,
     reprojection_error_px: float,
-    config: dict,
+    config: dict[str, Any],
 ) -> QualityMetrics:
     """Compute quality metrics and rejection reasons for one observation."""
     x1, y1, x2, y2 = bbox_xyxy
@@ -53,9 +55,7 @@ def compute_quality(
     dark_clip, bright_clip = compute_clip_fractions(gray)
 
     iod = interocular_distance_px(landmarks_5)
-    alignment_error_normalized = (
-        reprojection_error_px / iod if iod > 1e-6 else float("inf")
-    )
+    alignment_error_normalized = reprojection_error_px / iod if iod > 1e-6 else float("inf")
 
     reasons: list[str] = []
     if bbox_min_side < config["min_face_side_px"]:

@@ -75,36 +75,43 @@ def build_appearances(
 
 def aggregate_canonical_tracks(
     observations: list[FaceObservation],
-    raw_tracklet_ids: list[str],
+    assignments: list[dict[str, Any]],
     clusters: list[list[str]],
+    cluster_ids: list[str],
     templates: dict[str, np.ndarray | None],
     max_gap_multiplier: float,
 ) -> list[CanonicalTrack]:
-    """Build canonical tracks from reconciliation clusters."""
-    obs_by_tracklet: dict[str, list[FaceObservation]] = {tid: [] for tid in raw_tracklet_ids}
-    for obs in observations:
-        # Observations are not yet tagged with raw_tracklet_id; callers must
-        # group them first. This helper receives the observations already
-        # belonging to each canonical cluster, so we build per-tracklet groups.
-        pass
+    """Build fully populated canonical tracks from reconciliation clusters.
 
-    # Re-group by supplied tracklet ID set.
+    ``assignments`` maps each observation to a raw tracklet. Observations are
+    grouped by raw tracklet, then attached to their canonical cluster.
+    """
+    assignment_by_obs = {a["observation_id"]: a for a in assignments}
+    observations_by_tracklet: dict[str, list[FaceObservation]] = {}
+    for obs in observations:
+        assignment = assignment_by_obs.get(obs.observation_id)
+        if assignment is None:
+            continue
+        tid = assignment["raw_tracklet_id"]
+        observations_by_tracklet.setdefault(tid, []).append(obs)
+
+    canonical_map: dict[str, str] = {}
+    for canonical_id, member_tracklet_ids in zip(cluster_ids, clusters, strict=True):
+        for tid in member_tracklet_ids:
+            canonical_map[tid] = canonical_id
+
     canonical_tracks: list[CanonicalTrack] = []
-    for cluster_idx, cluster_ids in enumerate(clusters, start=1):
-        canonical_track_id = f"CT{cluster_idx:06d}"
+    for canonical_id, member_tracklet_ids in zip(cluster_ids, clusters, strict=True):
         cluster_obs: list[FaceObservation] = []
         member_templates: list[np.ndarray] = []
-        for tid in cluster_ids:
-            # observations are filtered outside; here we just know cluster membership.
-            # Template averaging for the cluster.
+        for tid in member_tracklet_ids:
+            cluster_obs.extend(observations_by_tracklet.get(tid, []))
             tpl = templates.get(tid)
             if tpl is not None:
                 member_templates.append(tpl)
 
-        # Placeholder: real observations/detection lists are filled by the caller
-        # that has the assignment mapping. This module is kept thin because the
-        # CLI pipeline owns the observation-to-tracklet grouping.
-        appearances, total_duration = build_appearances(cluster_obs, max_gap_multiplier)
+        sorted_obs = sorted(cluster_obs, key=lambda o: o.pts_ns)
+        appearances, total_duration = build_appearances(sorted_obs, max_gap_multiplier)
 
         if member_templates:
             centroid = np.mean(np.asarray(member_templates, dtype=np.float32), axis=0)
@@ -113,16 +120,30 @@ def aggregate_canonical_tracks(
         else:
             cluster_template = None
 
+        detections = [
+            {
+                "observation_id": obs.observation_id,
+                "frame_index": obs.frame_index,
+                "pts_ns": obs.pts_ns,
+                "bbox_xyxy": obs.bbox_xyxy.to_list(),
+                "detector_score": obs.detector_score,
+                "quality_score": obs.quality.composite_quality_score,
+                "raw_tracklet_id": assignment_by_obs[obs.observation_id]["raw_tracklet_id"],
+                "provenance": "actual_detection",
+            }
+            for obs in sorted_obs
+        ]
+
         canonical_tracks.append(
             CanonicalTrack(
-                canonical_track_id=canonical_track_id,
-                raw_tracklet_ids=sorted(cluster_ids),
+                canonical_track_id=canonical_id,
+                raw_tracklet_ids=sorted(member_tracklet_ids),
                 display_label=None,
-                first_seen_pts_ns=0,
-                last_seen_pts_ns=0,
+                first_seen_pts_ns=sorted_obs[0].pts_ns if sorted_obs else 0,
+                last_seen_pts_ns=sorted_obs[-1].pts_ns if sorted_obs else 0,
                 total_duration_ns=total_duration,
-                appearances=[a.model_dump() if hasattr(a, "model_dump") else a for a in appearances],
-                detections=[],
+                appearances=[a if isinstance(a, dict) else a.model_dump() for a in appearances],
+                detections=detections,
                 template_evidence={
                     "member_count": len(member_templates),
                     "cluster_template": (
@@ -132,7 +153,9 @@ def aggregate_canonical_tracks(
                 decision_reason="complete_link_reconciliation",
                 confidence_evidence={
                     "min_tracklet_cosine": None,
-                    "member_template_norm": float(np.linalg.norm(cluster_template)) if cluster_template is not None else None,
+                    "member_template_norm": float(np.linalg.norm(cluster_template))
+                    if cluster_template is not None
+                    else None,
                 },
             )
         )
@@ -173,9 +196,13 @@ def build_canonical_track(
     else:
         cluster_template = None
 
-    display_label = gallery_match.get("top1_label") if gallery_match else None
+    display_label = None
+    if gallery_match and gallery_match.get("known"):
+        display_label = gallery_match.get("top1_label")
     decision_reason = (
-        "gallery_match" if gallery_match and gallery_match.get("known") else "complete_link_reconciliation"
+        "gallery_match"
+        if gallery_match and gallery_match.get("known")
+        else "complete_link_reconciliation"
     )
 
     return CanonicalTrack(
@@ -200,7 +227,11 @@ def build_canonical_track(
         confidence_evidence={
             "match_threshold": gallery_match.get("threshold") if gallery_match else None,
             "margin_threshold": gallery_match.get("margin_threshold") if gallery_match else None,
-            "member_template_norm": float(np.linalg.norm(cluster_template)) if cluster_template is not None else None,
+            "member_template_norm": float(np.linalg.norm(cluster_template))
+            if cluster_template is not None
+            else None,
         },
-        limitations=["gallery decision requires explicit labels" if gallery_match is None else ""],
+        limitations=(
+            ["gallery decision requires explicit labels"] if gallery_match is None else []
+        ),
     )

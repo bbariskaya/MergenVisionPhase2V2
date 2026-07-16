@@ -26,10 +26,9 @@ def test_atomic_writer_creates_final_file(tmp_path) -> None:
 
 def test_atomic_writer_removes_temp_on_failure(tmp_path) -> None:
     final = tmp_path / "out.txt"
-    with pytest.raises(RuntimeError):
-        with AtomicWriter(final) as writer:
-            writer.temp_path.write_text("partial", encoding="utf-8")
-            raise RuntimeError("abort")
+    with pytest.raises(RuntimeError), AtomicWriter(final) as writer:
+        writer.temp_path.write_text("partial", encoding="utf-8")
+        raise RuntimeError("abort")
     assert not final.exists()
     assert not any(tmp_path.glob("*.tmp*"))
 

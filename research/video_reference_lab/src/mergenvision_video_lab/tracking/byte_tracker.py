@@ -13,8 +13,9 @@ Local changes:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -30,7 +31,6 @@ from mergenvision_video_lab.tracking.geometry import (
     bbox_xyxy_to_tlwh,
     tlwh_to_tlbr,
     tlwh_to_xyah,
-    xyah_to_tlwh,
 )
 from mergenvision_video_lab.tracking.kalman import KalmanFilter
 
@@ -57,9 +57,17 @@ class Tracklet:
 
     _id_counter = 0
 
-    def __init__(self, strategy: str) -> None:
-        Tracklet._id_counter += 1
-        self.raw_tracklet_id = f"RT{Tracklet._id_counter:06d}"
+    def __init__(
+        self,
+        strategy: str,
+        _id_allocator: Callable[[], int] | None = None,
+    ) -> None:
+        if _id_allocator is not None:
+            tracklet_id = _id_allocator()
+        else:
+            Tracklet._id_counter += 1
+            tracklet_id = Tracklet._id_counter
+        self.raw_tracklet_id = f"RT{tracklet_id:06d}"
         self.strategy = strategy
         self.state = TrackState.New
         self.is_activated = False
@@ -108,7 +116,7 @@ class Tracklet:
         return tlwh_to_tlbr(self.tlwh)
 
     def predict(self) -> None:
-        if self.kalman_filter is None or self.mean is None:
+        if self.kalman_filter is None or self.mean is None or self.covariance is None:
             return
         mean_state = self.mean.copy()
         if self.state != TrackState.Tracked:
@@ -128,7 +136,7 @@ class Tracklet:
         self.time_since_update = 0
 
     def re_activate(self, det: Detection, frame_index: int, pts_ns: int) -> None:
-        if self.kalman_filter is None or self.mean is None:
+        if self.kalman_filter is None or self.mean is None or self.covariance is None:
             return
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, tlwh_to_xyah(det.tlwh)
@@ -140,7 +148,7 @@ class Tracklet:
         self.tracklet_len = 0
 
     def update(self, det: Detection, frame_index: int, pts_ns: int) -> None:
-        if self.kalman_filter is None or self.mean is None:
+        if self.kalman_filter is None or self.mean is None or self.covariance is None:
             return
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, tlwh_to_xyah(det.tlwh)
@@ -188,7 +196,12 @@ class Tracklet:
         self._appearance_pts_ns.append(pts_ns)
 
         candidates = sorted(
-            zip(self._appearance_qualities, self._appearance_pts_ns, self._appearance_embs),
+            zip(
+                self._appearance_qualities,
+                self._appearance_pts_ns,
+                self._appearance_embs,
+                strict=False,
+            ),
             key=lambda x: x[0],
             reverse=True,
         )
@@ -273,11 +286,15 @@ class ByteTrackIoUTracker:
         self.frame_index = -1
         self.tracked_tracklets: list[Tracklet] = []
         self.lost_tracklets: list[Tracklet] = []
-        self.removed_tracklets: list[Tracklet] = []
+        self._removed_tracklets: list[Tracklet] = []
         self.kalman_filter = KalmanFilter()
         self._seen_observation_ids: set[str] = set()
         self._seen_frame_indices: set[int] = set()
-        Tracklet.reset_id_counter()
+        self._next_tracklet_id = 0
+
+    def _allocate_tracklet_id(self) -> int:
+        self._next_tracklet_id += 1
+        return self._next_tracklet_id
 
     def _max_lost_frames(self) -> int:
         return int(self.config["max_lost_frames"])
@@ -380,6 +397,7 @@ class ByteTrackIoUTracker:
         for t in r_tracked:
             if t not in {r_tracked[m[0]] for m in second_matches}:
                 t.mark_lost()
+                self.lost_tracklets.append(t)
 
         # ---------- Unconfirmed tracks vs remaining high-score detections ----------
         remaining_high = [dets_high[i] for i in u_det]
@@ -397,20 +415,25 @@ class ByteTrackIoUTracker:
             activated.append(track)
         for i in u_unconfirmed:
             unconfirmed[i].mark_removed()
-            self.removed_tracklets.append(unconfirmed[i])
+            self._removed_tracklets.append(unconfirmed[i])
 
         # ---------- Initialize new tracklets from unmatched high-score detections ----------
         final_unmatched_high = [remaining_high[i] for i in u_det2]
         for det in final_unmatched_high:
             if det.score >= new_thresh:
-                track = Tracklet(strategy=self.strategy)
+                track = Tracklet(
+                    strategy=self.strategy,
+                    _id_allocator=self._allocate_tracklet_id,
+                )
                 track._record(det, frame_index, pts_ns)
                 track.activate(self.kalman_filter, frame_index, pts_ns)
                 self._after_track_update(track, det)
                 activated.append(track)
 
         # ---------- Update track lists ----------
-        self.tracked_tracklets = [t for t in self.tracked_tracklets if t.state == TrackState.Tracked]
+        self.tracked_tracklets = [
+            t for t in self.tracked_tracklets if t.state == TrackState.Tracked
+        ]
         self.tracked_tracklets = self._joint_stracks(self.tracked_tracklets, activated)
         self.tracked_tracklets = self._joint_stracks(self.tracked_tracklets, refind)
 
@@ -421,11 +444,13 @@ class ByteTrackIoUTracker:
         # Mark timed-out lost tracks as removed.
         still_lost: list[Tracklet] = []
         for t in self.lost_tracklets:
-            frame_gap = frame_index - (t.last_frame_index or frame_index)
-            ns_gap = pts_ns - (t.last_pts_ns or pts_ns)
+            last_frame = t.last_frame_index if t.last_frame_index is not None else frame_index
+            last_pts = t.last_pts_ns if t.last_pts_ns is not None else pts_ns
+            frame_gap = frame_index - last_frame
+            ns_gap = pts_ns - last_pts
             if frame_gap > self._max_lost_frames() or ns_gap > self._max_lost_ns():
                 t.mark_removed()
-                self.removed_tracklets.append(t)
+                self._removed_tracklets.append(t)
             else:
                 still_lost.append(t)
         self.lost_tracklets = still_lost
@@ -440,6 +465,8 @@ class ByteTrackIoUTracker:
                     assignments.append(
                         TrackAssignment(
                             observation_id=obs_id,
+                            frame_index=frame_index,
+                            pts_ns=pts_ns,
                             raw_tracklet_id=track.raw_tracklet_id,
                             strategy=self.strategy,
                         )
@@ -510,14 +537,14 @@ class ByteTrackIoUTracker:
     def _reset_all_tracklets(self) -> None:
         for t in self.tracked_tracklets + self.lost_tracklets:
             t.mark_removed()
-            self.removed_tracklets.append(t)
+            self._removed_tracklets.append(t)
         self.tracked_tracklets = []
         self.lost_tracklets = []
 
     def finalize(self) -> None:
         for t in self.tracked_tracklets + self.lost_tracklets:
             t.mark_removed()
-            self.removed_tracklets.append(t)
+            self._removed_tracklets.append(t)
         self.tracked_tracklets = []
         self.lost_tracklets = []
 
@@ -525,4 +552,4 @@ class ByteTrackIoUTracker:
         return [t.raw_tracklet_id for t in self.tracked_tracklets]
 
     def removed_tracklets(self) -> list[Tracklet]:
-        return self.removed_tracklets
+        return self._removed_tracklets

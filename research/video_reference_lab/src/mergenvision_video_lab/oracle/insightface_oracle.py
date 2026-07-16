@@ -1,25 +1,30 @@
-"""ONNX RetinaFace detector + ArcFace recognizer with InsightFace-aligned parity.
+"""Official InsightFace FaceAnalysis oracle for reference extraction.
 
-This oracle loads the local ONNX artifacts directly via ONNX Runtime rather than
-using ``insightface.app.FaceAnalysis``, because the provided models are loose
-ONNX files. Alignment parity against ``insightface.utils.face_align.norm_crop``
-is enforced by unit tests.
+This oracle uses ``insightface.app.FaceAnalysis`` with the official
+``buffalo_l`` pack. It does not perform custom decoding; all preprocess,
+alignment, and embedding logic is delegated to InsightFace so that the
+reference output matches the official implementation.
+
+Normal imports and runs must not download models. Use
+``mv-video-lab models acquire --name buffalo_l --allow-download`` to populate
+the cache first.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Any, Literal
 
-import cv2
 import numpy as np
-import onnxruntime as ort
 
-from mergenvision_video_lab.alignment import align_face
-from mergenvision_video_lab.contracts import BBoxXYXY, Landmarks5
+from mergenvision_video_lab.config import resolve_repo_relative_path
+from mergenvision_video_lab.contracts import Landmarks5, OnnxModelContract
+from mergenvision_video_lab.errors import ModelArtifactError
 from mergenvision_video_lab.geometry import clamp_bbox
-from mergenvision_video_lab.model_inventory import ModelInventory, select_providers
+from mergenvision_video_lab.hashing import sha256_file
+from mergenvision_video_lab.model_inventory import available_providers, select_providers
 from mergenvision_video_lab.quality import compute_quality
 
 
@@ -32,101 +37,11 @@ class OracleDetection:
     landmarks_5: Landmarks5
     aligned_crop: np.ndarray
     embedding: np.ndarray | None
-    quality: dict
+    quality: dict[str, Any]
 
 
-# Standard RetinaFace anchor configuration for 640x640.
-_RETINA_MIN_SIZES = [[16, 32], [64, 128], [256, 512]]
-_RETINA_STEPS = [8, 16, 32]
-_RETINA_VARIANCE = [0.1, 0.2]
-_RETINA_IMAGE_SIZE = 640
-
-
-def _generate_anchors(
-    image_size: int = _RETINA_IMAGE_SIZE,
-    min_sizes: list[list[int]] = _RETINA_MIN_SIZES,
-    steps: list[int] = _RETINA_STEPS,
-) -> np.ndarray:
-    """Generate normalized RetinaFace anchors (cx, cy, w, h)."""
-    anchors = []
-    for step, sizes in zip(steps, min_sizes):
-        feature_size = image_size // step
-        for y in range(feature_size):
-            for x in range(feature_size):
-                for min_size in sizes:
-                    cx = (x + 0.5) * step / image_size
-                    cy = (y + 0.5) * step / image_size
-                    w = min_size / image_size
-                    h = min_size / image_size
-                    anchors.extend([cx, cy, w, h])
-    return np.array(anchors, dtype=np.float32).reshape(-1, 4)
-
-
-def _decode_bboxes(loc: np.ndarray, anchors: np.ndarray) -> np.ndarray:
-    """Decode RetinaFace bbox regressions to XYXY in normalized coords."""
-    anchors_xy = anchors[:, :2]
-    anchors_wh = anchors[:, 2:]
-    boxes_xy = anchors_xy + loc[:, :2] * _RETINA_VARIANCE[0] * anchors_wh
-    boxes_wh = anchors_wh * np.exp(loc[:, 2:] * _RETINA_VARIANCE[1])
-    x1 = boxes_xy[:, 0] - boxes_wh[:, 0] / 2
-    y1 = boxes_xy[:, 1] - boxes_wh[:, 1] / 2
-    x2 = boxes_xy[:, 0] + boxes_wh[:, 0] / 2
-    y2 = boxes_xy[:, 1] + boxes_wh[:, 1] / 2
-    return np.stack([x1, y1, x2, y2], axis=1)
-
-
-def _decode_landmarks(landms: np.ndarray, anchors: np.ndarray) -> np.ndarray:
-    """Decode RetinaFace landmarks to normalized (x,y) x5."""
-    anchors_xy = anchors[:, :2]
-    anchors_wh = anchors[:, 2:]
-    landms = landms.reshape(-1, 5, 2)
-    pts = anchors_xy[:, None, :] + landms * _RETINA_VARIANCE[0] * anchors_wh[:, None, :]
-    return pts.reshape(-1, 5, 2)
-
-
-def _nms(boxes: np.ndarray, scores: np.ndarray, threshold: float) -> list[int]:
-    """Greedy IoU NMS returning surviving indices."""
-    if len(boxes) == 0:
-        return []
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = (x2 - x1) * (y2 - y1)
-    order = scores.argsort()[::-1]
-    keep = []
-    while order.size > 0:
-        i = order[0]
-        keep.append(int(i))
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
-        iou = inter / (areas[i] + areas[order[1:]] - inter)
-        order = order[1:][iou <= threshold]
-    return keep
-
-
-def _detector_preprocessing(image: np.ndarray, det_size: tuple[int, int]) -> np.ndarray:
-    """Resize and normalize image for RetinaFace detector."""
-    resized = cv2.resize(image, det_size)
-    tensor = resized.astype(np.float32)
-    tensor = np.transpose(tensor, (2, 0, 1))
-    tensor = np.expand_dims(tensor, axis=0)
-    return tensor
-
-
-def _recognizer_preprocessing(aligned_crop: np.ndarray) -> np.ndarray:
-    """Normalize aligned 112x112 crop for ArcFace recognizer."""
-    tensor = aligned_crop.astype(np.float32) / 255.0
-    tensor = (tensor - 0.5) / 0.5
-    tensor = np.transpose(tensor, (2, 0, 1))
-    tensor = np.expand_dims(tensor, axis=0)
-    return tensor
-
-
-class InsightFaceOracle:
-    """Offline detector/recognizer oracle backed by local ONNX artifacts."""
+class FaceAnalysisOracle:
+    """Detector/recognizer oracle backed by official InsightFace FaceAnalysis."""
 
     def __init__(
         self,
@@ -136,33 +51,119 @@ class InsightFaceOracle:
         allow_cpu_fallback: bool,
         det_size: Sequence[int] = (640, 640),
     ) -> None:
-        self.det_size = tuple(det_size)
-        self._inventory = ModelInventory(model_root, model_pack)
-        self._available_providers = ort.get_available_providers()
-        self._actual_providers = select_providers(
+        if model_pack is None:
+            raise ModelArtifactError("model_pack must be configured (e.g. buffalo_l)")
+        if model_pack != "buffalo_l":
+            raise ModelArtifactError(
+                f"unsupported model pack: {model_pack}",
+                {"supported": ["buffalo_l"]},
+            )
+
+        self.model_pack = model_pack
+        self.det_size = (int(det_size[0]), int(det_size[1]))
+        self.requested_provider = requested_provider
+        self.allow_cpu_fallback = allow_cpu_fallback
+
+        self._available_providers: list[str] = available_providers()
+        self._actual_providers: list[str] = select_providers(
             requested_provider,
             self._available_providers,
             allow_cpu_fallback,
         )
-        self._det_session = ort.InferenceSession(
-            str(self._inventory.detector_path),
-            providers=self._actual_providers,
-        )
-        self._rec_session = ort.InferenceSession(
-            str(self._inventory.recognizer_path),
-            providers=self._actual_providers,
-        )
-        self._anchors = _generate_anchors(
-            image_size=self.det_size[0],
-        )
 
-    @property
-    def detector_contract(self):
-        return self._inventory.detector_contract
+        # Map provider to InsightFace ctx_id.
+        if "CUDAExecutionProvider" in self._actual_providers:
+            self._ctx_id = 0
+        else:
+            self._ctx_id = -1
 
-    @property
-    def recognizer_contract(self):
-        return self._inventory.recognizer_contract
+        self._root = self._resolve_root(model_root)
+        self._pack_dir = self._root / "models" / model_pack
+        if not self._pack_dir.exists():
+            raise ModelArtifactError(
+                "model pack not found; run 'mv-video-lab models acquire' first",
+                {"pack_dir": str(self._pack_dir)},
+            )
+
+        self._app = self._build_app()
+        self.detector_contract = self._build_contract("det_10g.onnx", "detection")
+        self.recognizer_contract = self._build_contract("w600k_r50.onnx", "recognition")
+
+    def _resolve_root(self, model_root: str | None) -> Path:
+        """Resolve the InsightFace root directory from config."""
+        if model_root is None:
+            return Path.home() / ".insightface"
+        path = resolve_repo_relative_path(model_root)
+        if path.is_absolute():
+            return path
+        return Path.cwd() / path
+
+    def _build_app(self) -> Any:
+        try:
+            from insightface.app import FaceAnalysis
+        except ImportError as exc:
+            raise ModelArtifactError(f"insightface not installed: {exc}") from exc
+
+        app = FaceAnalysis(
+            name=self.model_pack,
+            root=str(self._root),
+            allowed_modules=["detection", "recognition"],
+        )
+        # Use a low detection threshold; the lab applies its own thresholds later.
+        app.prepare(ctx_id=self._ctx_id, det_thresh=0.1, det_size=self.det_size)
+        return app
+
+    def _build_contract(self, basename: str, task: str) -> OnnxModelContract:
+        path = self._pack_dir / basename
+        if not path.exists():
+            raise ModelArtifactError(
+                f"missing {task} model file",
+                {"expected": str(path)},
+            )
+        try:
+            import onnx
+
+            model = onnx.load(str(path))
+        except Exception as exc:
+            raise ModelArtifactError(f"cannot load ONNX {basename}: {exc}") from exc
+
+        inputs = []
+        for inp in model.graph.input:
+            tensor_type = inp.type.tensor_type
+            shape = [
+                dim.dim_value if dim.dim_value > 0 else dim.dim_param or "dynamic"
+                for dim in tensor_type.shape.dim
+            ]
+            inputs.append(
+                {
+                    "name": inp.name,
+                    "shape": shape,
+                    "dtype": onnx.helper.tensor_dtype_to_np_dtype(tensor_type.elem_type).name,
+                }
+            )
+        outputs = []
+        for out in model.graph.output:
+            tensor_type = out.type.tensor_type
+            shape = [
+                dim.dim_value if dim.dim_value > 0 else dim.dim_param or "dynamic"
+                for dim in tensor_type.shape.dim
+            ]
+            outputs.append(
+                {
+                    "name": out.name,
+                    "shape": shape,
+                    "dtype": onnx.helper.tensor_dtype_to_np_dtype(tensor_type.elem_type).name,
+                }
+            )
+        return OnnxModelContract(
+            basename=path.name,
+            sha256=sha256_file(path),
+            size_bytes=path.stat().st_size,
+            inputs=inputs,
+            outputs=outputs,
+            opset=model.opset_import[0].version if model.opset_import else None,
+            producer=model.producer_name or None,
+        )
 
     def detect(
         self,
@@ -170,73 +171,47 @@ class InsightFaceOracle:
         detector_low_threshold: float,
         frame_width: int,
         frame_height: int,
-        quality_config: dict,
+        quality_config: dict[str, Any],
         compute_embeddings: bool = True,
     ) -> list[OracleDetection]:
         """Run detector on a BGR image and return detections."""
-        tensor = _detector_preprocessing(image, self.det_size)
-        loc, conf, landms = self._det_session.run(None, {"input": tensor})
-
-        loc = loc[0]
-        conf = conf[0]
-        landms = landms[0]
-
-        scores = conf[:, 1]
-        valid_mask = scores >= detector_low_threshold
-        if not np.any(valid_mask):
-            return []
-
-        loc = loc[valid_mask]
-        landms = landms[valid_mask]
-        scores = scores[valid_mask]
-        anchors = self._anchors[valid_mask]
-
-        boxes = _decode_bboxes(loc, anchors)
-        pts = _decode_landmarks(landms, anchors)
-
-        # Scale from detector input space to original image space.
-        scale_x = frame_width / self.det_size[0]
-        scale_y = frame_height / self.det_size[1]
-        boxes[:, [0, 2]] *= scale_x
-        boxes[:, [1, 3]] *= scale_y
-        pts[:, :, 0] *= scale_x
-        pts[:, :, 1] *= scale_y
-
-        keep = _nms(boxes, scores, threshold=0.4)
-
+        faces = self._app.get(image, max_num=0)
         results: list[OracleDetection] = []
-        for idx in keep:
-            x1, y1, x2, y2 = boxes[idx]
+        for face in faces:
+            score = float(face.det_score)
+            if score < detector_low_threshold:
+                continue
+
+            bbox = face.bbox.astype(np.float32)
+            x1, y1, x2, y2 = bbox
             x1, y1, x2, y2 = clamp_bbox(x1, y1, x2, y2, frame_width, frame_height)
             if x2 <= x1 or y2 <= y1:
                 continue
 
-            lm = pts[idx]
+            kps = face.kps.astype(np.float32)
             landmarks = Landmarks5(
-                left_eye=tuple(lm[0]),
-                right_eye=tuple(lm[1]),
-                nose=tuple(lm[2]),
-                left_mouth=tuple(lm[3]),
-                right_mouth=tuple(lm[4]),
+                left_eye=tuple(kps[0]),
+                right_eye=tuple(kps[1]),
+                nose=tuple(kps[2]),
+                left_mouth=tuple(kps[3]),
+                right_mouth=tuple(kps[4]),
             )
 
-            try:
-                aligned_crop, matrix, reproj_error = align_face(
-                    image,
-                    landmarks.to_array(),
-                    output_size=112,
-                    color_order="BGR",
-                )
-            except Exception:
-                continue
+            # Use the official upstream alignment for the reference crop.
+            from insightface.utils.face_align import norm_crop
+
+            aligned_crop = norm_crop(image, kps, image_size=112, mode="arcface")
 
             embedding: np.ndarray | None = None
-            if compute_embeddings:
-                rec_input = _recognizer_preprocessing(aligned_crop)
-                embedding = self._rec_session.run(None, {"input.1": rec_input})[0][0]
-                norm = np.linalg.norm(embedding)
-                if norm > 0:
-                    embedding = embedding / norm
+            if compute_embeddings and hasattr(face, "embedding"):
+                emb = face.embedding
+                if emb is not None and emb.size > 0:
+                    embedding = np.asarray(emb, dtype=np.float32).flatten()
+                    norm = float(np.linalg.norm(embedding))
+                    if norm > 0 and np.isfinite(norm):
+                        embedding = (embedding / norm).astype(np.float32)
+                    else:
+                        embedding = None
 
             quality = compute_quality(
                 aligned_crop=aligned_crop,
@@ -244,15 +219,15 @@ class InsightFaceOracle:
                 frame_width=frame_width,
                 frame_height=frame_height,
                 landmarks_5=landmarks.to_array(),
-                detector_score=float(scores[idx]),
-                reprojection_error_px=reproj_error,
+                detector_score=score,
+                reprojection_error_px=0.0,  # upstream alignment residual not exposed
                 config=quality_config,
             )
 
             results.append(
                 OracleDetection(
                     bbox_xyxy=(x1, y1, x2, y2),
-                    detector_score=float(scores[idx]),
+                    detector_score=score,
                     landmarks_5=landmarks,
                     aligned_crop=aligned_crop,
                     embedding=embedding,
@@ -261,5 +236,11 @@ class InsightFaceOracle:
             )
 
         # Deterministic ordering: x1, y1, x2, y2, score descending.
-        results.sort(key=lambda d: (d.bbox_xyxy[0], d.bbox_xyxy[1], d.bbox_xyxy[2], -d.detector_score))
+        results.sort(
+            key=lambda d: (d.bbox_xyxy[0], d.bbox_xyxy[1], d.bbox_xyxy[2], -d.detector_score)
+        )
         return results
+
+
+# Keep the old name for callers that import InsightFaceOracle.
+InsightFaceOracle = FaceAnalysisOracle

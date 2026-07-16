@@ -12,13 +12,12 @@ Local changes:
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from mergenvision_video_lab.geometry import iou_xyxy
-
 
 _GATED_COST = 1e5
 
@@ -43,7 +42,7 @@ def fuse_score(cost_matrix: np.ndarray, scores: np.ndarray) -> np.ndarray:
     det_scores = np.asarray(scores).reshape(1, -1)
     det_scores = np.repeat(det_scores, cost_matrix.shape[0], axis=0)
     fuse_sim = iou_sim * det_scores
-    return 1.0 - fuse_sim
+    return np.asarray(1.0 - fuse_sim, dtype=np.float64)
 
 
 def gated_iou_distance(
@@ -81,7 +80,7 @@ def linear_assignment(
 
     matched_rows = set()
     matched_cols = set()
-    for r, c in zip(rows, cols):
+    for r, c in zip(rows, cols, strict=False):
         if cost_matrix[r, c] <= thresh:
             matches.append((int(r), int(c)))
             matched_rows.add(r)

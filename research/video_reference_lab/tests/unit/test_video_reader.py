@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
-
-from unittest.mock import MagicMock
 
 from mergenvision_video_lab.errors import VideoReadError
 from mergenvision_video_lab.video_reader import (
@@ -15,7 +14,6 @@ from mergenvision_video_lab.video_reader import (
     _read_rotation,
     probe_video,
 )
-
 from tests.fixtures.video_fixtures import _make_video
 
 

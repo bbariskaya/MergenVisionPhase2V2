@@ -15,7 +15,6 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg
 
-
 # 0.95 quantile of the chi-square distribution with 1..9 degrees of freedom.
 chi2inv95 = {
     1: 3.8415,
@@ -80,9 +79,7 @@ class KalmanFilter:
         innovation_cov = np.diag(np.square(std))
 
         projected_mean = np.dot(self._update_mat, mean)
-        projected_cov = np.linalg.multi_dot(
-            (self._update_mat, covariance, self._update_mat.T)
-        )
+        projected_cov = np.linalg.multi_dot((self._update_mat, covariance, self._update_mat.T))
         return projected_mean, projected_cov + innovation_cov
 
     def update(
@@ -94,9 +91,7 @@ class KalmanFilter:
         """Run one correction step with an xyah measurement."""
         projected_mean, projected_cov = self.project(mean, covariance)
 
-        chol_factor, lower = scipy.linalg.cho_factor(
-            projected_cov, lower=True, check_finite=False
-        )
+        chol_factor, lower = scipy.linalg.cho_factor(projected_cov, lower=True, check_finite=False)
         kalman_gain = scipy.linalg.cho_solve(
             (chol_factor, lower),
             np.dot(covariance, self._update_mat.T).T,

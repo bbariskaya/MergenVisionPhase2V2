@@ -9,8 +9,7 @@ import cv2
 import numpy as np
 
 from mergenvision_video_lab.oracle.insightface_oracle import InsightFaceOracle
-from mergenvision_video_lab.quality import compute_quality
-from mergenvision_video_lab.tracklet_templates import TrackletTemplate, build_tracklet_template
+from mergenvision_video_lab.tracklet_templates import build_tracklet_template
 
 
 def _robust_centroid(
@@ -225,13 +224,18 @@ def match_cluster_to_gallery(
     if not identities:
         return None
 
-    # Strict mode requires at least N identities and min samples each.
-    strict_identities = [
-        label
-        for label, info in identities.items()
+    # Strict mode is active when the gallery is too small to trust a top1/top2
+    # margin decision: either too few identities or any identity lacks enough
+    # high-quality samples. In strict mode a track can never be marked known.
+    valid_identity_count = sum(
+        1
+        for info in identities.values()
         if info.get("valid_sample_count", 0) >= min_samples_per_identity
-    ]
-    strict = len(strict_identities) >= min_identity_count_for_strict and min_identity_count_for_strict > 0
+    )
+    any_identity_under_sampled = any(
+        info.get("valid_sample_count", 0) < min_samples_per_identity for info in identities.values()
+    )
+    strict = valid_identity_count < min_identity_count_for_strict or any_identity_under_sampled
 
     scores: list[tuple[str, float]] = []
     for label, info in identities.items():
@@ -247,11 +251,7 @@ def match_cluster_to_gallery(
     top2_label, top2_cosine = scores[1] if len(scores) > 1 else (None, 0.0)
     margin = top1_cosine - top2_cosine
 
-    known = (
-        top1_cosine >= match_threshold
-        and margin >= margin_threshold
-        and (not strict or (top2_label is not None and top1_label in strict_identities))
-    )
+    known = top1_cosine >= match_threshold and margin >= margin_threshold and not strict
 
     return {
         "known": known,

@@ -7,8 +7,6 @@ from typing import Any
 
 import numpy as np
 
-from mergenvision_video_lab.contracts import FaceObservation
-
 
 @dataclass
 class TrackletRecord:
@@ -24,18 +22,18 @@ class TrackletRecord:
     template_quality: dict[str, Any] | None = None
 
 
-def _overlap(
-    a_start: int, a_end: int, b_start: int, b_end: int, tolerance_ns: int
-) -> bool:
-    """Return True if two closed intervals overlap beyond tolerance."""
-    return not (a_end + tolerance_ns < b_start or b_end + tolerance_ns < a_start)
-
-
 def build_cannot_link_pairs(
     tracklets: list[TrackletRecord],
-    overlap_tolerance_ns: int,
+    human_cannot_links: set[tuple[str, str]] | None = None,
 ) -> set[tuple[str, str]]:
-    """Build absolute cannot-link pairs from temporal overlap or co-occurrence."""
+    """Build absolute cannot-link pairs.
+
+    Two tracklets cannot be the same person if:
+    - they contain observations from the same frame (actual co-occurrence);
+    - a human label or external source explicitly declares them distinct.
+
+    Mere interval overlap without same-frame evidence is NOT a cannot-link.
+    """
     pairs: set[tuple[str, str]] = set()
     n = len(tracklets)
     for i in range(n):
@@ -43,18 +41,13 @@ def build_cannot_link_pairs(
         a_frames = set(a.frame_indices)
         for j in range(i + 1, n):
             b = tracklets[j]
-            # Same-frame co-occurrence is an absolute cannot-link.
             if a_frames & set(b.frame_indices):
                 pairs.add(_ordered_pair(a.raw_tracklet_id, b.raw_tracklet_id))
-                continue
-            if _overlap(
-                a.first_pts_ns,
-                a.last_pts_ns,
-                b.first_pts_ns,
-                b.last_pts_ns,
-                overlap_tolerance_ns,
-            ):
-                pairs.add(_ordered_pair(a.raw_tracklet_id, b.raw_tracklet_id))
+
+    if human_cannot_links:
+        for x, y in human_cannot_links:
+            pairs.add(_ordered_pair(x, y))
+
     return pairs
 
 
@@ -91,33 +84,22 @@ def _cluster_centroid(tracklet_ids: list[str], templates: dict[str, np.ndarray])
     return (centroid / norm).astype(np.float32)
 
 
-def _internal_margin(
-    tracklet_id: str,
-    cluster_ids: list[str],
-    templates: dict[str, np.ndarray],
-) -> float:
-    """Return top1 - top2 cosine margin of ``tracklet_id`` within ``cluster_ids``."""
-    if len(cluster_ids) <= 2:
-        return 1.0
-    others = [tid for tid in cluster_ids if tid != tracklet_id]
-    sims = sorted(
-        [float(np.dot(templates[tracklet_id], templates[oid])) for oid in others],
-        reverse=True,
-    )
-    return sims[0] - sims[1]
-
-
 def reconcile_tracklets(
     tracklets: list[TrackletRecord],
     config: dict[str, Any],
+    human_cannot_links: set[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Reconcile raw tracklets into canonical clusters."""
+    """Reconcile raw tracklets into canonical clusters.
+
+    Uses complete-link clustering: a merge is allowed only when every cross-pair
+    between two components passes ``min_tracklet_cosine`` and the merged centroid
+    remains within ``min_member_cosine`` of every member. Cannot-links are
+    absolute and override high cosine.
+    """
     min_tracklet_cosine = float(config["min_tracklet_cosine"])
     min_member_cosine = float(config["min_cluster_member_cosine"])
-    min_margin = float(config["min_top1_top2_margin"])
-    overlap_tolerance_ns = int(config["overlap_tolerance_ns"])
 
-    cannot_link = build_cannot_link_pairs(tracklets, overlap_tolerance_ns)
+    cannot_link = build_cannot_link_pairs(tracklets, human_cannot_links)
     pair_cosines = _pairwise_template_cosine(tracklets)
 
     # Candidate edges: valid pairs, not cannot-link, above threshold.
@@ -138,7 +120,7 @@ def reconcile_tracklets(
     merge_count = 0
     transitive_rejection_count = 0
 
-    for (id_a, id_b), cosine in candidate_edges:
+    for (id_a, id_b), _cosine in candidate_edges:
         ca = cluster_map[id_a]
         cb = cluster_map[id_b]
         if ca == cb:
@@ -187,14 +169,6 @@ def reconcile_tracklets(
             transitive_rejection_count += 1
             continue
 
-        # 4. Top1/top2 margin evidence for every member.
-        margin_ok = all(
-            _internal_margin(tid, merged_ids, templates) >= min_margin for tid in merged_ids
-        )
-        if not margin_ok:
-            transitive_rejection_count += 1
-            continue
-
         # Merge component B into A.
         cluster_a.extend(cluster_b)
         for tid in cluster_b:
@@ -204,14 +178,24 @@ def reconcile_tracklets(
 
     # Remove empty clusters and assign deterministic canonical IDs.
     nonempty = [c for c in clusters if c]
-    # Sort clusters by earliest tracklet first_pts_ns then lexicographic first ID.
-    nonempty.sort(key=lambda c: (min(templates.get(tid, np.zeros(512)).sum() for tid in c), c[0]))
-    # Better sort by min first_pts_ns of tracklets; but TrackletRecord not available here.
-    # We'll sort by sorted member IDs for determinism; aggregation will compute times.
-    nonempty.sort(key=lambda c: (len(c), sorted(c)))
+    # Sort clusters by earliest first_pts_ns of any member, then lexicographic.
+    nonempty.sort(
+        key=lambda c: (
+            min(t.first_pts_ns for t in tracklets if t.raw_tracklet_id in c),
+            sorted(c),
+        )
+    )
+
+    canonical_track_ids = [f"CT{idx:06d}" for idx in range(1, len(nonempty) + 1)]
+    canonical_map: dict[str, str] = {}
+    for canonical_id, cluster_ids in zip(canonical_track_ids, nonempty, strict=True):
+        for tid in cluster_ids:
+            canonical_map[tid] = canonical_id
 
     return {
         "clusters": nonempty,
+        "canonical_track_ids": canonical_track_ids,
+        "canonical_map": canonical_map,
         "cannot_link_pairs": sorted(cannot_link),
         "candidate_edges": [
             {"tracklet_a": a, "tracklet_b": b, "cosine": float(c)} for (a, b), c in candidate_edges
@@ -228,7 +212,6 @@ def build_review_queue_records(
 ) -> list[dict[str, Any]]:
     """Build review-queue records for uncertain reconciliation decisions."""
     min_tracklet_cosine = float(config["min_tracklet_cosine"])
-    margin = float(config["min_top1_top2_margin"])
     near_window = 0.05
 
     records: list[dict[str, Any]] = []

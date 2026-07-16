@@ -75,9 +75,7 @@ def test_rgb_input_matches_bgr_after_color_conversion() -> None:
     rgb_crop, _, _ = align_face(rgb_img, landmarks, color_order="RGB")
     # Same scene, different documented input order -> RGB output equals
     # BGR output converted to RGB.
-    np.testing.assert_allclose(
-        cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2RGB), rgb_crop, atol=1
-    )
+    np.testing.assert_allclose(cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2RGB), rgb_crop, atol=1)
 
 
 def test_degenerate_landmarks_rejected() -> None:

@@ -16,7 +16,7 @@ def load_ground_truth(path: Path | str) -> GroundTruth:
     path = Path(path)
     if not path.exists():
         raise ConfigError(f"ground truth file not found: {path}")
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     if not isinstance(raw, dict):
         raise ConfigError("ground truth file must contain a YAML mapping")

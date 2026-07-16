@@ -26,7 +26,9 @@ class ErrorCode(StrEnum):
 class LabError(Exception):
     """Base class for lab errors with a structured code."""
 
-    def __init__(self, code: ErrorCode, message: str, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self, code: ErrorCode, message: str, details: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message

@@ -6,7 +6,6 @@ import hashlib
 from pathlib import Path
 from typing import BinaryIO
 
-
 DEFAULT_CHUNK_SIZE = 65536
 
 

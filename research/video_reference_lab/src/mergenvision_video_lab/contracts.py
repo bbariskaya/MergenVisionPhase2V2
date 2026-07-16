@@ -7,15 +7,17 @@ from typing import Any, Literal
 import numpy as np
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
 # ------------------------------------------------------------------------------
 # Shared constants
 # ------------------------------------------------------------------------------
 
-MANIFEST_SCHEMA_VERSION = "mv-video-reference-manifest/v1"
-OBSERVATION_SCHEMA_VERSION = "mv-face-observation/v1"
-GROUND_TRUTH_SCHEMA_VERSION = "mv-video-ground-truth/v1"
-CONFIG_SCHEMA_VERSION = "mv-video-reference-config/v1"
+MANIFEST_SCHEMA_VERSION: Literal["mv-video-reference-manifest/v1"] = (
+    "mv-video-reference-manifest/v1"
+)
+OBSERVATION_SCHEMA_VERSION: Literal["mv-face-observation/v1"] = "mv-face-observation/v1"
+FRAME_SCHEMA_VERSION: Literal["mv-video-frame/v1"] = "mv-video-frame/v1"
+GROUND_TRUTH_SCHEMA_VERSION: Literal["mv-video-ground-truth/v1"] = "mv-video-ground-truth/v1"
+CONFIG_SCHEMA_VERSION: Literal["mv-video-reference-config/v1"] = "mv-video-reference-config/v1"
 
 LANDMARK_ORDER = ["left_eye", "right_eye", "nose", "left_mouth", "right_mouth"]
 
@@ -23,6 +25,7 @@ LANDMARK_ORDER = ["left_eye", "right_eye", "nose", "left_mouth", "right_mouth"]
 # ------------------------------------------------------------------------------
 # Value-object helpers
 # ------------------------------------------------------------------------------
+
 
 class BBoxXYXY(BaseModel):
     """Original display-space bounding box, half-open [x1,y1,x2,y2)."""
@@ -40,7 +43,7 @@ class BBoxXYXY(BaseModel):
         return float(v)
 
     @model_validator(mode="after")
-    def _ordered(self) -> "BBoxXYXY":
+    def _ordered(self) -> BBoxXYXY:
         if self.x2 <= self.x1 or self.y2 <= self.y1:
             raise ValueError("bbox must have positive width and height")
         return self
@@ -110,8 +113,35 @@ class QualityMetrics(BaseModel):
 
 
 # ------------------------------------------------------------------------------
+# Frame ledger
+# ------------------------------------------------------------------------------
+
+
+class FrameRecord(BaseModel):
+    """One decoded/processed video frame, including zero-face frames."""
+
+    schema_version: Literal["mv-video-frame/v1"] = FRAME_SCHEMA_VERSION
+    source_id: str
+    frame_index: int = Field(..., ge=0)
+    pts: int
+    time_base_num: int
+    time_base_den: int = Field(..., gt=0)
+    pts_ns: int
+    coded_width: int = Field(..., gt=0)
+    coded_height: int = Field(..., gt=0)
+    display_width: int = Field(..., gt=0)
+    display_height: int = Field(..., gt=0)
+    rotation_applied: float = 0.0
+    sampled: bool = True
+    processed: bool = True
+    scene_change_score: float = 0.0
+    scene_cut_before: bool = False
+
+
+# ------------------------------------------------------------------------------
 # Observations
 # ------------------------------------------------------------------------------
+
 
 class FaceObservation(BaseModel):
     """One detected face in one processed video frame."""
@@ -159,6 +189,7 @@ class FaceObservation(BaseModel):
 # Model / alignment contracts stored in manifest
 # ------------------------------------------------------------------------------
 
+
 class OnnxModelContract(BaseModel):
     """ONNX graph contract for a detector or recognizer artifact."""
 
@@ -195,6 +226,7 @@ class SamplingContract(BaseModel):
 # Run manifest
 # ------------------------------------------------------------------------------
 
+
 class ExtractionTiming(BaseModel):
     """Per-stage wall-clock timing for extraction."""
 
@@ -224,6 +256,7 @@ class RunManifest(BaseModel):
     time_base_den: int
     duration_ns: int
     decoded_frame_count: int
+    sampled_frame_count: int
     processed_frame_count: int
     sampling_contract: SamplingContract
     detector_contract: OnnxModelContract
@@ -247,10 +280,13 @@ class RunManifest(BaseModel):
 # Tracker outputs
 # ------------------------------------------------------------------------------
 
+
 class TrackAssignment(BaseModel):
     """One observation-to-track assignment emitted by a tracker update."""
 
     observation_id: str
+    frame_index: int
+    pts_ns: int
     raw_tracklet_id: str
     strategy: str
     cost: float | None = None
@@ -273,6 +309,7 @@ class RawTrackletSummary(BaseModel):
 # ------------------------------------------------------------------------------
 # Reconciliation outputs
 # ------------------------------------------------------------------------------
+
 
 class CanonicalTrack(BaseModel):
     """Offline reconciliation group of raw tracklets."""
@@ -299,6 +336,7 @@ class CanonicalTrack(BaseModel):
 # ------------------------------------------------------------------------------
 # Ground truth
 # ------------------------------------------------------------------------------
+
 
 class GroundTruthAnchor(BaseModel):
     """Human-labeled anchor tied to an observation or frame."""

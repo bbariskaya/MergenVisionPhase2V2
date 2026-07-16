@@ -375,3 +375,123 @@
 | Failing test/reproducer | `make phase1-sprint-01-acceptance` (smoke test for compose env loading) |
 | Parity/runtime acceptance command | `make phase1-sprint-01-acceptance` |
 | Known limitation | `backend/.env` contains local-dev-only values and must not be committed. |
+
+---
+
+## DEC-018 — Public Media/Biometric Exposure Remediation
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-018 |
+| Local feature/symbol | `research/friends_characters/`, `prompt2.txt`, `.gitignore`, `tests/unit/test_gitignore.py` |
+| Reference URL | `AGENTS.md` §30 (Security and privacy baseline) |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | N/A |
+| Behavior adopted | Removed `research/friends_characters/**` and `prompt2.txt` from the current worktree; expanded `.gitignore` to block models, videos, galleries, crops, embeddings, reports, and debug media; added a fail-closed test that fails if forbidden patterns become tracked again. |
+| Behavior explicitly rejected | Rewriting Git history to erase the committed cast images and biometric-derived `gallery_centroids.json`; deleting `test_videos/Friends.mp4` or user-provided gallery images. |
+| Local modifications | Worktree deletion only; history retained for senior review. |
+| Failing test/reproducer | `tests/unit/test_gitignore.py::test_friends_characters_directory_removed_from_worktree` |
+| Parity/runtime acceptance command | `make video-reference-unit` |
+| Known limitation | Old commit history still contains the removed files; a separate history-cleanup operation is required before the repository can be made public. |
+
+---
+
+## DEC-019 — Isolated Video Reference Lab Exception
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-019 |
+| Local feature/symbol | `docs/implementation/CURRENT_SPRINT.md` |
+| Reference URL | `AGENTS.md` §4 (Mandatory implementation order) |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | N/A |
+| Behavior adopted | Documented an explicit user-approved isolated video-reference correctness spike that does not begin product Sprint 02, does not alter the mandatory implementation order, and cannot claim production video/GPU completion. |
+| Behavior explicitly rejected | Treating this correction as authorization to start product Sprint 02 or to declare production video recognition complete. |
+| Local modifications | Added isolated-research-exception paragraph to `CURRENT_SPRINT.md` without changing Sprint 01 status. |
+| Failing test/reproducer | Manual review of `CURRENT_SPRINT.md` |
+| Parity/runtime acceptance command | `git diff docs/implementation/CURRENT_SPRINT.md` |
+| Known limitation | The exception is valid only for this isolated laboratory correction task. |
+
+---
+
+## DEC-020 — Evaluation Compares Observations Through Tracklet → Canonical Mapping
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-020 |
+| Local feature/symbol | `research/video_reference_lab/src/mergenvision_video_lab/evaluation.py::evaluate_identity` |
+| Reference URL | Sprint 002 spec (observation / raw tracklet / canonical track separation) |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `_build_observation_to_canonical_map` helper |
+| Behavior adopted | Ground-truth anchors label `observation_id`s; clusters contain `raw_tracklet_id`s; evaluate by mapping each observation to its tracklet and then to its canonical cluster. |
+| Behavior explicitly rejected | Treating observation IDs as cluster members. |
+| Local modifications | New `_build_observation_to_canonical_map`; `evaluate_identity` accepts `assignments` and `canonical_map`. |
+| Failing test/reproducer | Old `tests/unit/test_evaluation.py::test_evaluate_identity_pairwise` (validated broken semantics). |
+| Parity/runtime acceptance command | `make video-reference-unit` |
+| Known limitation | Pairwise metrics require ground truth; `Friends.mp4` has none. |
+
+---
+
+## DEC-021 — Gallery `known` Requires `decision_reason == "gallery_match"`
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-021 |
+| Local feature/symbol | `research/video_reference_lab/src/mergenvision_video_lab/evaluation.py::evaluate_gallery` |
+| Reference URL | Sprint 002 spec (display_label safety rule) |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `CanonicalTrack.decision_reason`, `CanonicalTrack.display_label` |
+| Behavior adopted | A track is counted as `known` only when `decision_reason == "gallery_match"` and `display_label is not None`. |
+| Behavior explicitly rejected | Counting a track as known just because `gallery_top1_label` exists. |
+| Local modifications | `if track.decision_reason == "gallery_match" and track.display_label is not None`. |
+| Failing test/reproducer | Old `tests/unit/test_evaluation.py::test_evaluate_gallery_known_unknown`. |
+| Parity/runtime acceptance command | `make video-reference-unit` |
+| Known limitation | Does not change the underlying gallery thresholds. |
+
+---
+
+## DEC-022 — Per-Tracker Raw Tracklet ID Allocation
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-022 |
+| Local feature/symbol | `research/video_reference_lab/src/mergenvision_video_lab/tracking/byte_tracker.py::ByteTrackIoUTracker` |
+| Reference URL | FoundationVision ByteTrack tracklet ID lifecycle |
+| Repository commit/tag | Local adaptation |
+| Access date | 2026-07-16 |
+| Repository license | MIT (ByteTrack upstream) |
+| Inspected upstream files/symbols | `Tracklet.__init__`, `ByteTrackIoUTracker.__init__` |
+| Behavior adopted | Each tracker instance owns its own `_next_tracklet_id` counter; new tracklets receive IDs via `_allocate_tracklet_id`. |
+| Behavior explicitly rejected | Global class-level `_id_counter` reset in every tracker constructor, which made multi-instance behavior non-deterministic. |
+| Local modifications | `Tracklet.__init__` accepts optional `_id_allocator`; tracker passes its allocator. |
+| Failing test/reproducer | `tests/unit/test_chunk_invariance.py::test_chunk_invariance_assignments_and_tracklets` after removing manual counter reset. |
+| Parity/runtime acceptance command | `make video-reference-unit` |
+| Known limitation | Class-level fallback counter is kept for direct `Tracklet()` construction in tests. |
+
+---
+
+## DEC-023 — Benchmark Reports Real `max_active_tracks_estimate`
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-023 |
+| Local feature/symbol | `research/video_reference_lab/src/mergenvision_video_lab/benchmark.py::benchmark_replay` |
+| Reference URL | N/A |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-16 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `ByteTrackIoUTracker.active_tracklet_ids` |
+| Behavior adopted | `benchmark_replay` queries `tracker.active_tracklet_ids()` each frame and records the maximum. |
+| Behavior explicitly rejected | Returning `0` for `max_active_tracks_estimate`. |
+| Local modifications | `one_run` returns `max_active`; measured runs keep the maximum across runs. |
+| Failing test/reproducer | Friends benchmark JSON previously showed `max_active_tracks_estimate: 0`. |
+| Parity/runtime acceptance command | Full `run-friends --max-frames 300`. |
+| Known limitation | Counts tracked tracklets only; lost tracklets are not included in the active estimate. |

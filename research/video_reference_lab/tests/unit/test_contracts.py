@@ -7,11 +7,11 @@ import pytest
 from pydantic import ValidationError
 
 from mergenvision_video_lab.contracts import (
+    LANDMARK_ORDER,
     BBoxXYXY,
     FaceObservation,
     GroundTruth,
     Landmarks5,
-    LANDMARK_ORDER,
     QualityMetrics,
 )
 

@@ -34,9 +34,7 @@ class TrackletTemplate:
         return {
             "raw_tracklet_id": self.raw_tracklet_id,
             "template": (
-                self.template.astype(np.float32).tolist()
-                if self.template is not None
-                else None
+                self.template.astype(np.float32).tolist() if self.template is not None else None
             ),
             "candidate_count": self.candidate_count,
             "selected_observation_ids": self.selected_observation_ids,
@@ -56,7 +54,7 @@ class TrackletTemplate:
 
 def _pairwise_cosine(embs: np.ndarray) -> np.ndarray:
     """Return NxN cosine similarity matrix for unit-normalized embeddings."""
-    return embs @ embs.T
+    return np.asarray(embs @ embs.T, dtype=np.float32)
 
 
 def build_tracklet_template(
@@ -71,18 +69,27 @@ def build_tracklet_template(
     min_separation_ns = int(config["min_temporal_separation_ns"])
     outlier_mad_scale = float(config["outlier_mad_scale"])
     outlier_floor = float(config["outlier_absolute_cosine_floor"])
+    min_quality_score = float(config.get("min_quality_score", 0.0))
 
+    rejected_ids: list[str] = []
     candidates: list[FaceObservation] = []
     for obs in observations:
         if not obs.recognition_eligible or obs.embedding_index is None:
+            rejected_ids.append(obs.observation_id)
             continue
         if obs.embedding_index < 0 or obs.embedding_index >= embeddings.shape[0]:
+            rejected_ids.append(obs.observation_id)
             continue
         emb = embeddings[obs.embedding_index]
         if not np.all(np.isfinite(emb)):
+            rejected_ids.append(obs.observation_id)
             continue
         norm = float(np.linalg.norm(emb))
         if not np.isclose(norm, 1.0, atol=1e-4):
+            rejected_ids.append(obs.observation_id)
+            continue
+        if obs.quality.composite_quality_score < min_quality_score:
+            rejected_ids.append(obs.observation_id)
             continue
         candidates.append(obs)
 
@@ -90,6 +97,8 @@ def build_tracklet_template(
         return TrackletTemplate(
             raw_tracklet_id=raw_tracklet_id,
             candidate_count=len(candidates),
+            rejected_observation_ids=rejected_ids,
+            rejected_count=len(rejected_ids),
             failure_reason="insufficient_recognition_eligible_observations",
         )
 
@@ -108,7 +117,8 @@ def build_tracklet_template(
         in_bin = [
             obs
             for obs in candidates
-            if bin_start <= obs.pts_ns < bin_end or (bin_idx == bin_count - 1 and obs.pts_ns == bin_end)
+            if bin_start <= obs.pts_ns < bin_end
+            or (bin_idx == bin_count - 1 and obs.pts_ns == bin_end)
         ]
         if not in_bin:
             continue
@@ -130,9 +140,17 @@ def build_tracklet_template(
             selected.append(obs)
 
     if len(selected) < min_selected:
+        rejected_observation_ids = list(
+            dict.fromkeys(
+                rejected_ids
+                + [obs.observation_id for obs in candidates if obs.observation_id not in used_ids]
+            )
+        )
         return TrackletTemplate(
             raw_tracklet_id=raw_tracklet_id,
             candidate_count=len(candidates),
+            rejected_observation_ids=rejected_observation_ids,
+            rejected_count=len(rejected_observation_ids),
             failure_reason="not_enough_temporally_separated_candidates",
         )
 
@@ -140,7 +158,9 @@ def build_tracklet_template(
         [embeddings[obs.embedding_index] for obs in selected], dtype=np.float32
     )
     selected_ids = [obs.observation_id for obs in selected]
-    qualities = np.asarray([obs.quality.composite_quality_score for obs in selected], dtype=np.float64)
+    qualities = np.asarray(
+        [obs.quality.composite_quality_score for obs in selected], dtype=np.float64
+    )
 
     # Medoid selection using median pairwise cosine.
     sim_matrix = _pairwise_cosine(selected_embs)
@@ -156,16 +176,23 @@ def build_tracklet_template(
 
     kept_mask = cosine_to_medoid >= keep_threshold
     kept_indices = np.where(kept_mask)[0].tolist()
-    rejected_indices = np.where(~kept_mask)[0].tolist()
+
+    kept_ids = {selected_ids[i] for i in kept_indices}
+    rejected_observation_ids = list(
+        dict.fromkeys(
+            rejected_ids
+            + [obs.observation_id for obs in candidates if obs.observation_id not in kept_ids]
+        )
+    )
 
     if len(kept_indices) < min_selected:
         return TrackletTemplate(
             raw_tracklet_id=raw_tracklet_id,
             candidate_count=len(candidates),
-            selected_observation_ids=selected_ids,
-            rejected_observation_ids=[selected_ids[i] for i in rejected_indices],
-            selected_count=len(selected),
-            rejected_count=len(rejected_indices),
+            selected_observation_ids=[obs_id for obs_id in selected_ids if obs_id in kept_ids],
+            rejected_observation_ids=rejected_observation_ids,
+            selected_count=len(kept_indices),
+            rejected_count=len(rejected_observation_ids),
             failure_reason="too_many_outliers_after_mad_rejection",
         )
 
@@ -178,6 +205,8 @@ def build_tracklet_template(
         return TrackletTemplate(
             raw_tracklet_id=raw_tracklet_id,
             candidate_count=len(candidates),
+            rejected_observation_ids=rejected_observation_ids,
+            rejected_count=len(rejected_observation_ids),
             failure_reason="centroid_normalization_failed",
         )
     template = (centroid / norm).astype(np.float32)
@@ -191,9 +220,9 @@ def build_tracklet_template(
         template=template,
         candidate_count=len(candidates),
         selected_observation_ids=[selected_ids[i] for i in kept_indices],
-        rejected_observation_ids=[selected_ids[i] for i in rejected_indices],
+        rejected_observation_ids=rejected_observation_ids,
         selected_count=len(kept_indices),
-        rejected_count=len(rejected_indices),
+        rejected_count=len(rejected_observation_ids),
         min_quality=float(np.min(qualities)),
         median_quality=float(np.median(qualities)),
         max_quality=float(np.max(qualities)),

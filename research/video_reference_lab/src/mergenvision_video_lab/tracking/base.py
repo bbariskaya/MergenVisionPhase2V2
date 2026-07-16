@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import IntEnum
-from typing import Protocol, Sequence
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
 from mergenvision_video_lab.contracts import FaceObservation, TrackAssignment
+
+if TYPE_CHECKING:
+    from mergenvision_video_lab.tracking.byte_tracker import Tracklet
 
 
 class TrackState(IntEnum):
@@ -23,8 +27,7 @@ class MetadataTracker(Protocol):
     """Protocol for a deterministic sequential face metadata tracker."""
 
     @property
-    def strategy(self) -> str:
-        ...
+    def strategy(self) -> str: ...
 
     def update(
         self,
@@ -41,8 +44,6 @@ class MetadataTracker(Protocol):
         """Mark all active/lost tracks as removed."""
         ...
 
-    def active_tracklet_ids(self) -> list[str]:
-        ...
+    def active_tracklet_ids(self) -> list[str]: ...
 
-    def removed_tracklets(self) -> list["Tracklet"]:
-        ...
+    def removed_tracklets(self) -> list[Tracklet]: ...
