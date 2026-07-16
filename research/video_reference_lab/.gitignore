@@ -1,0 +1,6 @@
+.model_cache/
+.models/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.venv-cpu/
