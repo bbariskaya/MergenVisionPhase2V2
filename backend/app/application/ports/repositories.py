@@ -67,3 +67,10 @@ class RecognitionResultRepository(ABC):
 
     @abstractmethod
     async def list_by_process_id(self, process_id: ProcessId) -> Sequence[RecognitionResult]: ...
+
+    @abstractmethod
+    async def list_by_face_id(
+        self,
+        face_id: FaceId,
+        limit: int | None = None,
+    ) -> Sequence[RecognitionResult]: ...

@@ -32,7 +32,12 @@ pycryptodome==3.23.0
 pydantic==2.7.4
 pydantic_core==2.18.4
 pydantic-settings==2.3.4
+pydantic_core==2.18.4
+python-dotenv==1.2.2
+python-multipart==0.0.9
 pytest==8.2.2
+fastapi==0.111.1
+starlette==0.37.2
 pytest-asyncio==0.23.8
 python-dotenv==1.2.2
 qdrant-client==1.18.0
@@ -42,3 +47,4 @@ SQLAlchemy==2.0.51
 typing_extensions==4.16.0
 urllib3==2.7.0
 uuid7==0.1.0
+uvicorn==0.30.5

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["scikit-build-core>=0.9", "pybind11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "image_runtime"
+version = "0.1.0"
+description = "MergenVision native GPU image inference runtime"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+
+[tool.scikit-build]
+minimum-version = "0.9"
+build-dir = "build/{wheel_tag}"
+cmake.verbose = true
+
+[tool.scikit-build.cmake.define]
+CMAKE_CUDA_ARCHITECTURES = "75"

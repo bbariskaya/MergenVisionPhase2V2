@@ -31,6 +31,15 @@ class Settings(BaseSettings):
 
     model_version: str
 
+    # Native GPU inference configuration
+    model_profile_path: str
+    detector_engine_path: str
+    recognizer_engine_path: str
+    gpu_device_id: int = 0
+    inference_slot_count: int = 1
+    match_threshold: float = 0.55
+    max_image_bytes: int = 25 * 1024 * 1024
+
     log_level: str = "INFO"
 
 

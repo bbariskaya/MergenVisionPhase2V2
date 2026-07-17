@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RetinaFace R50 + GlintR100 Image Model Profile v1",
+  "type": "object",
+  "required": ["schema_version", "model_version", "detector", "recognizer"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "model_version": { "type": "string", "const": "retinaface_r50_glintr100_v1" },
+    "detector": {
+      "type": "object",
+      "required": ["name", "onnx_sha256", "engine_path", "input", "outputs", "engine_profile", "preprocess", "postprocess"],
+      "properties": {
+        "name": { "type": "string" },
+        "onnx_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "engine_path": { "type": "string" },
+        "input": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "shape": { "type": "array", "items": { "type": ["integer", "string"] }, "minItems": 4, "maxItems": 4 },
+            "dtype": { "type": "string", "enum": ["float32", "float16"] }
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "properties": {
+            "loc": { "type": "object", "properties": { "name": { "type": "string" }, "shape": { "type": "array" }, "dtype": { "type": "string" } } },
+            "conf": { "type": "object", "properties": { "name": { "type": "string" }, "shape": { "type": "array" }, "dtype": { "type": "string" } } },
+            "landms": { "type": "object", "properties": { "name": { "type": "string" }, "shape": { "type": "array" }, "dtype": { "type": "string" } } }
+          }
+        },
+        "engine_profile": {
+          "type": "object",
+          "properties": {
+            "min_batch": { "type": "integer" },
+            "opt_batch": { "type": "integer" },
+            "max_batch": { "type": "integer" }
+          }
+        },
+        "preprocess": {
+          "type": "object",
+          "properties": {
+            "resize": { "type": "array", "items": { "type": "integer" } },
+            "color_format": { "type": "string", "enum": ["RGB", "BGR"] },
+            "mean": { "type": "array", "items": { "type": "number" } },
+            "scale": { "type": "number" },
+            "layout": { "type": "string", "enum": ["NCHW", "NHWC"] }
+          }
+        },
+        "postprocess": {
+          "type": "object",
+          "properties": {
+            "confidence_class_index": { "type": "integer" },
+            "confidence_threshold": { "type": "number" },
+            "nms_threshold": { "type": "number" },
+            "priors": { "type": "object" },
+            "variance": { "type": "array", "items": { "type": "number" } }
+          }
+        }
+      }
+    },
+    "recognizer": {
+      "type": "object",
+      "required": ["name", "onnx_sha256", "engine_path", "input", "output", "engine_profile", "preprocess"],
+      "properties": {
+        "name": { "type": "string" },
+        "onnx_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "engine_path": { "type": "string" },
+        "input": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "shape": { "type": "array" },
+            "dtype": { "type": "string" }
+          }
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "shape": { "type": "array" },
+            "dtype": { "type": "string" }
+          }
+        },
+        "engine_profile": {
+          "type": "object",
+          "properties": {
+            "min_batch": { "type": "integer" },
+            "opt_batch": { "type": "integer" },
+            "max_batch": { "type": "integer" }
+          }
+        },
+        "preprocess": {
+          "type": "object",
+          "properties": {
+            "color_order": { "type": "string", "enum": ["RGB", "BGR"] },
+            "normalization": { "type": "object" },
+            "canonical_template": { "type": "array" },
+            "landmark_order": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

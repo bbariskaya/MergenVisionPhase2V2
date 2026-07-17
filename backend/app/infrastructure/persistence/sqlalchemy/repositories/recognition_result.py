@@ -58,3 +58,18 @@ class SqlAlchemyRecognitionResultRepository:
             .order_by(RecognitionResultOrm.created_at)
         )
         return [_to_domain(orm) for orm in result.scalars().all()]
+
+    async def list_by_face_id(
+        self,
+        face_id: FaceId,
+        limit: int | None = None,
+    ) -> list[RecognitionResult]:
+        query = (
+            select(RecognitionResultOrm)
+            .where(RecognitionResultOrm.face_id == face_id)
+            .order_by(RecognitionResultOrm.created_at)
+        )
+        if limit is not None:
+            query = query.limit(limit)
+        result = await self._session.execute(query)
+        return [_to_domain(orm) for orm in result.scalars().all()]

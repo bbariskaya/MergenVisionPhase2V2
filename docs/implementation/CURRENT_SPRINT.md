@@ -1,84 +1,70 @@
-# Current Sprint: Phase 1 Sprint 01 — Minimal Identity Storage Foundation
+# Current Sprint: Phase 1 Sprint 02 — Native GPU Image Identity Vertical Slice
 
 ## Objective
 
-Establish real PostgreSQL, MinIO and Qdrant connections and prove the persistent identity lifecycle using a deterministic test vector and a tiny valid image fixture.
+Implement the real NVIDIA GPU image identity vertical slice:
+
+```text
+JPEG
+-> nvJPEG decode
+-> CUDA preprocessing
+-> TensorRT RetinaFace R50
+-> CUDA RetinaFace decode/NMS/landmarks
+-> CUDA five-point face alignment
+-> TensorRT GlintR100
+-> CUDA L2-normalized 512-D embedding
+-> Python application service
+-> PostgreSQL / MinIO / Qdrant
+-> FastAPI response
+```
 
 ## In Scope
 
-- Four PostgreSQL tables: `face_identity`, `face_sample`, `process_record`, `recognition_result`.
-- One initial Alembic migration (`0001_identity_storage_foundation.py`).
-- Forward-only correctness migration (`0002_sprint01_correctness.py`).
-- Pure Python domain layer with explicit state transitions.
-- SQLAlchemy 2.0 async repository adapters and unit of work.
-- MinIO adapter for the `mergenvision-face-samples` bucket.
-- Qdrant adapter for the `face_samples_v1` cosine 512-D collection.
-- `IdentityStorageLifecycleService`:
-  - `resolve_or_create`
-  - `add_sample`
-  - `enroll_identity`
-  - `deactivate_identity`
-- Integration tests on real Docker services.
+- `backend/native/image_runtime/` pybind11 native package:
+  - `ImageRuntime` singleton created in FastAPI lifespan.
+  - `infer_jpeg(encoded_bytes)` returning compact observations.
+  - nvJPEG decode, CUDA preprocessing, TensorRT inference, CUDA postprocess, CUDA alignment, WebP crop encoding.
+  - Bounded execution-slot pool and backpressure signals.
+- Model profile schema/example for `retinaface_r50_glintr100_v1`.
+- TensorRT engine build with profiles:
+  - RetinaFace: min=1×3×640×640, opt=8×3×640×640, max=64×3×640×640
+  - GlintR100: min=1×3×112×112, opt=8×3×112×112, max=64×3×112×112
+- Backend integration:
+  - `NativeImageInferenceAdapter` with bounded concurrency.
+  - FastAPI lifespan-managed `ImageRuntime` instance.
+  - FastAPI routers at `/api/v1`: recognize, enroll, detail, delete, history, process; plus health endpoints.
+  - Public response contract (camelCase, no client threshold, no sampleId exposure).
+  - `IdentityStorageLifecycleService` refactor for process-scoped `resolve_or_create_for_process`.
+  - New Qdrant collection `face_samples_retinaface_r50_glintr100_v1`.
+- TDD tests for no-face, single-face lifecycle, multi-face, overload, history, process endpoints.
 
 ## Out of Scope
 
-- API endpoints / FastAPI
-- React UI
-- Real detection / recognition / alignment / GPU inference
-- Video / tracking
-- `inference_profile`, `idempotency_record`, `face_observation`, `process_event`, `outbox_event`
-- Outbox, saga, reconciliation, dead-letter
-- Model artifact SHA, requirement SHA checks
-- National-ID, Oracle, 10M-person scope
+- Video upload/job/tracking.
+- GStreamer/DeepStream/NVDEC.
+- SCRFD or other models.
+- React UI.
+- Blur/pose/occlusion calibration.
+- Accuracy benchmark / 600 FPS claims.
+- National ID / Oracle / 10M-person.
+- New PostgreSQL tables (reuse Sprint 01 tables).
+- Mutation/deletion of old `face_samples_v1` collection.
 
-## Correction Base
+## Binding Decisions
 
-Reviewed base commit: `675549670ab65daec9ffedae3e62ddb4f4478dc3`.
+- Container: `nvcr.io/nvidia/tensorrt:26.03-py3` digest `sha256:ade1b30517b3d66b911a3cd7faf0146484ab8956098abe66b96b944fa36f4861`.
+- Models:
+  - `backend/artifacts/models/retinaface_r50_dynamic.onnx` SHA-256 `fd8a87a6f2837d425604e0f88efca91e661947dbc3707f54da53ec27a8dc9a8a`
+  - `backend/artifacts/models/glintr100.onnx` SHA-256 `4ab1d6435d639628a6f3e5008dd4f929edf4c4124b1a7169e1048f9fef534cdf`
+- Engines (FP16, TensorRT 10.16):
+  - `retinaface_r50_dynamic.bs1.opt8.max64.fp16.trt1016.engine`
+  - `glintr100.bs1.opt8.max64.fp16.trt1016.engine`
+- MinIO crop key keeps Sprint 01 contract: `faces/{faceId}/{sampleId}/aligned.webp`, Content-Type `image/webp`.
+- Test env: only `backend/.env.gpu-test.example` tracked; `backend/.env.gpu-test` is generated locally and gitignored.
 
 ## Status
 
-`COMPLETED_PENDING_SENIOR_REVIEW`.
+`COMPLETED`
 
-All mandatory local correction gates passed twice on 2026-07-16 (78 tests, static analysis, Docker build/import, restart probe, git diff --check). This sprint is **not** full Phase 1 completion. Sprint 02 has not been started.
+See review package: `docs/implementation/review_packages/SPRINT-002-CODE-REVIEW-PACKAGE.md`.
 
-## Isolated Technical Spike Exception
-
-User-approved isolated video reference correctness spike. This does not begin product Sprint 02, does not alter the mandatory product implementation order, and cannot claim production video/GPU completion.
-
-### Video Reference Lab — Forensic Correction (2026-07-16)
-
-Corrections applied to `research/video_reference_lab/`:
-
-- `evaluation.py` now compares observations through the
-  `observation_id -> raw_tracklet_id -> canonical_track_id` mapping instead of
-  mixing namespaces.
-- `evaluate_gallery` counts a track as `known` only when
-  `decision_reason == "gallery_match"` and `display_label is not None`.
-- `tests/unit/test_evaluation.py` rewritten to validate the corrected semantics.
-- `byte_tracker.py` moved raw-tracklet ID allocation to a per-tracker counter
-  (`_allocate_tracklet_id`) so repeated tracker instances are deterministic and
-  independent.
-- `benchmark.py` now instruments `active_tracklet_ids()` each frame and reports
-  a real `max_active_tracks_estimate` instead of always returning `0`.
-
-Verification:
-
-- `make video-reference-unit` — 165 passed, 1 skipped, 1 xfailed.
-- `make video-reference-static` — ruff + mypy + format clean.
-- `make video-reference-synthetic-e2e video-reference-artifact-integrity video-reference-chunk-parity` — all passed.
-- Full `run-friends --max-frames 300` completed end-to-end.
-  - 300 frames, 1,792 observations, 265 valid embeddings, 537 tracking-eligible assignments.
-  - 13 raw tracklets -> 8 valid templates -> 10 canonical tracks (3 merges).
-  - Chunk invariance verified across chunk sizes [1, 8, 17, 64].
-  - Replay benchmark: ~2,500 FPS, `max_active_tracks_estimate` = 5.
-  - Gallery decision: 2 known (Rachel, Monica), 8 unknown. No ground truth is
-    available, so identity accuracy is **not proven**; only structural correctness
-    and safety rules are demonstrated.
-
-Caveats honestly reported:
-
-- `ground_truth_available: false` for `Friends.mp4`; pairwise identity precision/recall cannot be computed.
-- 5 of 13 raw tracklets have zero recognition-eligible observations, so they
-  cannot contribute to gallery decisions.
-- 3 gallery decisions are `unknown` because top-1 cosine is below the calibrated
-  `match_threshold` (0.45). These are not forced to `known`.

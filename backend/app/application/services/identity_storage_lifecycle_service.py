@@ -109,7 +109,46 @@ class IdentityStorageLifecycleService:
         return f"faces/{face_id}/{sample_id}/aligned.webp"
 
     # ------------------------------------------------------------------
-    # Public API
+    # Process lifecycle helpers
+    # ------------------------------------------------------------------
+    async def start_process(self, process_type: str, details: dict[str, Any] | None = None) -> ProcessRecord:
+        process_id = self._new_process_id()
+        process = ProcessRecord(
+            process_id=process_id,
+            process_type=process_type,
+            status="processing",
+            details=details or {},
+        )
+        async with self._unit_of_work_factory() as uow:
+            await uow.processes.add(process)
+            await uow.commit()
+        return process
+
+    async def complete_process(
+        self,
+        process_id: ProcessId,
+        face_count: int,
+        details: dict[str, Any] | None = None,
+    ) -> ProcessRecord:
+        async with self._unit_of_work_factory() as uow:
+            process = await uow.processes.get_by_id(process_id)
+            if process is None:
+                raise IdentityResolutionError("Process disappeared before completion")
+            process.complete(face_count=face_count, details=details)
+            await uow.processes.update(process)
+            await uow.commit()
+            return process
+
+    async def fail_process(self, process_id: ProcessId, error_code: str) -> None:
+        async with self._unit_of_work_factory() as uow:
+            process = await uow.processes.get_by_id(process_id)
+            if process is not None and process.status == "processing":
+                process.fail(error_code)
+                await uow.processes.update(process)
+                await uow.commit()
+
+    # ------------------------------------------------------------------
+    # Public API - image recognition
     # ------------------------------------------------------------------
     async def resolve_or_create(
         self,
@@ -133,40 +172,35 @@ class IdentityStorageLifecycleService:
             await uow.processes.add(process)
             await uow.commit()
 
-        try:
-            candidates = await self._vector_store.query(embedding, top_k=self._candidate_limit)
-        except Exception as exc:
-            await self._fail_process(process_id, "vector_query_failed")
-            raise IdentityResolutionError("Vector query failed during identity resolution") from exc
-
-        sorted_candidates = sorted(candidates, key=lambda c: c.score, reverse=True)
-
-        for candidate in sorted_candidates:
-            if not math.isfinite(candidate.score):
-                continue
-            if candidate.score < match_threshold:
-                continue
-            outcome = await self._try_accept_candidate(
-                process_id=process_id,
-                candidate=candidate,
-                bbox=bbox,
-            )
-            if outcome is not None:
-                return outcome
-
-        rejected_scores = [
-            c.score
-            for c in sorted_candidates
-            if math.isfinite(c.score) and c.score < match_threshold
-        ]
-        highest_rejected = self._to_match_confidence(max(rejected_scores, default=0.0))
-
-        return await self._create_new_identity(
+        return await self._resolve_or_create_core(
             process_id=process_id,
             crop_bytes=crop_bytes,
             embedding=embedding,
             bbox=bbox,
-            match_confidence=highest_rejected,
+            match_threshold=match_threshold,
+            complete_process=True,
+        )
+
+    async def resolve_or_create_for_process(
+        self,
+        process_id: ProcessId,
+        crop_bytes: bytes,
+        embedding: Sequence[float],
+        bbox: BoundingBox,
+        match_threshold: float,
+    ) -> RecognitionOutcome:
+        self._validate_crop_bytes(crop_bytes)
+        self._validate_embedding(embedding)
+        self._validate_bounding_box(bbox)
+        self._validate_threshold(match_threshold)
+
+        return await self._resolve_or_create_core(
+            process_id=process_id,
+            crop_bytes=crop_bytes,
+            embedding=embedding,
+            bbox=bbox,
+            match_threshold=match_threshold,
+            complete_process=False,
         )
 
     async def add_sample(
@@ -320,6 +354,57 @@ class IdentityStorageLifecycleService:
                 )
 
     # ------------------------------------------------------------------
+    # Core resolution (shared)
+    # ------------------------------------------------------------------
+    async def _resolve_or_create_core(
+        self,
+        process_id: ProcessId,
+        crop_bytes: bytes,
+        embedding: Sequence[float],
+        bbox: BoundingBox,
+        match_threshold: float,
+        complete_process: bool,
+    ) -> RecognitionOutcome:
+        try:
+            candidates = await self._vector_store.query(embedding, top_k=self._candidate_limit)
+        except Exception as exc:
+            if complete_process:
+                await self._fail_process(process_id, "vector_query_failed")
+            raise IdentityResolutionError("Vector query failed during identity resolution") from exc
+
+        sorted_candidates = sorted(candidates, key=lambda c: c.score, reverse=True)
+
+        for candidate in sorted_candidates:
+            if not math.isfinite(candidate.score):
+                continue
+            if candidate.score < match_threshold:
+                continue
+            outcome = await self._try_accept_candidate(
+                process_id=process_id,
+                candidate=candidate,
+                bbox=bbox,
+                complete_process=complete_process,
+            )
+            if outcome is not None:
+                return outcome
+
+        rejected_scores = [
+            c.score
+            for c in sorted_candidates
+            if math.isfinite(c.score) and c.score < match_threshold
+        ]
+        highest_rejected = self._to_match_confidence(max(rejected_scores, default=0.0))
+
+        return await self._create_new_identity(
+            process_id=process_id,
+            crop_bytes=crop_bytes,
+            embedding=embedding,
+            bbox=bbox,
+            match_confidence=highest_rejected,
+            complete_process=complete_process,
+        )
+
+    # ------------------------------------------------------------------
     # Candidate acceptance
     # ------------------------------------------------------------------
     async def _try_accept_candidate(
@@ -327,6 +412,7 @@ class IdentityStorageLifecycleService:
         process_id: ProcessId,
         candidate: VectorCandidate,
         bbox: BoundingBox,
+        complete_process: bool,
     ) -> RecognitionOutcome | None:
         try:
             async with self._unit_of_work_factory() as uow:
@@ -357,7 +443,8 @@ class IdentityStorageLifecycleService:
                 process = await uow.processes.get_by_id(process_id)
                 if process is None:
                     raise IdentityResolutionError("Process disappeared during candidate acceptance")
-                process.complete(face_count=1)
+                if complete_process:
+                    process.complete(face_count=1)
 
                 await uow.recognition_results.add(result)
                 await uow.processes.update(process)
@@ -372,7 +459,8 @@ class IdentityStorageLifecycleService:
                     match_confidence=confidence,
                 )
         except Exception as exc:
-            await self._fail_process(process_id, "candidate_acceptance_failed")
+            if complete_process:
+                await self._fail_process(process_id, "candidate_acceptance_failed")
             if isinstance(exc, DomainError):
                 raise
             raise IdentityResolutionError("Failed to accept recognition candidate") from exc
@@ -387,6 +475,7 @@ class IdentityStorageLifecycleService:
         embedding: Sequence[float],
         bbox: BoundingBox,
         match_confidence: float,
+        complete_process: bool,
     ) -> RecognitionOutcome:
         face_id = self._new_face_id()
         sample_id = self._new_sample_id()
@@ -444,7 +533,8 @@ class IdentityStorageLifecycleService:
                 process = await uow.processes.get_by_id(process_id)
                 if process is None:
                     raise IdentityResolutionError("Process disappeared before completion")
-                process.complete(face_count=1)
+                if complete_process:
+                    process.complete(face_count=1)
                 await uow.processes.update(process)
                 await uow.commit()
         except Exception as exc:
@@ -496,12 +586,7 @@ class IdentityStorageLifecycleService:
             await uow.commit()
 
     async def _fail_process(self, process_id: ProcessId, error_code: str) -> None:
-        async with self._unit_of_work_factory() as uow:
-            process = await uow.processes.get_by_id(process_id)
-            if process is not None and process.status == "processing":
-                process.fail(error_code)
-                await uow.processes.update(process)
-                await uow.commit()
+        await self.fail_process(process_id, error_code)
 
     async def _fail_sample(self, sample_id: SampleId, error_code: str) -> None:
         async with self._unit_of_work_factory() as uow:

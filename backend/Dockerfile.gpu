@@ -1,0 +1,87 @@
+# MergenVision backend — Phase 1 Sprint 02 GPU runtime
+# Build context must be the repository root.
+#
+# Uses the pinned NVIDIA TensorRT container so the native wheel is built
+# against the same CUDA/TensorRT libraries present at runtime.
+
+ARG TENSORRT_IMAGE=nvcr.io/nvidia/tensorrt:26.03-py3
+
+# ------------------------------------------------------------------------------
+# Native extension build stage
+# ------------------------------------------------------------------------------
+FROM ${TENSORRT_IMAGE} AS native-build
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake libwebp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /native
+COPY backend/native/image_runtime ./
+RUN pip install --no-cache-dir --quiet pybind11 scikit-build-core \
+    && python -m pip wheel . --no-deps -w /wheels
+
+# ------------------------------------------------------------------------------
+# Python dependency stage
+# ------------------------------------------------------------------------------
+FROM ${TENSORRT_IMAGE} AS python-deps
+
+WORKDIR /app
+COPY backend/pyproject.toml backend/README.md ./
+COPY backend/requirements.lock ./
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir -c requirements.lock -e .
+
+# ------------------------------------------------------------------------------
+# Runtime stage
+# ------------------------------------------------------------------------------
+FROM ${TENSORRT_IMAGE} AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libwebp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# NGC images use dist-packages, not site-packages.
+COPY --from=python-deps /usr/local/lib/python3.12/dist-packages /usr/local/lib/python3.12/dist-packages
+COPY --from=python-deps /usr/local/bin /usr/local/bin
+COPY --from=native-build /wheels /wheels
+
+RUN python -m pip install --no-cache-dir --no-deps /wheels/image_runtime-*.whl \
+    && rm -rf /wheels
+
+COPY backend/app ./app
+COPY backend/alembic.ini ./
+COPY backend/config ./config
+COPY backend/artifacts ./artifacts
+COPY backend/entrypoint.gpu.sh ./entrypoint.gpu.sh
+RUN chmod +x ./entrypoint.gpu.sh
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+
+ENV DATABASE_URL=""
+ENV MINIO_ENDPOINT=""
+ENV MINIO_ACCESS_KEY=""
+ENV MINIO_SECRET_KEY=""
+ENV MINIO_SECURE="false"
+ENV MINIO_BUCKET_NAME=""
+ENV QDRANT_URL=""
+ENV QDRANT_COLLECTION_NAME=""
+ENV MODEL_VERSION="retinaface_r50_glintr100_v1"
+ENV MODEL_PROFILE_PATH="/app/config/model_profiles/retinaface_r50_glintr100_v1.example.json"
+ENV DETECTOR_ENGINE_PATH="/app/artifacts/engines/retinaface_r50_dynamic.bs1.opt8.max64.fp16.trt1016.engine"
+ENV RECOGNIZER_ENGINE_PATH="/app/artifacts/engines/glintr100.bs1.opt8.max64.fp16.trt1016.engine"
+ENV GPU_DEVICE_ID=0
+ENV INFERENCE_SLOT_COUNT=1
+ENV MATCH_THRESHOLD=0.55
+ENV MAX_IMAGE_BYTES=26214400
+
+EXPOSE 8000
+
+ENTRYPOINT ["/app/entrypoint.gpu.sh"]
+CMD []

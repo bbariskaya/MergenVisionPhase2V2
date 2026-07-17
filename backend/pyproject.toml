@@ -23,6 +23,9 @@ dependencies = [
     "pydantic>=2.7.0,<2.8.0",
     "pydantic-settings>=2.3.0,<2.4.0",
     "uuid7>=0.1.0,<0.2.0",
+    "fastapi>=0.111.0,<0.112.0",
+    "uvicorn[standard]>=0.30.0,<0.31.0",
+    "python-multipart>=0.0.9,<0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +57,7 @@ ignore = ["E501"]
 "tests/integration/conftest.py" = ["E402"]
 "tests/integration/lifecycle/conftest.py" = ["E402"]
 "tests/integration/vectors/conftest.py" = ["E402"]
+"app/api/routes/*.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"
