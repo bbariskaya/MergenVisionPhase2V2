@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -199,3 +200,51 @@ class MinIOObjectStore(ObjectStore):
                     raise
 
         await asyncio.to_thread(_remove)
+
+    async def get(self, key: str) -> bytes | None:
+        """Return the object's bytes, or None if it does not exist."""
+        await self._ensure_bucket()
+
+        def _read() -> bytes:
+            response = self._client.get_object(self._bucket_name, key)
+            try:
+                return response.read()
+            finally:
+                response.close()
+                response.release_conn()
+
+        try:
+            return await asyncio.to_thread(_read)
+        except S3Error as exc:
+            if exc.code == "NoSuchKey":
+                return None
+            raise
+
+    async def presigned_get_url(
+        self,
+        key: str,
+        expiry_seconds: int = 3600,
+        response_content_type: str | None = None,
+    ) -> str | None:
+        """Generate a temporary signed URL for a private object."""
+        await self._ensure_bucket()
+
+        def _url() -> str:
+            response_headers: dict[str, str | list[str] | tuple[str]] | None = (
+                {"response-content-type": response_content_type}
+                if response_content_type
+                else None
+            )
+            return self._client.presigned_get_object(
+                self._bucket_name,
+                key,
+                expires=timedelta(seconds=expiry_seconds),
+                response_headers=response_headers,
+            )
+
+        try:
+            return await asyncio.to_thread(_url)
+        except S3Error as exc:
+            if exc.code == "NoSuchKey":
+                return None
+            raise

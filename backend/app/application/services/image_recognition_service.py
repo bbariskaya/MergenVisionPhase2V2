@@ -25,9 +25,10 @@ from app.application.services.identity_storage_lifecycle_service import (
     RecognitionOutcome,
 )
 from app.domain.entities.face_identity import FaceIdentity
+from app.domain.entities.face_sample import FaceSample
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.errors import ValidationError
-from app.domain.value_objects import BoundingBox, FaceId, ProcessId
+from app.domain.value_objects import BoundingBox, FaceId, ProcessId, SampleId
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +219,56 @@ class ImageRecognitionService:
     async def delete_identity(self, face_id: FaceId) -> bool:
         await self._lifecycle.deactivate_identity(face_id)
         return True
+
+    async def list_identities(
+        self,
+        query: str | None = None,
+        status: str | None = "known",
+    ) -> list[FaceIdentity]:
+        async with self._unit_of_work_factory() as uow:
+            identities = await uow.face_identities.search(
+                query=query,
+                status=status,
+                is_active=True,
+            )
+        return list(identities)
+
+    async def list_face_samples(self, face_id: FaceId) -> list[FaceSample]:
+        async with self._unit_of_work_factory() as uow:
+            samples = await uow.face_samples.list_active_by_face_id(face_id)
+        return list(samples)
+
+    async def add_face_sample(self, face_id: FaceId, image_bytes: bytes) -> FaceSample:
+        if not isinstance(image_bytes, bytes) or len(image_bytes) == 0:
+            raise ValidationError("image_bytes must be non-empty bytes")
+        if len(image_bytes) > self._max_image_bytes:
+            raise ValidationError(
+                f"Image exceeds maximum allowed size of {self._max_image_bytes} bytes"
+            )
+
+        engine = await self._get_engine()
+        raw = await engine.detect_and_embed(image_bytes)
+        if not raw.detections:
+            raise ValidationError("No face detected in the uploaded image")
+
+        primary = max(raw.detections, key=lambda d: d.detector_confidence)
+
+        matches_identity = await self._lifecycle.verify_identity_match(
+            face_id=face_id,
+            embedding=primary.embedding,
+            threshold=self._match_threshold,
+        )
+        if not matches_identity:
+            raise ValidationError("The uploaded face does not match the selected person")
+
+        return await self._lifecycle.add_sample(
+            face_id=face_id,
+            crop_bytes=primary.aligned_crop_bytes,
+            embedding=primary.embedding,
+        )
+
+    async def delete_face_sample(self, face_id: FaceId, sample_id: SampleId) -> None:
+        await self._lifecycle.delete_sample(face_id, sample_id)
 
     async def get_face_history(
         self,

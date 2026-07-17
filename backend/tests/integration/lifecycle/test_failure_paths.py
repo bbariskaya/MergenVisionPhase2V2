@@ -53,6 +53,17 @@ class FailingObjectStore(ObjectStore):
     async def delete(self, key: str) -> None:
         pass
 
+    async def get(self, key: str) -> bytes | None:
+        return None
+
+    async def presigned_get_url(
+        self,
+        key: str,
+        expiry_seconds: int = 3600,
+        response_content_type: str | None = None,
+    ) -> str | None:
+        return None
+
 
 class FailingVectorStore(VectorStore):
     async def upsert(

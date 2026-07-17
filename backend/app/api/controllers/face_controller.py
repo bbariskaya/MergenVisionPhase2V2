@@ -16,18 +16,24 @@ from app.api.schemas import (
     EnrollResponse,
     FaceHistoryResponse,
     FaceResponse,
+    FaceSampleResponse,
+    FaceSamplesResponse,
     HistoryEntry,
     IdentityDetailResponse,
+    IdentityListResponse,
+    IdentitySummary,
     ProcessResponse,
     RecognizeResponse,
 )
+from app.application.ports.object_store import ObjectStore
 from app.application.services.image_recognition_service import (
     ImageRecognitionService,
     RecognitionResultItem,
 )
+from app.domain.entities.face_sample import FaceSample
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.errors import ValidationError
-from app.domain.value_objects import FaceId, ProcessId
+from app.domain.value_objects import FaceId, ProcessId, SampleId
 
 
 @dataclass(frozen=True)
@@ -37,8 +43,13 @@ class RecognizeRequestData:
 
 
 class FaceController:
-    def __init__(self, service: ImageRecognitionService) -> None:
+    def __init__(
+        self,
+        service: ImageRecognitionService,
+        object_store: ObjectStore | None = None,
+    ) -> None:
         self._service = service
+        self._object_store = object_store
 
     async def recognize(self, request_id: str, data: RecognizeRequestData) -> RecognizeResponse:
         result = await self._service.recognize_image(data.image_bytes)
@@ -99,6 +110,20 @@ class FaceController:
             updated_at=self._format_dt(identity.updated_at),
         )
 
+    async def delete_face_sample(
+        self,
+        request_id: str,
+        face_id_str: str,
+        sample_id_str: str,
+    ) -> None:
+        try:
+            face_id = FaceId(UUID(face_id_str))
+            sample_id = UUID(sample_id_str)
+        except ValueError as exc:
+            raise ValidationError("face_id and sample_id must be valid UUIDs") from exc
+
+        await self._service.delete_face_sample(face_id, SampleId(sample_id))
+
     async def delete_identity(self, request_id: str, face_id_str: str) -> EnrollResponse:
         try:
             face_id = FaceId(UUID(face_id_str))
@@ -148,6 +173,128 @@ class FaceController:
         if process is None:
             return None
         return self._to_process_response(request_id, process)
+
+    async def list_identities(
+        self,
+        request_id: str,
+        query: str | None = None,
+    ) -> IdentityListResponse:
+        identities = await self._service.list_identities(query=query, status="known")
+        return IdentityListResponse(
+            request_id=request_id,
+            count=len(identities),
+            identities=[
+                IdentitySummary(
+                    face_id=str(identity.face_id),
+                    status=identity.status,
+                    name=identity.display_name,
+                    metadata=dict(identity.identity_metadata),
+                    created_at=self._format_dt(identity.created_at),
+                    updated_at=self._format_dt(identity.updated_at),
+                )
+                for identity in identities
+            ],
+        )
+
+    async def get_face_samples(
+        self,
+        request_id: str,
+        face_id_str: str,
+    ) -> FaceSamplesResponse | None:
+        try:
+            face_id = FaceId(UUID(face_id_str))
+        except ValueError as exc:
+            raise ValidationError("face_id must be a valid UUID") from exc
+
+        identity = await self._service.get_identity_detail(face_id)
+        if identity is None:
+            return None
+
+        samples = await self._service.list_face_samples(face_id)
+        sample_responses: list[FaceSampleResponse] = []
+        for sample in samples:
+            image_url = (
+                f"/api/v1/faces/{face_id_str}/samples/{sample.sample_id}/image"
+                if sample.object_key
+                else None
+            )
+            sample_responses.append(self._to_sample_response(sample, image_url))
+
+        return FaceSamplesResponse(
+            request_id=request_id,
+            face_id=face_id_str,
+            count=len(sample_responses),
+            samples=sample_responses,
+        )
+
+    async def add_face_sample(
+        self,
+        request_id: str,
+        face_id_str: str,
+        image_bytes: bytes,
+    ) -> FaceSampleResponse | None:
+        try:
+            face_id = FaceId(UUID(face_id_str))
+        except ValueError as exc:
+            raise ValidationError("face_id must be a valid UUID") from exc
+
+        identity = await self._service.get_identity_detail(face_id)
+        if identity is None:
+            return None
+
+        sample = await self._service.add_face_sample(face_id, image_bytes)
+        image_url = f"/api/v1/faces/{face_id_str}/samples/{sample.sample_id}/image"
+        return self._to_sample_response(sample, image_url)
+
+    async def get_sample_image_bytes(
+        self,
+        face_id_str: str,
+        sample_id_str: str,
+    ) -> tuple[bytes, str] | None:
+        try:
+            face_id = FaceId(UUID(face_id_str))
+            sample_id = UUID(sample_id_str)
+        except ValueError as exc:
+            raise ValidationError("face_id and sample_id must be valid UUIDs") from exc
+
+        identity = await self._service.get_identity_detail(face_id)
+        if identity is None:
+            return None
+
+        for sample in await self._service.list_face_samples(face_id):
+            if sample.sample_id == sample_id:
+                object_key = sample.object_key
+                break
+        else:
+            return None
+
+        if not object_key or self._object_store is None:
+            return None
+
+        data = await self._object_store.get(object_key)
+        if data is None:
+            return None
+
+        content_type = "image/webp"
+        if object_key.lower().endswith(".jpg") or object_key.lower().endswith(".jpeg"):
+            content_type = "image/jpeg"
+        elif object_key.lower().endswith(".png"):
+            content_type = "image/png"
+        return data, content_type
+
+    def _to_sample_response(
+        self,
+        sample: FaceSample,
+        image_url: str | None,
+    ) -> FaceSampleResponse:
+        return FaceSampleResponse(
+            sample_id=str(sample.sample_id),
+            face_id=str(sample.face_id),
+            state=sample.state,
+            image_url=image_url,
+            created_at=self._format_dt(sample.created_at),
+            activated_at=self._format_dt(sample.activated_at),
+        )
 
     def _to_face_response(self, item: RecognitionResultItem) -> FaceResponse:
         return FaceResponse(

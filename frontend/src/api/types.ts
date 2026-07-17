@@ -61,6 +61,37 @@ export interface FaceHistoryResponse {
   history: FaceHistoryEntry[]
 }
 
+export interface IdentitySummary {
+  face_id: UUID
+  status: RecognitionStatus
+  name: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface IdentityListResponse {
+  request_id: UUID
+  count: number
+  identities: IdentitySummary[]
+}
+
+export interface FaceSample {
+  sample_id: UUID
+  face_id: UUID
+  state: string
+  image_url: string | null
+  created_at: string | null
+  activated_at: string | null
+}
+
+export interface FaceSamplesResponse {
+  request_id: UUID
+  face_id: UUID
+  count: number
+  samples: FaceSample[]
+}
+
 export interface ProcessDetail {
   process_id: UUID
   process_type: string

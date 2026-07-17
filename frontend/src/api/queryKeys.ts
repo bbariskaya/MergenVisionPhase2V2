@@ -5,6 +5,7 @@ export const queryKeys = {
   },
   face: (faceId: string) => ['face', faceId] as const,
   faceHistory: (faceId: string) => ['face', faceId, 'history'] as const,
+  faceSamples: (faceId: string) => ['face', faceId, 'samples'] as const,
   faces: (params: { search?: string; isActive?: boolean | null; limit?: number; offset?: number }) =>
     ['faces', params] as const,
   process: (processId: string) => ['process', processId] as const,

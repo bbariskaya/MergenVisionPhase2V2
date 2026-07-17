@@ -35,6 +35,14 @@ class FaceIdentityRepository(ABC):
     @abstractmethod
     async def list_all(self) -> Sequence[FaceIdentity]: ...
 
+    @abstractmethod
+    async def search(
+        self,
+        query: str | None = None,
+        status: str | None = None,
+        is_active: bool = True,
+    ) -> Sequence[FaceIdentity]: ...
+
 
 class FaceSampleRepository(ABC):
     @abstractmethod

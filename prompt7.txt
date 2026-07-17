@@ -1,0 +1,1584 @@
+QWEN — CONTINUE IN BUILD MODE NOW
+M5 REAL NATIVE GPU VIDEO PIPELINE + M6 TRACKING/PERSISTENCE
+
+Aktif repository:
+  /home/user/Workspace/MergenVisionPhase2v2
+
+Bu görev plan yazıp durma, Python placeholder ekleme veya protobuf kontratını tekrar test etme görevi değildir. Mevcut M0–M4 foundation’ı kullanarak gerçek NVIDIA GPU üzerinde çalışan video data plane’i şimdi implemente et.
+
+Kullanıcı yeni onay istemiyor. Mevcut güvenli ve in-scope kararlarla otonom ilerle. Yalnız gerçekten dışarıdan çözülemeyen bir blocker varsa exact command, raw error ve blocker code ile dur.
+
+======================================================================
+1. BÜYÜK RESİM — NE YAPMAYA ÇALIŞIYORUZ?
+======================================================================
+
+MergenVision’ın son ürünü şunu yapacak:
+
+1. Kullanıcı video yükler.
+2. API videoyu MinIO’ya kaydeder ve PostgreSQL’de video job oluşturur.
+3. GPU worker job’ı lease/fencing kurallarıyla claim eder.
+4. Video GStreamer + NVIDIA NVDEC ile GPU belleğine decode edilir.
+5. Decode edilen GPU frame’leri CPU JPEG/OpenCV yoluna uğramadan RetinaFace R50’a gider.
+6. RetinaFace bbox + 5 landmark üretir.
+7. Yüzler CUDA üzerinde canonical ArcFace alignment ile 112×112 hazırlanır.
+8. GlintR100 TensorRT ile 512-D embedding üretir.
+9. Embedding GPU üzerinde L2 normalize edilir.
+10. Detection’lar video boyunca tracker ile tracklet’lere bağlanır.
+11. Timestamp/PTS, bbox, landmark, detector score, quality, embedding eligibility ve track kimliği artifact olarak yazılır.
+12. Track/tracklet/appearance bilgileri PostgreSQL’e idempotent biçimde persist edilir.
+13. Job güvenli biçimde sonraki `track_reconcile`/identity aşamasına geçirilir.
+14. İleride React UI, orijinal videoyu oynatırken bu timestamp’li metadata üzerinden canvas overlay gösterecek.
+
+Annotated MP4 üretmeyeceğiz. NVENC, backend overlay rendering ve ikinci bir video dosyası bu görevde ve ürün kararında YOKTUR.
+
+Bu görevin sonunda minimum gerçek dikey kanıt şu olmalı:
+
+  Friends.mp4
+    → MinIO asset / video job
+    → worker claim + lease
+    → GStreamer/NVDEC GPU decode
+    → GPU RetinaFace
+    → GPU alignment
+    → GPU GlintR100
+    → GPU L2
+    → deterministic tracker
+    → protobuf.zst observation artifact
+    → PostgreSQL track/tracklet persistence
+    → job stage/status/progress
+    → query edilebilir timestamp’li track sonucu
+
+Host-only contract testi veya import testi bunun kanıtı değildir.
+
+======================================================================
+2. MEVCUT DURUM — BUNLARI TEKRAR YAPMA
+======================================================================
+
+Raporlanan mevcut durum:
+
+- `make phase2-step0-static` green.
+- `make phase2-migrations` green.
+- `make phase2-control-plane` green.
+- `make phase2-m3-worker-control` green.
+- `make phase2-m4-device-pipeline` yalnız host contract seviyesinde green.
+- `make phase2-m5-video-observation` yalnız protobuf contract seviyesinde green.
+- UUID generation backend genelinde UUIDv7’ye çevrildi.
+- `FacePipeline` portu var.
+- `face_pipeline_adapter.py` şu anda dürüstçe `VideoExecutorNotReadyError` atıyor.
+- `video_observation_v1.proto` mevcut.
+- `mergenvision/deepstream-dev:9.0` image local olarak mevcut.
+- Gerçek test videosu:
+  `/home/user/Workspace/MergenVisionPhase2v2/test_videos/Friends.mp4`
+- Modeller sabit:
+  - `backend/artifacts/models/retinaface_r50_dynamic.onnx`
+  - `backend/artifacts/models/glintr100.onnx`
+- Detector değiştirme. SCRFD’ye dönme.
+- Recognizer değiştirme.
+- Model indirme.
+- `research/video_reference_lab/**` dosyalarına dokunma veya production’dan import etme.
+
+Mevcut M3 job lease/retry/cancel mekanizmasını yeniden tasarlama. Gerçek worker bu mekanizmayı kullanmalı.
+
+======================================================================
+3. ZORUNLU BAŞLANGIÇ VE DISCOVERY
+======================================================================
+
+Kod değiştirmeden önce:
+
+1. Repository root ve dirty worktree:
+   - `pwd`
+   - `git status --short`
+   - `git rev-parse HEAD`
+
+2. Tamamen oku:
+   - `agents.md` veya repository’de geçerli governance dosyası
+   - `docs/implementation/CURRENT_SPRINT.md`
+   - `requirements/ProjectRequirements.md`
+   - `requirements/videorequirements.md`
+   - ilgili architecture belgeleri
+   - `opensourcereferences/references.md`
+
+3. `codebase-memory-mcp` ile şunları çıkar:
+   - video job claim/lease/heartbeat/cancel call graph
+   - VideoJob repository ve UnitOfWork
+   - MinIO video input adapter
+   - native image runtime engine/preprocess/decode/alignment/L2 kodu
+   - mevcut FacePipeline portu ve adapter
+   - video observation protobuf caller/consumer
+   - video_track/video_tracklet/appearance_interval migration ve repository durumu
+   - Makefile Phase 2 target’ları
+   - Docker GPU image/runtime dosyaları
+
+4. Filesystem üzerinden source’u doğrula. Codebase-memory sonucunu tek başına kanıt sayma.
+
+5. Özellikle fresh-checkout açısından import edilen bütün ORM/source dosyalarının Git tarafından ignore edilmediğini doğrula:
+   - `git check-ignore -v <path>`
+   - eksik/ignore edilmiş production source varsa önce düzelt, ardından native işe devam et.
+   - ayrı correction sprint açma.
+
+6. İlgili official/upstream referansları incele:
+   - NVIDIA DeepStream 9 GStreamer sample applications
+   - `nvv4l2decoder`
+   - `NvBufSurface`
+   - NVMM/CUDA device mapping
+   - GStreamer appsink/pad probe lifecycle
+   - TensorRT explicit dynamic shapes ve execution context
+   - Protobuf streaming/delimited messages
+   - Zstandard streaming writer
+   - ByteTrack official/upstream MIT implementation veya repository’de approved tracking reference
+
+7. Version-sensitive davranış için Context7 kullan.
+8. Upstream implementation path için DeepWiki + gerçek upstream source doğrulaması yap.
+9. Exa yalnız official docs/upstream source eksikse kullan.
+10. Kararları `REFERENCE_DECISION_LOG.md` içine kısa ve gerçek source URL/version/license ile kaydet.
+
+Zorunlu skill akışı:
+- using-superpowers
+- codebase-memory
+- brainstorming yalnız implementation seçeneklerini source ile karşılaştırmak için
+- writing-plans: kısa execution ledger; kullanıcıya tekrar plan onayı sorma
+- executing-plans
+- test-driven-development
+- systematic-debugging
+- verification-before-completion
+- requesting-code-review
+
+21st ve Ruflo kesinlikle kullanılmayacak.
+
+======================================================================
+4. BINDING NATIVE MİMARİ
+======================================================================
+
+Python control plane:
+
+- PostgreSQL/MinIO işlemleri
+- job claim/lease/heartbeat/retry/cancel
+- native subprocess lifecycle
+- progress ve structured error handling
+- final artifact doğrulama
+- database persistence
+
+C++/CUDA/TensorRT data plane:
+
+- GStreamer pipeline
+- NVIDIA hardware decode
+- NVMM/NvBufSurface handling
+- CUDA preprocessing
+- TensorRT RetinaFace inference
+- CUDA RetinaFace output decode/NMS
+- 5-point alignment
+- TensorRT GlintR100 inference
+- GPU L2 normalization
+- compact detection/embedding metadata
+- native tracking
+- protobuf/zstd observation writing
+
+Python’a şunlar geçmeyecek:
+
+- full decoded frame
+- JPEG’e çevrilmiş ara frame
+- detector input tensor
+- raw detector output tensor
+- NVMM surface
+- NumPy image
+- OpenCV Mat
+- PIL image
+
+Python’a yalnız compact control/progress/final manifest geçebilir.
+
+Üretim video yolunda yasak:
+
+- `cv2.VideoCapture`
+- OpenCV/PIL full-frame decode
+- FFmpeg software decode fallback
+- ONNX Runtime CPU/CUDA inference fallback
+- InsightFace `FaceAnalysis`
+- frame → JPEG → mevcut image API çağrısı
+- sessiz CPU fallback
+- frame başına Python callback
+- frame başına zorunlu `cudaDeviceSynchronize`
+- request başına engine build
+- TensorRT raw outputlarını sırf postprocess için NumPy’ya kopyalamak
+
+FFprobe yalnız container/stream metadata validation için kullanılabilir. Pixel decode yapamaz.
+
+======================================================================
+5. CONTAINER VE RUNTIME GATE
+======================================================================
+
+Mevcut local image’i önce doğrula:
+
+- `docker image inspect mergenvision/deepstream-dev:9.0`
+- exact image ID ve varsa RepoDigest kaydet
+- `docker run --rm --gpus all ... nvidia-smi`
+- container içinde:
+  - `gst-inspect-1.0 nvv4l2decoder`
+  - `gst-inspect-1.0 nvstreammux`
+  - `gst-inspect-1.0 nvtracker`
+  - `trtexec --version`
+  - `nvcc --version`
+  - DeepStream version
+  - TensorRT/CUDA/cuDNN versions
+
+Bir `latest` veya yalnız mutable local tag’i reproducibility kanıtı sayma. RepoDigest yoksa:
+
+- exact Docker image ID,
+- Dockerfile/base digest,
+- installed runtime versions
+
+manifestte kayıtlı olsun ve limitation açık yazılsın.
+
+Engine’ler runtime ile aynı DeepStream/TensorRT container içinde build edilmelidir. Daha önce başka TensorRT minor version’da oluşturulmuş engine’i körlemesine kullanma.
+
+ONNX SHA’larını doğrula. Model indirme veya değiştirme yok.
+
+Dynamic TensorRT profile:
+
+RetinaFace:
+- min: 1×3×640×640
+- opt: 4×3×640×640
+- max: 8×3×640×640
+
+GlintR100:
+- min: 1×3×112×112
+- opt: 8×3×112×112
+- max: 32×3×112×112
+
+Mevcut engine manifest farklıysa aynı pinned video runtime içinde yeniden build et. Engine manifest şu bilgileri taşımalı:
+
+- ONNX SHA-256
+- engine SHA-256
+- input/output tensor contract
+- min/opt/max profile
+- FP16
+- TensorRT/CUDA/DeepStream versions
+- GPU compute capability
+- container digest/image ID
+- build command
+- model/preprocess version
+
+======================================================================
+6. SOURCE YAPISI
+======================================================================
+
+Önce mevcut source’u keşfet; eşdeğer yapı varsa duplicate oluşturma. Yoksa aşağıdaki cohesive yapıyı kullan:
+
+backend/native/video_worker/
+  CMakeLists.txt
+  pyproject.toml veya native build wrapper
+  include/mergenvision_video/
+    gst_decoder.hpp
+    nvmm_frame.hpp
+    face_pipeline.hpp
+    tensor_rt_engine.hpp
+    tracker.hpp
+    observation_writer.hpp
+    worker_config.hpp
+    errors.hpp
+  src/
+    main.cpp
+    gst_decoder.cpp
+    nvmm_frame.cpp
+    face_pipeline.cpp
+    tensor_rt_engine.cpp
+    retinaface_preprocess.cu
+    retinaface_decode_nms.cu
+    face_alignment.cu
+    l2_normalize.cu
+    tracker.cpp
+    observation_writer.cpp
+    worker_config.cpp
+  tests/
+    test_tracker.cpp
+    test_pts.cpp
+    test_observation_writer.cpp
+
+backend/app/application/ports/
+  video_observation_executor.py
+
+backend/app/infrastructure/video/
+  native_video_observation_executor.py
+
+backend/app/workers/
+  video_worker.py
+
+backend/scripts/
+  inspect_video_runtime.py
+  validate_observation_artifact.py
+
+backend/Dockerfile.video-worker
+docker-compose.gpu.yml veya mevcut Phase 2 compose dosyası
+
+Mevcut native image runtime’taki engine/alignment/kernel implementasyonunu mümkün olduğunca ortak native library’ye çıkar:
+
+  mv_face_pipeline
+
+Aynı RetinaFace decode, landmark mapping, alignment ve GlintR100 preprocessing davranışını iki farklı implementation halinde kopyalama.
+
+Image runtime ve video worker aynı native face pipeline’ı çağırmalı:
+
+Image:
+  nvJPEG decoded device image
+    → mv_face_pipeline
+
+Video:
+  NVDEC/NVMM DeviceImageView
+    → mv_face_pipeline
+
+Ancak bu refactor çalışan Sprint 02 image API’sini bozmamalı. Mevcut image lifecycle acceptance tekrar çalıştırılmalı.
+
+======================================================================
+7. GERÇEK GSTREAMER/NVDEC AKIŞI
+======================================================================
+
+Friends.mp4 H.264 MP4 için gerçek pipeline:
+
+  filesrc
+    → qtdemux
+    → h264parse
+    → nvv4l2decoder
+    → video/x-raw(memory:NVMM)
+    → native consumer/appsink veya approved DeepStream pad path
+
+Şartlar:
+
+1. Decode element gerçekten `nvv4l2decoder` olmalı.
+2. Output buffer NVMM olmalı.
+3. `GstBuffer` içinden `NvBufSurface` alınmalı.
+4. Surface GPU/device-mappable olmalı.
+5. CPU system-memory video buffer görülürse structured failure:
+   `VIDEO_GPU_SURFACE_CONTRACT_FAILED`
+6. CPU fallback yapılmamalı.
+7. Her frame için:
+   - frame index
+   - decode order
+   - presentation timestamp
+   - duration
+   - source dimensions
+   - rotation/display metadata
+   korunmalı.
+8. Zaman hesabı yalnız `frame_index / fps` üzerinden yapılmamalı.
+9. PTS monotonicity ve VFR davranışı test edilmeli.
+10. GStreamer ERROR/EOS event’leri düzgün ele alınmalı.
+11. Pipeline cancel sırasında bounded sürede NULL state’e alınmalı.
+12. GstBuffer/NvBufSurface/CUDA resource ömürleri RAII ile yönetilmeli.
+
+Batch:
+
+- RetinaFace için en fazla 8 frame batch.
+- Batch dolmadan EOS gelirse partial batch flush.
+- Her output `source_batch_index` üzerinden frame/PTS’ye geri bağlanmalı.
+- Recognizer yüzleri detection sırasını koruyarak en fazla 32’lik chunk’larda çalıştırmalı.
+- Hiçbir detection sessizce düşürülmemeli.
+- Configured safety limit aşılırsa structured failure/rejection count üret.
+
+======================================================================
+8. FACE PIPELINE
+======================================================================
+
+Her frame batch’i için:
+
+1. NV12/RGBA device surface’ı detector tensor’a CUDA kernel ile dönüştür.
+2. Aspect ratio korunarak letterbox uygula.
+3. Scale/pad bilgilerini her source frame için tut.
+4. RetinaFace TensorRT çalıştır.
+5. Score/bbox/landmark decode işlemini GPU’da yap.
+6. NMS GPU’da çalışsın.
+7. Bbox ve landmark’ları original source coordinates’e doğru reverse-map et.
+8. Bbox clamp et; invalid/NaN/zero-area sonuçları reject et.
+9. 5-point landmark order model profile ile birebir doğrulanmalı.
+10. Canonical ArcFace similarity transform ile 112×112 aligned crop üret.
+11. GlintR100 preprocessing profile contract’a birebir uymalı.
+12. GlintR100 dynamic face batch çalıştır.
+13. 512-D embedding’i GPU’da L2 normalize et.
+14. Host’a yalnız compact finalized metadata ve gerektiğinde normalized embedding kopyala.
+
+Zorunlu invariants:
+
+- bbox source frame sınırları içinde.
+- 5 landmark finite.
+- detector score finite ve [0,1].
+- embedding tam 512 eleman.
+- embedding finite.
+- eligible embedding normu tolerance içinde 1.0.
+- batch 1 ve batch N sonuçları kabul edilebilir numeric tolerance içinde aynı.
+- frame batch/chunk size değişikliği output order ve tracking sonucunu değiştirmemeli.
+
+RetinaFace coordinate mapping/alignment hatasını model hatası diye geçiştirme.
+
+======================================================================
+9. QUALITY VE TRACKING AYRIMI
+======================================================================
+
+Tracking eligibility ve recognition eligibility aynı şey değildir.
+
+Bir detection:
+
+- yüz küçük,
+- blur,
+- karanlık,
+- pose kötü
+
+olsa bile tracker’ın devamlılığı için kullanılabilir; fakat identity template’e katılmayabilir.
+
+Her detection için en az:
+
+- detector_score
+- bbox width/height/area
+- tracking_eligible
+- recognition_eligible
+- rejection reasons
+- alignment residual veya geçerli alignment flag
+- embedding mevcut/missing durumu
+
+kaydedilsin.
+
+Bu görevde threshold’ları production accuracy calibrated diye sunma. Config’e koy, profile/version hash’e dahil et.
+
+======================================================================
+10. NATIVE TRACKER
+======================================================================
+
+Tracking Python frame loop’unda yapılmayacak. Native C++ data plane içinde compact detection metadata üzerinde çalışacak.
+
+Approved yaklaşım:
+
+- ByteTrack benzeri iki aşamalı association
+- Kalman prediction
+- Hungarian/min-cost assignment
+- high-confidence detection matching
+- low-confidence recovery matching
+- IoU gating
+- aynı frame içinde cannot-link
+- configurable appearance cosine gate yalnız embedding mevcutsa
+
+Track state:
+
+- tentative
+- confirmed
+- lost
+- removed
+
+Her raw track için:
+
+- deterministic local track key/ordinal
+- first_frame_index / last_frame_index
+- first_pts_ns / last_pts_ns
+- observation count
+- confirmed/lost/removed state
+- selected recognition-eligible observation IDs
+- quality summary
+- optional quality-weighted normalized template
+
+Kurallar:
+
+- Aynı frame’de aynı track ID iki detection’a atanamaz.
+- Aynı detection iki track’e atanamaz.
+- Track ID allocator global/static process state kullanmamalı.
+- Yeni tracker instance’ı deterministic olarak aynı inputa aynı local IDs üretmeli.
+- Batch/chunk size tracking sonucunu değiştirmemeli.
+- Kısa occlusion sonrası bounded reacquisition çalışmalı.
+- Scene cut varsa eski tracklerin sınırsız devam etmesine izin verme.
+- Embedding yoksa tracker yalnız geometry/motion ile devam edebilmeli.
+- Track template’e yalnız recognition-eligible embedding’ler katılmalı.
+- Top-K quality sampling + outlier rejection + quality-weighted centroid + yeniden L2 normalization uygula.
+- Bütün frameleri template’e körlemesine ortalama.
+
+Kalıcı PostgreSQL track UUID’leri UUIDv7 olmalı. Retry idempotency için native local key ile:
+
+  UNIQUE(job_id, native_track_key)
+
+veya mevcut frozen schema’daki eşdeğer doğal anahtarı kullan. Retry yeni duplicate track üretmemeli.
+
+Yeni schema gerekirse mevcut published migration’ları rewrite etme. Yeni forward-only Alembic migration ekle ve requirement/architecture ile trace et.
+
+======================================================================
+11. PROTOBUF + ZSTD ARTIFACT
+======================================================================
+
+Mevcut `video_observation_v1.proto`yu koru. Field number’ları değiştirme veya reuse etme. Gerekli alanlar eksikse yalnız additive field ekle.
+
+Artifact en az şunları içermeli:
+
+Header:
+- schema_version
+- video_asset_id
+- job_id
+- video SHA-256
+- model profile/version
+- model SHA’ları
+- preprocess version
+- source/display dimensions
+- rotation
+- stream index
+- time base
+- worker identity
+- host GPU UUID
+- container-visible GPU index
+- config hash
+
+Frame:
+- frame_index
+- pts_ns
+- duration_ns
+- source batch index
+- scene-cut flag
+- detections
+
+Detection:
+- stable observation ID
+- local track key
+- original-coordinate bbox
+- 5 landmarks
+- detector score
+- tracking eligibility
+- recognition eligibility
+- rejection reasons
+- quality fields
+- optional normalized 512-D embedding
+
+Footer:
+- decoded frame count
+- processed frame count
+- dropped/rejected counts by reason
+- detection count
+- eligible embedding count
+- raw track count
+- timing per stage
+- peak/bounded resource metrics
+- cancellation/failure status
+- engine/runtime fingerprint
+
+Artifact streaming protobuf + zstd ile yazılmalı. Tüm video sonucu RAM’de biriktirilmemeli.
+
+Yazım:
+
+1. local temporary path
+2. finalize footer
+3. fsync/close
+4. validate/read-back
+5. SHA-256 ve size hesapla
+6. MinIO staging key
+7. stat + SHA/size doğrula
+8. canonical technical key’e promote
+9. PostgreSQL manifest/state transaction
+10. temp cleanup
+
+Önerilen technical object key:
+
+  videos/{videoAssetId}/jobs/{jobId}/observations/v1/observations.pb.zst
+
+Name/character/PII object key’e veya Qdrant payload’a girmeyecek.
+
+Embedding PostgreSQL’e yazılmayacak. Observation artifact private MinIO object olabilir.
+
+======================================================================
+12. PYTHON WORKER CONTROL INTEGRATION
+======================================================================
+
+M3 job control gerçek native execution ile bağlanmalı.
+
+Python worker:
+
+1. `claim_next()` ile lease/fencing token alır.
+2. Video asset/object metadata doğrular.
+3. MinIO object’i bounded local staging file’a stream eder.
+4. Native worker binary’yi subprocess olarak başlatır.
+5. Lease heartbeat’i native işlem sürerken devam ettirir.
+6. Native progress event’lerini compact JSON/control channel üzerinden okur.
+7. PostgreSQL progress/stage günceller.
+8. Cancel requested ise subprocess’e graceful termination gönderir.
+9. Bounded grace süresi sonrası gerekirse kill eder.
+10. Partial artifact’i canonical olarak publish etmez.
+11. Native success sonrası artifact manifestini doğrular.
+12. Track/tracklet/appearance rows’u idempotent transaction ile persist eder.
+13. Job’u bu görevin sonunda `track_reconcile` veya approved next state’e geçirir.
+14. Henüz identity reconcile yapılmadıysa job’ı yanlış biçimde `completed` göstermez.
+15. Retryable failure’da M3 bounded backoff/retry mekanizmasını kullanır.
+16. Non-retryable media/model/contract hatasında sanitized failure code kaydeder.
+17. Lease kaybolmuş/fencing token eskiyse stale worker hiçbir final state yazamaz.
+18. Temp input/output her exit path’inde temizlenir.
+
+Native subprocess stderr/raw filesystem path/engine path client response’a dönülmez.
+
+Structured failure codes en az:
+
+- VIDEO_INPUT_NOT_FOUND
+- VIDEO_CONTAINER_UNSUPPORTED
+- VIDEO_STREAM_UNSUPPORTED
+- VIDEO_GPU_DECODER_UNAVAILABLE
+- VIDEO_GPU_SURFACE_CONTRACT_FAILED
+- VIDEO_MODEL_CONTRACT_FAILED
+- VIDEO_TENSORRT_EXECUTION_FAILED
+- VIDEO_OBSERVATION_ARTIFACT_INVALID
+- VIDEO_WORKER_CANCELLED
+- VIDEO_WORKER_LEASE_LOST
+- VIDEO_WORKER_INTERNAL_ERROR
+
+======================================================================
+13. POSTGRESQL TRACK PERSISTENCE
+======================================================================
+
+Mevcut migration/domain schema’yı incele:
+
+- video_asset
+- video_job
+- video_track
+- video_tracklet
+- appearance_interval
+- varsa observation/result manifest alanları
+
+Eksik ORM/domain/repository implementation’larını tamamla.
+
+Cross-job integrity zorunlu:
+
+- Bir tracklet başka job’ın track’ine bağlanamaz.
+- `job_id + track_id` ilişkisinde composite FK veya redundant job_id’nin kaldırıldığı approved schema kullanılmalı.
+- interval start <= end.
+- frame/PTS aralıkları geçerli.
+- track ordinal/native key job içinde unique.
+- job retry duplicate rows üretmez.
+- optimistic version/fencing predicate olmadan stale update yapılmaz.
+
+Persist edilen track:
+
+- UUIDv7 track_id
+- job_id
+- native_track_key
+- state
+- first/last PTS
+- observation count
+- quality/template metadata; embedding değil
+- version/timestamps
+
+Tracklet/appearance interval:
+
+- source PTS range
+- frame range
+- track relationship
+- confidence/quality summary
+- UI timeline için yeterli geometry reference/artifact link
+
+Per-frame binlerce bbox’ı relational DB’ye körlemesine yazma. Yoğun frame metadata protobuf artifact’te kalmalı; DB query/index için track ve interval özetlerini tutmalı.
+
+======================================================================
+14. TDD ADIMLARI
+======================================================================
+
+Her adım önce failing test/reproducer ile yürüsün.
+
+A. Runtime gate
+
+Tests:
+- DeepStream image identity/version
+- NVIDIA driver visible
+- nvv4l2decoder available
+- NVMM available
+- TensorRT/CUDA version manifest
+- model SHA contract
+
+Target:
+  make phase2-m5-native-runtime-gate
+
+B. Native build
+
+Tests:
+- binary loads
+- `--version`
+- model profile parse
+- engines deserialize
+- protobuf/zstd writer roundtrip
+
+Target:
+  make phase2-m5-native-build
+
+C. GPU decode
+
+Real Friends smoke, first 32/64 frames:
+
+- decoded frames > 0
+- real PTS
+- NVMM/device surfaces
+- no CPU fallback
+- EOS clean
+- max-frame cancellation clean
+
+Target:
+  make phase2-m5-gpu-decode-smoke
+
+D. GPU face observation
+
+First 300 frames:
+
+- detections > 0
+- valid original-coordinate bbox
+- landmarks valid
+- eligible embedding count > 0
+- embeddings 512-D, finite, unit norm
+- detector/recognizer provider is TensorRT
+- model SHA/profile recorded
+
+Target:
+  make phase2-m5-gpu-face-smoke
+
+E. Native tracker unit tests
+
+Synthetic compact detections only:
+
+- stable motion
+- two crossing tracks
+- missed detection/lost/reacquire
+- same-frame cannot-link
+- no duplicate IDs
+- no-embedding tracking
+- deterministic repeated run
+- batch/chunk invariance
+- scene cut retirement
+
+Target:
+  make phase2-m6-native-tracker-tests
+
+F. Real video track smoke
+
+Friends first 300 frames:
+
+- raw_track_count > 0
+- assigned observations > 0
+- no duplicate track ID per frame
+- monotonic PTS per track
+- track bounds valid
+- deterministic rerun with identical config
+- chunk size 1/4/8 does not change serialized logical assignments
+- no identity accuracy claim
+
+Target:
+  make phase2-m6-real-track-smoke
+
+G. Worker/storage integration
+
+Real PostgreSQL + MinIO:
+
+- upload Friends asset
+- create job
+- claim/lease
+- native process
+- heartbeat visible
+- artifact MinIO’da exists
+- SHA and size match
+- track rows exist
+- retry no duplicate track
+- stale lease cannot finalize
+- cancel bounded
+- worker crash → lease expiry → retry
+- partial canonical artifact yok
+- job correct next state
+
+Target:
+  make phase2-m6-worker-integration
+
+H. Full required target
+
+  make phase2-real-video-observation-e2e
+
+Bu target aşağıdakileri zincirlemeli:
+
+- static
+- migrations
+- M3 worker control regression
+- native runtime gate
+- native build
+- GPU decode smoke
+- GPU face smoke
+- native tracker tests
+- real video track smoke
+- PG/MinIO persistence
+- failure/retry/cancel tests
+- existing image recognition regression
+- `git diff --check`
+
+`.PHONY` olup recipe’si olmayan target bırakma. Test collection boşken PASS olmasın. GPU testlerinde unexpected skip varsa PASS verme.
+
+======================================================================
+15. GERÇEK FRIENDS.MP4 ACCEPTANCE
+======================================================================
+
+İki aşama çalıştır:
+
+Smoke:
+- ilk 300 frame veya yaklaşık 10–15 saniye
+- hızlı debugging
+
+Full:
+- tüm `/home/user/Workspace/MergenVisionPhase2v2/test_videos/Friends.mp4`
+- kullanıcı ayrıca durdurmadıkça final gerçek-video acceptance
+
+Zorunlu gerçek kanıt:
+
+- video SHA-256
+- source codec/resolution/duration/time base
+- decoded frame count
+- processed frame count
+- detection count
+- embedding count
+- raw track count
+- timing:
+  - demux/decode
+  - detector
+  - NMS
+  - alignment
+  - recognizer
+  - tracking
+  - serialization
+  - upload/persistence
+- actual GPU UUID/index
+- TensorRT/CUDA/DeepStream versions
+- engine/model SHA
+- artifact path/key/SHA/size
+- PostgreSQL job/track counts
+- retry/cancel results
+- no CPU fallback evidence
+
+Friends.mp4 için ground truth olmadığı için şunları iddia etme:
+
+- identity precision/recall
+- Rachel/Monica doğru bulundu
+- tracking accuracy production-ready
+- calibrated threshold
+- 600 FPS
+
+Ancak aşağıdakileri gerçek biçimde kanıtla:
+
+- video gerçekten NVIDIA decoder ile decode edildi
+- gerçek RetinaFace ve GlintR100 çalıştı
+- bbox/landmark/embedding üretildi
+- observations track’lere bağlandı
+- artifact ve DB state oluştu
+- pipeline restart/retry/cancel altında yalan success üretmedi
+
+======================================================================
+16. UI/OUTPUT ÜRÜN KARARI
+======================================================================
+
+Annotated MP4 üretme.
+
+Yapılmayacak:
+
+- NVENC
+- frame üzerine native çizim
+- backend overlay
+- derived annotated video
+- ikinci video upload/storage
+
+İleride UI:
+
+- MinIO’daki orijinal video/presigned playback URL
+- timestamp’li track API
+- `<video>` + synchronized `<canvas>`
+- `requestVideoFrameCallback()`
+- original-coordinate bbox’ın displayed video rect’e ölçeklenmesi
+- rotation ve `object-fit: contain` letterbox hesabı
+
+Bu görev UI yazma görevi değildir; fakat artifact ve track persistence ileride bu overlay’i doğru kurmaya yeterli olmalıdır.
+
+======================================================================
+17. HARD STOPS / YASAKLAR
+======================================================================
+
+- Model değiştirme veya indirme.
+- SCRFD ekleme.
+- CPU decode/inference fallback.
+- OpenCV/PIL production video decode.
+- Frame’leri JPEG’e çevirip image endpoint çağırma.
+- `research/video_reference_lab/**` değiştirme.
+- Annotated MP4/NVENC implement etme.
+- PostgreSQL’e embedding/image binary yazma.
+- Qdrant’a name/metadata/PII yazma.
+- Existing vector collection silme/resetleme.
+- Published migration rewrite etme.
+- `docker compose down -v`.
+- Volume/model/engine silme.
+- `git add`, commit, push veya history rewrite.
+- Fake/monkeypatch inference’ı gerçek GPU PASS sayma.
+- Host contract testini M5 PASS diye raporlama.
+- Native build başarısını runtime inference başarısı sayma.
+- Compile hatasında placeholder’a geri dönme.
+- Birkaç compile hatasından sonra plan raporlayıp bırakma.
+
+Compile/runtime hatasında `systematic-debugging` uygula:
+
+1. exact reproducer
+2. root cause
+3. official API/source doğrulaması
+4. smallest fix
+5. targeted rerun
+6. regression rerun
+
+======================================================================
+18. BLOCKER DAVRANIŞI
+======================================================================
+
+Yalnız şu tür gerçek blockers’da dur:
+
+- GPU container hiç çalışmıyor.
+- Host driver container runtime ile uyumsuz.
+- Model artifact eksik/SHA değişmiş.
+- DeepStream header/library gerçekten image içinde yok ve install için kullanıcı yetkisi gerekiyor.
+- ONNX tensor contract binding kararla fiziksel olarak uyuşmuyor.
+- Real test video okunamıyor.
+- Frozen requirement/schema ile çözülemeyen doğrudan çelişki var.
+
+Blocker raporu:
+
+- blocker code
+- exact failing command
+- raw relevant error
+- root cause
+- denenen güvenli çözümler
+- çözmek için gereken tek kullanıcı yetkisi/kararı
+
+Bunun dışındaki implementation/debugging kararlarında kullanıcıya soru sorma.
+
+======================================================================
+19. DOKÜMANTASYON VE FİNAL RAPOR
+======================================================================
+
+Çalışma boyunca `CURRENT_SPRINT.md` ledger’ını güncelle fakat rapor yazmayı implementation yerine koyma.
+
+Tamamlandığında:
+
+- `docs/implementation/CURRENT_SPRINT.md`
+- `docs/implementation/IMPLEMENTATION_DETAILS.md`
+- `docs/implementation/REFERENCE_DECISION_LOG.md`
+- `docs/implementation/review_packages/SPRINT-<CURRENT>-CODE-REVIEW-PACKAGE.md`
+
+güncellensin.
+
+Final verdict yalnız:
+
+- PASS
+- PARTIAL
+- BLOCKED
+- NOT_TESTED
+
+PASS için `make phase2-real-video-observation-e2e` gerçek GPU’da green olmalı ve Friends.mp4 gerçek artifact/persistence kanıtı bulunmalı.
+
+Final response şunları içersin:
+
+1. Kullanıcı açısından gerçekten çalışan akış.
+2. Değişen production dosyaları ve önemli symbol’ler.
+3. Exact commands ve raw pass/fail/skip özetleri.
+4. Container/runtime/model/engine fingerprint.
+5. Friends smoke ve full-video sayıları.
+6. GPU-only boundary kanıtı.
+7. PostgreSQL/MinIO artifact ve track evidence.
+8. Retry/cancel/crash/lease sonuçları.
+9. Henüz yapılmayan identity reconciliation/UI davranışları.
+10. Known limitations.
+11. Review package path.
+12. MCP accountability:
+    - codebase-memory-mcp
+    - context7
+    - deepwiki
+    - exa
+    - postman
+    - playwright
+    - 21st: FORBIDDEN_NOT_USED
+13. Skill accountability.
+
+Postman bu native/worker sprintinde relevant değilse `SKIPPED_NOT_RELEVANT`.
+Playwright UI olmadığı için `SKIPPED_NOT_RELEVANT`.
+21st daima `FORBIDDEN_NOT_USED`.
+
+ŞİMDİ BUILD MODE’DA BAŞLA.
+
+İlk gerçek komutların sırası:
+
+1. repository/status/governance discovery
+2. codebase-memory call graph
+3. DeepStream container/runtime inspection
+4. ONNX/engine/runtime compatibility inspection
+5. failing native runtime test
+6. native CMake skeleton/common pipeline integration
+7. 32-frame real GPU decode
+8. 300-frame detect/embed
+9. native tracking
+10. worker/MinIO/PostgreSQL integration
+11. full Friends.mp4 acceptance
+
+Host-only protobuf testini tekrar çalıştırıp “M5 green” deme. Bu görevin özü gerçek native GPU data plane’dir.
+
+Kısmen açıkladım abi; mimariyi anlattım ama nvstreammux kurulumu konusunda “appsink veya pad path” diye gereksiz açık kapı bıraktım. Dumb agent orada yanlış yol seçebilir. Verdiğin NVIDIA dokümanı özellikle request pad, batch oluşumu, timeout, CUDA memory ve NvDsBatchMeta davranışını netleştiriyor. nvstreammux, her source için sink_%u request pad ister ve çıktıya original PTS/source bilgisini taşıyan NvDsBatchMeta ekler. NVIDIA Gst-nvstreammux
+
+Önceki promptun sonuna bunu aynen ekle:
+
+======================================================================
+EK BAĞLAYICI UYGULAMA TARİFİ — GSTREAMER/NVSTREAMMUX NASIL KURULACAK?
+======================================================================
+
+Önceki metindeki “native consumer/appsink veya approved pad path” seçeneği artık açık değildir.
+
+Bu sprintte kesin pipeline:
+
+filesrc
+  → qtdemux
+  → h264parse
+  → nvv4l2decoder
+  → nvstreammux
+  → appsink
+  → C++ FacePipeline
+  → C++ NativeTracker
+  → protobuf.zst ObservationWriter
+
+`nvinfer`, `nvtracker`, `nvdsosd` ve renderer kullanılmayacak.
+
+Sebep:
+
+- RetinaFace decode/NMS/landmark logic mevcut özel TensorRT/CUDA FacePipeline’a aittir.
+- Alignment ve GlintR100 da aynı ortak FacePipeline’da çalışacaktır.
+- DeepStream `nvtracker` bu sprintte embedding-aware native track contract’ımızın yerine kullanılmayacaktır.
+- `nvstreammux` yalnız NVMM frame’leri temporal batch haline getirmek ve frame PTS/source metadata sağlamak için kullanılacaktır.
+- `appsink` pixel’leri CPU’ya çıkarmayacak; C++ uygulamasına `GstBuffer` içindeki `NvBufSurface` descriptor’ını teslim edecektir.
+
+----------------------------------------------------------------------
+A. KULLANILACAK NVSTREAMMUX VARYANTI
+----------------------------------------------------------------------
+
+Pinned DeepStream 9.0 container’da önce şunları çalıştır:
+
+  env | grep USE_NEW_NVSTREAMMUX || true
+  gst-inspect-1.0 nvstreammux
+  gst-inspect-1.0 nvv4l2decoder
+
+Bu sprintte DeepStream 9.0’ın current/legacy `nvstreammux` implementasyonu kullanılacaktır:
+
+  unset USE_NEW_NVSTREAMMUX
+
+Worker entrypoint inherited environment’a güvenmemeli; `USE_NEW_NVSTREAMMUX` seçimini açıkça belirlemelidir.
+
+`gst-inspect-1.0 nvstreammux` çıktısında en az şu properties görünmeli:
+
+- batch-size
+- batched-push-timeout
+- width
+- height
+- enable-padding
+- gpu-id
+- live-source
+- nvbuf-memory-type
+- num-surfaces-per-frame
+- buffer-pool-size
+- attach-sys-ts
+
+Bunlar görünmüyorsa yanlış/new mux yüklenmiştir. Bilinmeyen properties’i sessizce ignore etme. Structured startup failure üret:
+
+  VIDEO_STREAMMUX_CONTRACT_FAILED
+
+New nvstreammux’a kendiliğinden geçme. Gelecekte new mux’a geçiş ayrı, ölçülen bir migration olacaktır.
+
+----------------------------------------------------------------------
+B. ELEMENTLERİN C++ İÇİNDE OLUŞTURULMASI
+----------------------------------------------------------------------
+
+En az şu elementleri `gst_element_factory_make()` ile oluştur:
+
+- `pipeline`
+- `filesrc`
+- `qtdemux`
+- `h264parse`
+- `nvv4l2decoder`
+- `nvstreammux`
+- `appsink`
+
+Her element null kontrolünden geçmeli. Eksik elementte pipeline PLAYING yapılmamalı.
+
+Örnek logical ownership:
+
+  GstElement* pipeline;
+  GstElement* source;
+  GstElement* demux;
+  GstElement* parser;
+  GstElement* decoder;
+  GstElement* streammux;
+  GstElement* sink;
+
+Bunların tamamı RAII wrapper veya kesin teardown path ile yönetilmeli.
+
+----------------------------------------------------------------------
+C. FILESRC / DEMUX / PARSER BAĞLANTISI
+----------------------------------------------------------------------
+
+`filesrc.location` local staged video path’e ayarlanır.
+
+Statik link:
+
+  filesrc → qtdemux
+
+`qtdemux` source pad’i dynamic olduğu için doğrudan `gst_element_link_many()` ile parser’a bağlama.
+
+`pad-added` callback kaydet:
+
+  g_signal_connect(
+      demux,
+      "pad-added",
+      G_CALLBACK(on_demux_pad_added),
+      parser
+  );
+
+Callback içinde:
+
+1. Yeni pad caps’ini oku.
+2. Caps `video/x-h264` ise parser sink pad’ine bağla.
+3. Audio/subtitle pad’lerini ignore et.
+4. Birden fazla video stream varsa approved `stream_index` dışındakileri ignore et.
+5. Link sonucu `GST_PAD_LINK_OK` değilse structured failure kaydet.
+6. Pad ve caps referanslarını her exit path’inde bırak.
+
+Bu sprintte Friends.mp4 H.264 acceptance zorunludur.
+
+H.265 desteği eklenirse:
+
+  qtdemux → h265parse → nvv4l2decoder
+
+şeklinde explicit branch kullanılmalı. `decodebin` veya `uridecodebin` kullanıp software decoder seçmesine izin verme.
+
+----------------------------------------------------------------------
+D. NVIDIA DECODER AYARLARI
+----------------------------------------------------------------------
+
+`nvv4l2decoder` üzerinde dGPU için açıkça:
+
+  gpu-id = configured container GPU index
+  cudadec-memtype = 0
+  drop-frame-interval = 0
+  skip-frames = 0
+  num-extra-surfaces = 4
+
+kullan.
+
+`cudadec-memtype=0`, decoder output’unu CUDA device memory olarak ister.
+
+Şunları yapma:
+
+- pinned memory output
+- unified memory’i varsayılan bırakmak
+- frame dropping
+- keyframe-only decode
+- low-latency-mode’u B-frame içeren normal MP4’te rastgele açmak
+
+Decoder source caps en az:
+
+  video/x-raw(memory:NVMM), format=NV12
+
+olmalıdır.
+
+Caps negotiation system-memory `video/x-raw` üretirse fail et:
+
+  VIDEO_GPU_DECODER_MEMORY_CONTRACT_FAILED
+
+----------------------------------------------------------------------
+E. DECODER’I NVSTREAMMUX REQUEST PAD’E BAĞLAMA
+----------------------------------------------------------------------
+
+`nvstreammux` normal statik sink pad kullanmaz. `sink_%u` request pad ister.
+
+Tek video job için source index `0`:
+
+  sink_0
+
+Modern GStreamer API mevcutsa:
+
+  GstPad* mux_sink_pad =
+      gst_element_request_pad_simple(streammux, "sink_0");
+
+Container’daki GStreamer API bunu sağlamıyorsa NVIDIA sample ile uyumlu:
+
+  gst_element_get_request_pad(streammux, "sink_0");
+
+kullan.
+
+Decoder’ın static source pad’ini al:
+
+  GstPad* decoder_src_pad =
+      gst_element_get_static_pad(decoder, "src");
+
+Sonra:
+
+  gst_pad_link(decoder_src_pad, mux_sink_pad)
+
+çalıştır ve sonucu kesin olarak kontrol et.
+
+Başarılı olmayan link:
+
+  VIDEO_STREAMMUX_PAD_LINK_FAILED
+
+Teardown sırasında:
+
+1. decoder source pad unref
+2. `gst_element_release_request_pad(streammux, mux_sink_pad)`
+3. mux request pad unref
+
+yapılmalı.
+
+Request pad’i serbest bırakmadan pipeline yok edilmemeli.
+
+----------------------------------------------------------------------
+F. LEGACY NVSTREAMMUX PROPERTY’LERİ
+----------------------------------------------------------------------
+
+Tek bir offline video source’u temporal batch halinde işliyoruz.
+
+RetinaFace max batch 8 olduğundan:
+
+  batch-size = 8
+  batched-push-timeout = 40000
+  gpu-id = configured GPU index
+  live-source = FALSE
+  nvbuf-memory-type = 2
+  num-surfaces-per-frame = 1
+  buffer-pool-size = 8
+  attach-sys-ts = FALSE
+  sync-inputs = FALSE
+  sort-batch = TRUE
+  compute-hw = 1
+
+`nvbuf-memory-type=2`, dGPU CUDA device memory’dir.
+
+Mux scaling kullanma. Detector letterbox/resize ortak CUDA FacePipeline’da yapılacaktır.
+
+Mux width/height değerlerini video probe’dan gelen coded frame width/height ile aynı ayarla:
+
+  width = source coded width
+  height = source coded height
+  enable-padding = FALSE
+
+Böylece mux rastgele 640×640 preprocessing sahibi olmaz. RetinaFace scale/pad contract’ının tek sahibi CUDA preprocessing kernel’idir.
+
+`batched-push-timeout=40000` microsecond başlangıç değeridir:
+
+- Batch sekiz frame dolarsa hemen downstream push edilir.
+- Dolmazsa timeout sonunda partial dynamic batch gönderilir.
+- EOS geldiğinde son partial batch kaybolmamalıdır.
+
+Full-video testinde:
+
+  processed_frame_count == accepted_decoded_frame_count
+
+olduğu doğrulanmalı.
+
+----------------------------------------------------------------------
+G. APPSINK BOUNDED BACKPRESSURE
+----------------------------------------------------------------------
+
+`nvstreammux → appsink` statik olarak link edilir.
+
+Appsink:
+
+  emit-signals = FALSE
+  sync = FALSE
+  max-buffers = 2
+  drop = FALSE
+
+olmalı.
+
+Caps:
+
+  video/x-raw(memory:NVMM), format=NV12
+
+olarak sınırlandırılmalı.
+
+`drop=FALSE` zorunludur. Inference yavaşlarsa decoder/pipeline bounded biçimde backpressure almalıdır; frame sessizce düşmemelidir.
+
+C++ consumer loop:
+
+1. `gst_app_sink_try_pull_sample()` bounded timeout ile çağrılır.
+2. Timeout’ta cancellation flag ve GStreamer bus kontrol edilir.
+3. Sample geldiyse `GstBuffer` alınır.
+4. `NvBufSurface` ve `NvDsBatchMeta` çıkarılır.
+5. FacePipeline batch çalıştırılır.
+6. Tracker frame sırasıyla update edilir.
+7. Observation writer’a yazılır.
+8. CUDA batch işi bitmeden sample/buffer release edilmez.
+
+Python’a frame callback yapılmaz.
+
+----------------------------------------------------------------------
+H. NVBUFSURFACE VE NVDSBATCHMETA OKUMA
+----------------------------------------------------------------------
+
+Her appsink sample için:
+
+  GstBuffer* buffer = gst_sample_get_buffer(sample);
+
+Önce:
+
+  NvDsBatchMeta* batch_meta =
+      gst_buffer_get_nvds_batch_meta(buffer);
+
+kontrol edilir.
+
+`batch_meta == nullptr` ise:
+
+  VIDEO_BATCH_META_MISSING
+
+hatası üret.
+
+`GstBuffer` map yalnız `NvBufSurface` descriptor’ına erişmek içindir; pixel plane’i CPU’ya kopyalamak için değildir.
+
+Logical pattern:
+
+  GstMapInfo map_info{};
+  gst_buffer_map(buffer, &map_info, GST_MAP_READ);
+  NvBufSurface* surface =
+      reinterpret_cast<NvBufSurface*>(map_info.data);
+
+`NvDsBatchMeta.frame_meta_list` üzerinde iterate et.
+
+Her `NvDsFrameMeta` için:
+
+  batch_id = frame_meta->batch_id
+  surface_params = surface->surfaceList[batch_id]
+
+kullan.
+
+`batch_id` bounds kontrolü:
+
+  0 <= batch_id < surface->batchSize
+
+Her `DeviceImageView` şunları içermeli:
+
+- `surface_params.dataPtr`
+- width
+- height
+- pitch
+- color format
+- layout/memory type
+- frame_meta->batch_id
+- frame_meta->source_id
+- frame_meta->pad_index
+- frame_meta->frame_num
+- frame_meta->buf_pts
+- source_frame_width
+- source_frame_height
+
+Önemli:
+
+- Batched `GstBuffer` PTS’sini bütün framelere kopyalama.
+- Her frame için `NvDsFrameMeta.buf_pts` kullan.
+- `NvDsFrameMeta` içindeki original source dimensions bilgisini koru.
+- `NvBufSurfaceSyncForCpu()` çağırma.
+- Pixel plane’i host pointer olarak dereference etme.
+- `cudaMemcpyDeviceToHost` ile full frame kopyalama.
+- CPU RGB/NV12 buffer oluşturma.
+
+Memory invariant:
+
+  decoder cudadec-memtype == device
+  streammux nvbuf-memory-type == cuda-device
+  surface memType device-compatible
+  dataPtr non-null
+  colorFormat supported NV12
+  pitch valid
+
+Bunlardan biri bozulursa CPU fallback yerine fail et.
+
+----------------------------------------------------------------------
+I. CUDA ASENKRON ÖMÜR KURALI
+----------------------------------------------------------------------
+
+`NvBufSurface` decoder/mux buffer pool’una aittir.
+
+CUDA kernel ve TensorRT inference devam ederken `GstSample`/`GstBuffer` release edilirse upstream aynı surface’ı yeniden kullanabilir ve corruption oluşur.
+
+Bu nedenle:
+
+1. İlgili `GstSample` batch boyunca retain edilir.
+2. FacePipeline aynı configured CUDA stream’de preprocess/inference/alignment/embed çalıştırır.
+3. Batch sonunda CUDA event record edilir.
+4. Buffer release edilmeden event completion garanti edilir.
+5. Frame başına `cudaDeviceSynchronize()` yapılmaz.
+6. Basit ilk implementation’da batch başına stream/event synchronize kabul edilir.
+7. Sonraki optimizasyonda completion callback/event queue ile buffer async release edilebilir.
+
+Tek frame başına sync yasak; batch başına güvenli ownership barrier zorunludur.
+
+----------------------------------------------------------------------
+J. NATIVE CONSUMER SIRASI
+----------------------------------------------------------------------
+
+Her mux batch’inde exact sıra:
+
+for each NvDsFrameMeta:
+  map batch_id → DeviceImageView
+  preserve original PTS and source coordinates
+
+FacePipeline.infer_batch(DeviceImageView[]):
+  NV12 CUDA preprocess
+  RetinaFace TensorRT
+  GPU bbox/landmark decode
+  GPU NMS
+  original-coordinate reverse map
+  quality calculation
+  CUDA five-point alignment
+  GlintR100 dynamic face batch
+  GPU L2 normalization
+  compact FaceObservation[]
+
+Sonra observation’ları PTS/frame order’a göre:
+
+  NativeTracker.update(frame_observations)
+
+ile tracker’a gönder.
+
+Son olarak:
+
+  ObservationWriter.write_frame(
+      frame metadata,
+      detections,
+      local track IDs
+  )
+
+çalıştır.
+
+Tracking `appsink`ten önce GStreamer pad probe içinde yapılmayacak.
+
+----------------------------------------------------------------------
+K. GSTREAMER BUS / EOS / ERROR / CANCEL
+----------------------------------------------------------------------
+
+Bus mesajlarını işle:
+
+- `GST_MESSAGE_ERROR`
+- `GST_MESSAGE_WARNING`
+- `GST_MESSAGE_EOS`
+- `GST_MESSAGE_STATE_CHANGED`
+
+ERROR durumunda:
+
+- GError/debug details internal log’da sanitize edilerek tutulur.
+- Client’a raw filesystem/model path verilmez.
+- Partial output canonical artifact olarak publish edilmez.
+
+EOS durumunda:
+
+1. mux’un son partial batch’i consumer tarafından çekilir.
+2. tracker flush edilir.
+3. footer yazılır.
+4. protobuf/zstd kapatılır.
+5. artifact validate edilir.
+6. pipeline NULL yapılır.
+
+Cancel durumunda:
+
+1. atomic cancellation flag set edilir.
+2. pull loop en geç bounded timeout sonunda uyanır.
+3. EOS beklenmeden pipeline NULL yapılabilir.
+4. tracker/artifact `cancelled` footer veya discarded partial olarak kapanır.
+5. canonical MinIO promote yapılmaz.
+6. process exit code structured cancellation olur.
+
+Teardown exact sıra:
+
+1. pipeline state → NULL
+2. pending samples/buffers release
+3. mux request pads release
+4. bus unref
+5. elements/pipeline unref
+6. CUDA events/streams/contexts release
+7. TensorRT contexts release
+8. local partial files cleanup
+
+----------------------------------------------------------------------
+L. DOĞRULAMA TESTLERİ
+----------------------------------------------------------------------
+
+Aşağıdaki testler zorunlu:
+
+1. Element contract:
+   - exact factories mevcut
+   - legacy/current mux selected
+   - expected properties mevcut
+
+2. Request-pad test:
+   - `sink_0` alınabiliyor
+   - decoder src → mux sink_0 link `GST_PAD_LINK_OK`
+   - teardown sonrası request pad release
+
+3. Memory contract:
+   - decoder output NVMM
+   - decoder `cudadec-memtype=0`
+   - mux `nvbuf-memory-type=2`
+   - `NvBufSurface.dataPtr != nullptr`
+   - CPU pixel mapping yapılmamış
+
+4. Metadata contract:
+   - `NvDsBatchMeta != nullptr`
+   - frame metadata count batch size ile uyumlu
+   - `batch_id` doğru surface’e gidiyor
+   - per-frame PTS korunuyor
+   - source dimensions korunuyor
+
+5. Partial batch:
+   - max frame count 10 iken batch 8 + batch 2
+   - hiçbir frame kaybolmuyor
+
+6. EOS:
+   - son batch flush
+   - clean NULL transition
+   - no hang
+
+7. Backpressure:
+   - inference yavaşlatıldığında bounded memory
+   - frame drop yok
+
+8. Cancel:
+   - long Friends run sırasında cancel
+   - bounded worker exit
+   - canonical artifact yok
+
+9. Real Friends smoke:
+   - decoded frame > 0
+   - batch size distribution raporlanıyor
+   - actual decoder factory `nvv4l2decoder`
+   - NVMM/device memory doğrulanıyor
+   - real per-frame PTS
+   - detections/embeddings/tracks > 0
+
+Raw runtime evidence’de GStreamer pipeline topology ve selected properties yazılmalı.
+
+----------------------------------------------------------------------
+M. İÇERİDEKİ NVIDIA SAMPLE’LARINI REFERANS AL
+----------------------------------------------------------------------
+
+Container içinde şu source’ları oku:
+
+  /opt/nvidia/deepstream/deepstream/sources/apps/sample_apps/deepstream-test1
+  /opt/nvidia/deepstream/deepstream/sources/apps/sample_apps/deepstream-test2
+  /opt/nvidia/deepstream/deepstream/sources/apps/sample_apps/deepstream-test3
+  /opt/nvidia/deepstream/deepstream/sources/apps/sample_apps/deepstream-appsrc-test
+
+Özellikle:
+
+- source creation
+- dynamic demux pad linking
+- `sink_%u` request-pad acquisition
+- `NvDsBatchMeta` iteration
+- bus handling
+- pipeline teardown
+
+pattern’lerini doğrula.
+
+Ancak NVIDIA sample’daki `nvinfer`, `nvtracker`, `nvdsosd` ve renderer zincirini kopyalama. Bizim downstream zincirimiz:
+
+  nvstreammux → appsink → common CUDA FacePipeline → NativeTracker
+
+olacaktır.
+
+Reference decision log’a:
+
+- official documentation URL
+- DeepStream exact version
+- sample source path
+- adapte edilen pattern
+- adapte edilmeyen nvinfer/nvtracker/OSD parçaları
+- NVIDIA license/provenance
+
+kaydedilsin.

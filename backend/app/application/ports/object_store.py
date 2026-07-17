@@ -27,4 +27,15 @@ class ObjectStore(ABC):
     async def stat(self, key: str) -> ObjectStat | None: ...
 
     @abstractmethod
+    async def get(self, key: str) -> bytes | None: ...
+
+    @abstractmethod
     async def delete(self, key: str) -> None: ...
+
+    @abstractmethod
+    async def presigned_get_url(
+        self,
+        key: str,
+        expiry_seconds: int = 3600,
+        response_content_type: str | None = None,
+    ) -> str | None: ...

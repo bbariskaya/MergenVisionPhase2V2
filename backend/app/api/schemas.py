@@ -107,6 +107,37 @@ class FaceHistoryResponse(_PublicBaseModel):
     history: list[HistoryEntry]
 
 
+class IdentitySummary(_PublicBaseModel):
+    face_id: str
+    status: str
+    name: str | None = None
+    metadata: dict[str, Any]
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class IdentityListResponse(_PublicBaseModel):
+    request_id: str
+    count: int
+    identities: list[IdentitySummary]
+
+
+class FaceSampleResponse(_PublicBaseModel):
+    sample_id: str
+    face_id: str
+    state: str
+    image_url: str | None = None
+    created_at: str | None = None
+    activated_at: str | None = None
+
+
+class FaceSamplesResponse(_PublicBaseModel):
+    request_id: str
+    face_id: str
+    count: int
+    samples: list[FaceSampleResponse]
+
+
 class RecognitionResultSummary(_PublicBaseModel):
     result_id: str
     face_id: str

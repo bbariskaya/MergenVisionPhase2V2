@@ -21,9 +21,12 @@ from app.application.services.image_recognition_service import ImageRecognitionS
 from app.application.services.video_upload_service import VideoUploadService
 from app.domain.errors import (
     DomainError,
+    IdempotencyConflictError,
     InvalidMediaError,
+    JobNotFoundError,
     PayloadTooLargeError,
     UnsupportedMediaTypeError,
+    VideoNotFoundError,
 )
 from app.infrastructure.config import settings
 from app.infrastructure.health.readiness import (
@@ -71,7 +74,8 @@ def _create_image_recognition_service() -> ImageRecognitionService:
 
 def _create_face_controller() -> FaceController:
     service = _create_image_recognition_service()
-    return FaceController(service)
+    object_store = MinIOObjectStore()
+    return FaceController(service, object_store=object_store)
 
 
 def _create_video_upload_service() -> VideoUploadService:
@@ -208,10 +212,54 @@ def create_app(readiness_probe: ReadinessProbe | None = None) -> FastAPI:
     @app.exception_handler(InvalidMediaError)
     async def _invalid_media_handler(request: Request, exc: InvalidMediaError) -> JSONResponse:
         request_id = str(getattr(request.state, "request_id", "unknown"))
+        message = str(exc).lower()
+        if "probe timed out" in message or "probe timeout" in message:
+            code = "VIDEO_PROBE_TIMEOUT"
+        elif "ffprobe" in message:
+            code = "VIDEO_PROBE_FAILED"
+        else:
+            code = "INVALID_MEDIA"
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             headers={"X-Request-ID": request_id},
-            content=_safe_error_body(request_id, "INVALID_MEDIA", str(exc)),
+            content=_safe_error_body(
+                request_id,
+                code,
+                "Video could not be probed or is invalid."
+                if code.startswith("VIDEO_PROBE")
+                else str(exc),
+            ),
+        )
+
+    @app.exception_handler(IdempotencyConflictError)
+    async def _idempotency_conflict_handler(
+        request: Request, exc: IdempotencyConflictError
+    ) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            headers={"X-Request-ID": request_id},
+            content=_safe_error_body(request_id, "IDEMPOTENCY_CONFLICT", str(exc)),
+        )
+
+    @app.exception_handler(JobNotFoundError)
+    async def _job_not_found_handler(request: Request, exc: JobNotFoundError) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            headers={"X-Request-ID": request_id},
+            content=_safe_error_body(request_id, "JOB_NOT_FOUND", str(exc)),
+        )
+
+    @app.exception_handler(VideoNotFoundError)
+    async def _video_not_found_handler(
+        request: Request, exc: VideoNotFoundError
+    ) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            headers={"X-Request-ID": request_id},
+            content=_safe_error_body(request_id, "VIDEO_NOT_FOUND", str(exc)),
         )
 
     @app.exception_handler(HTTPException)

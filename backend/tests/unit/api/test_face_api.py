@@ -22,7 +22,7 @@ from app.application.services.image_recognition_service import (
     RecognizeResult,
 )
 from app.domain.entities.process_record import ProcessRecord
-from app.domain.value_objects import BoundingBox, FaceId, ProcessId
+from app.domain.value_objects import BoundingBox, FaceId, ProcessId, SampleId
 
 
 def _valid_jpeg_header(width: int = 64, height: int = 64) -> bytes:
@@ -148,6 +148,51 @@ class _FakeImageRecognitionService:
                 self.created_at = None
                 self.completed_at = None
         return _Process(process_id)
+
+    async def list_identities(self, query: str | None = None, status: str | None = None) -> list[Any]:
+        items: list[Any] = []
+        for face_id, (name, metadata) in self.known_identities.items():
+            if status and status != "known":
+                continue
+            if query and query.lower() not in name.lower():
+                continue
+
+            class _Identity:
+                def __init__(self, face_id: FaceId, name: str, metadata: dict[str, Any]) -> None:
+                    self.face_id = face_id
+                    self.status = "known"
+                    self.display_name = name
+                    self.identity_metadata = metadata
+                    self.created_at = None
+                    self.updated_at = None
+
+            items.append(_Identity(face_id, name, metadata))
+        return items
+
+    async def list_face_samples(self, face_id: FaceId) -> list[Any]:
+        class _Sample:
+            def __init__(self, sample_id: str, face_id: FaceId) -> None:
+                self.sample_id = sample_id
+                self.face_id = face_id
+                self.state = "active"
+                self.object_key = None
+                self.created_at = None
+                self.activated_at = None
+        return [_Sample("018f0000-0000-0000-0000-0000000000a1", face_id)]
+
+    async def add_face_sample(self, face_id: FaceId, image_bytes: bytes) -> Any:
+        class _Sample:
+            def __init__(self, sample_id: str, face_id: FaceId) -> None:
+                self.sample_id = SampleId(UUID(sample_id))
+                self.face_id = face_id
+                self.state = "active"
+                self.object_key = f"faces/{face_id}/sample.jpg"
+                self.created_at = None
+                self.activated_at = None
+        return _Sample("018f0000-0000-0000-0000-0000000000a2", face_id)
+
+    async def delete_face_sample(self, face_id: FaceId, sample_id: SampleId) -> None:
+        pass
 
 
 @pytest.fixture
@@ -303,3 +348,74 @@ def test_get_process_returns_completed_details(client: TestClient, fake_controll
     assert data["processType"] == "image_recognize"
     assert data["status"] == "completed"
     assert data["faceCount"] == 1
+
+
+def test_list_identities_returns_known_faces(client: TestClient, fake_controller: FaceController) -> None:
+    fake_controller._service.next_detections = [
+        _FakeDetection(bbox=BoundingBox(x=1, y=2, width=3, height=4), confidence=0.9),
+    ]
+    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    face_id = recognized.json()["faces"][0]["faceId"]
+    client.post(f"/api/v1/faces/{face_id}/enroll", json={"name": "Rachel"})
+
+    response = client.get("/api/v1/faces")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 1
+    assert len(data["identities"]) == 1
+    assert data["identities"][0]["faceId"] == face_id
+    assert data["identities"][0]["status"] == "known"
+    assert data["identities"][0]["name"] == "Rachel"
+
+
+def test_list_identities_supports_search_query(client: TestClient, fake_controller: FaceController) -> None:
+    fake_controller._service.next_detections = [
+        _FakeDetection(bbox=BoundingBox(x=1, y=2, width=3, height=4), confidence=0.9),
+    ]
+    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    face_id = recognized.json()["faces"][0]["faceId"]
+    client.post(f"/api/v1/faces/{face_id}/enroll", json={"name": "Rachel"})
+
+    response = client.get("/api/v1/faces?search=monica")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 0
+    assert data["identities"] == []
+
+    response = client.get("/api/v1/faces?search=rachel")
+    data = response.json()
+    assert data["count"] == 1
+
+
+def test_list_face_samples_returns_samples(client: TestClient, fake_controller: FaceController) -> None:
+    fake_controller._service.next_detections = [
+        _FakeDetection(bbox=BoundingBox(x=1, y=2, width=3, height=4), confidence=0.9),
+    ]
+    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    face_id = recognized.json()["faces"][0]["faceId"]
+
+    response = client.get(f"/api/v1/faces/{face_id}/samples")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["faceId"] == face_id
+    assert data["count"] == 1
+    assert "sampleId" in data["samples"][0]
+    assert data["samples"][0]["state"] == "active"
+
+
+def test_add_face_sample_returns_new_sample(client: TestClient, fake_controller: FaceController) -> None:
+    fake_controller._service.next_detections = [
+        _FakeDetection(bbox=BoundingBox(x=1, y=2, width=3, height=4), confidence=0.9),
+    ]
+    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    face_id = recognized.json()["faces"][0]["faceId"]
+
+    response = client.post(
+        f"/api/v1/faces/{face_id}/samples",
+        files={"image": ("add.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["faceId"] == face_id
+    assert data["state"] == "active"
+    assert "/image" in data["imageUrl"]

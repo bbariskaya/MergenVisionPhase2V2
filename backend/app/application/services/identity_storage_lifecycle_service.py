@@ -258,6 +258,31 @@ class IdentityStorageLifecycleService:
             await self._fail_sample(sample_id, "activation_failed")
             raise IdentityResolutionError(f"Sample activation failed: {exc}") from exc
 
+    async def verify_identity_match(
+        self,
+        face_id: FaceId,
+        embedding: Sequence[float],
+        threshold: float,
+    ) -> bool:
+        """Return True when an embedding matches an existing active identity.
+
+        If the identity has no active samples yet, the check passes so the first
+        sample can be added without a prior match.
+        """
+        self._validate_threshold(threshold)
+        self._validate_embedding(embedding)
+
+        async with self._unit_of_work_factory() as uow:
+            existing_samples = await uow.face_samples.list_active_by_face_id(face_id)
+            if not existing_samples:
+                return True
+
+        candidates = await self._vector_store.query(embedding, top_k=1)
+        if not candidates:
+            return False
+        top = max(candidates, key=lambda c: c.score)
+        return top.face_id == face_id and top.score >= threshold
+
     async def enroll_identity(
         self,
         face_id: FaceId,
@@ -357,6 +382,29 @@ class IdentityStorageLifecycleService:
                     sample.sample_id,
                     exc,
                 )
+
+    async def delete_sample(self, face_id: FaceId, sample_id: SampleId) -> None:
+        async with self._unit_of_work_factory() as uow:
+            identity = await uow.face_identities.get_by_id(face_id)
+            if identity is None:
+                raise ValidationError("Face identity not found")
+            sample = await uow.face_samples.get_by_id(sample_id)
+            if sample is None or sample.face_id != face_id:
+                raise ValidationError("Sample not found for this identity")
+            if not sample.is_active:
+                return
+            sample.mark_inactive()
+            await uow.face_samples.update(sample)
+            await uow.commit()
+            object_key = sample.object_key
+
+        try:
+            await self._vector_store.set_active(sample_id, False)
+        except Exception as exc:
+            logger.warning("Qdrant deactivation warning for sample %s: %s", sample_id, exc)
+
+        if object_key:
+            await self._delete_object_best_effort(object_key)
 
     # ------------------------------------------------------------------
     # Core resolution (shared)

@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, ScanFace, Video, X } from 'lucide-react'
+import { LayoutDashboard, ScanFace, Users, Video, X } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
 
 export interface SidebarProps {
@@ -16,6 +16,7 @@ interface NavItem {
 const mainItems: NavItem[] = [
   { to: '/', label: 'Genel Bakış', icon: LayoutDashboard },
   { to: '/identify', label: 'Yüz Tanıma', icon: ScanFace },
+  { to: '/people', label: 'Kişiler', icon: Users },
   { to: '/videos', label: 'Video Tanıma', icon: Video },
 ]
 

@@ -7,6 +7,7 @@ import EnrollPage from '@/pages/EnrollPage'
 import FaceDetailPage from '@/pages/FaceDetailPage'
 import IdentifyPage from '@/pages/IdentifyPage'
 import NotFoundPage from '@/pages/NotFoundPage'
+import PeoplePage from '@/pages/PeoplePage'
 import ProcessDetailPage from '@/pages/ProcessDetailPage'
 import VideoPage from '@/pages/VideoPage'
 import { Route, Routes } from 'react-router'
@@ -19,6 +20,7 @@ function AppContent() {
       <Routes>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/identify" element={<IdentifyPage />} />
+        <Route path="/people" element={<PeoplePage />} />
         <Route path="/enroll/:faceId" element={<EnrollPage />} />
         <Route path="/faces/:faceId" element={<FaceDetailPage />} />
         <Route path="/processes/:processId" element={<ProcessDetailPage />} />

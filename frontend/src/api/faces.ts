@@ -6,6 +6,9 @@ import type {
   EnrollResponse,
   FaceDetail,
   FaceHistoryResponse,
+  FaceSample,
+  FaceSamplesResponse,
+  IdentityListResponse,
   RecognizeResponse,
 } from './types'
 
@@ -27,15 +30,16 @@ export function useEnrollMutation() {
   const queryClient = useQueryClient()
   return useMutation<EnrollResponse, Error, EnrollRequest>({
     mutationFn: async ({ face_id, name, metadata }) => {
-      return apiFetch<EnrollResponse>('/faces/enroll', {
+      return apiFetch<EnrollResponse>(`/faces/${face_id}/enroll`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ face_id, name, metadata }),
+        body: JSON.stringify({ name, metadata }),
       })
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.face(variables.face_id) })
       queryClient.invalidateQueries({ queryKey: queryKeys.faceHistory(variables.face_id) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.faces({}) })
     },
   })
 }
@@ -62,6 +66,67 @@ export function useDeleteFaceMutation() {
     mutationFn: (faceId) => apiFetch(`/faces/${faceId}`, { method: 'DELETE' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['face'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.faces({}) })
     },
+  })
+}
+
+export interface AddFaceSampleVariables {
+  faceId: string
+  image: File
+}
+
+export function useAddFaceSampleMutation() {
+  const queryClient = useQueryClient()
+  return useMutation<FaceSample, Error, AddFaceSampleVariables>({
+    mutationFn: async ({ faceId, image }) => {
+      const formData = new FormData()
+      formData.append('image', image)
+      return apiUpload<FaceSample>(`/faces/${faceId}/samples`, formData)
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.faceSamples(variables.faceId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.face(variables.faceId) })
+    },
+  })
+}
+
+export interface DeleteFaceSampleVariables {
+  faceId: string
+  sampleId: string
+}
+
+export function useDeleteFaceSampleMutation() {
+  const queryClient = useQueryClient()
+  return useMutation<void, Error, DeleteFaceSampleVariables>({
+    mutationFn: async ({ faceId, sampleId }) => {
+      return apiFetch(`/faces/${faceId}/samples/${sampleId}`, { method: 'DELETE' })
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.faceSamples(variables.faceId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.face(variables.faceId) })
+    },
+  })
+}
+
+export function useFaces(params: { search?: string } = {}) {
+  return useQuery({
+    queryKey: queryKeys.faces(params),
+    queryFn: () => {
+      const searchParams = new URLSearchParams()
+      if (params.search && params.search.trim()) {
+        searchParams.set('search', params.search.trim())
+      }
+      const query = searchParams.toString()
+      return apiFetch<IdentityListResponse>(`/faces${query ? `?${query}` : ''}`)
+    },
+  })
+}
+
+export function useFaceSamples(faceId: string) {
+  return useQuery({
+    queryKey: queryKeys.faceSamples(faceId),
+    queryFn: () => apiFetch<FaceSamplesResponse>(`/faces/${faceId}/samples`),
+    enabled: faceId.length > 0,
   })
 }

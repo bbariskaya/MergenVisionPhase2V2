@@ -28,16 +28,6 @@ from app.application.services.video_upload_service import (
     VideoSnapshot,
     VideoUploadService,
 )
-from app.domain.errors import (
-    DomainError,
-    IdempotencyConflictError,
-    InvalidMediaError,
-    JobNotFoundError,
-    PayloadTooLargeError,
-    UnsupportedMediaTypeError,
-    ValidationError,
-    VideoNotFoundError,
-)
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -50,68 +40,6 @@ class _UploadFileStream:
 
     async def read(self, size: int) -> bytes:
         return await self._upload.read(size)
-
-
-def _error_response(
-    request: Request, code: str, message: str, status_code: int
-) -> HTTPException:
-    request_id = str(getattr(request.state, "request_id", "unknown"))
-    return HTTPException(
-        status_code=status_code,
-        detail={
-            "requestId": request_id,
-            "error": {
-                "code": code,
-                "message": message,
-                "retryable": False,
-                "details": {},
-            },
-        },
-    )
-
-
-def _handle_domain_error(request: Request, exc: DomainError) -> HTTPException:
-    request_id = str(getattr(request.state, "request_id", "unknown"))
-    if isinstance(exc, IdempotencyConflictError):
-        status_code = status.HTTP_409_CONFLICT
-        code = "IDEMPOTENCY_CONFLICT"
-    elif isinstance(exc, JobNotFoundError | VideoNotFoundError):
-        status_code = status.HTTP_404_NOT_FOUND
-        code = "RESOURCE_NOT_FOUND"
-    elif isinstance(exc, PayloadTooLargeError):
-        status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
-        code = "PAYLOAD_TOO_LARGE"
-    elif isinstance(exc, UnsupportedMediaTypeError):
-        status_code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
-        code = "UNSUPPORTED_MEDIA_TYPE"
-    elif isinstance(exc, InvalidMediaError):
-        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        code = "INVALID_MEDIA"
-    elif isinstance(exc, ValidationError):
-        status_code = status.HTTP_400_BAD_REQUEST
-        code = "INVALID_REQUEST"
-    else:
-        status_code = status.HTTP_400_BAD_REQUEST
-        code = "INVALID_REQUEST"
-
-    message = str(exc)
-    if code == "INVALID_MEDIA" and ("probe timed out" in message.lower() or "probe timeout" in message.lower()):
-        code = "VIDEO_PROBE_TIMEOUT"
-    elif code == "INVALID_MEDIA" and "ffprobe" in message.lower():
-        code = "VIDEO_PROBE_FAILED"
-
-    return HTTPException(
-        status_code=status_code,
-        detail={
-            "requestId": request_id,
-            "error": {
-                "code": code,
-                "message": message,
-                "retryable": False,
-                "details": {},
-            },
-        },
-    )
 
 
 def _to_recognize_response(
@@ -185,6 +113,22 @@ def _to_result_response(
     )
 
 
+def _require_idempotency_key(request: Request, key: str | None) -> None:
+    if key is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "requestId": str(getattr(request.state, "request_id", "unknown")),
+                "error": {
+                    "code": "MISSING_IDEMPOTENCY_KEY",
+                    "message": "Idempotency-Key header is required.",
+                    "retryable": False,
+                    "details": {},
+                },
+            },
+        )
+
+
 @router.post("/recognize", response_model=VideoRecognizeResponse, status_code=202)
 async def recognize_video(
     request: Request,
@@ -195,27 +139,17 @@ async def recognize_video(
     frames_per_second: float | None = Form(None, alias="framesPerSecond"),
     service: VideoUploadService = Depends(get_video_upload_service),
 ) -> VideoRecognizeResponse:
-    if idempotency_key is None:
-        raise _error_response(
-            request,
-            code="MISSING_IDEMPOTENCY_KEY",
-            message="Idempotency-Key header is required for mutating requests.",
-            status_code=status.HTTP_400_BAD_REQUEST,
-        )
-
+    _require_idempotency_key(request, idempotency_key)
+    assert idempotency_key is not None
     request_id = str(request.state.request_id)
-    try:
-        result = await service.submit_video_recognition(
-            request_id=request_id,
-            idempotency_key=idempotency_key,
-            file=_UploadFileStream(video),
-            sampling_mode=sampling_mode,
-            every_n_frames=every_n_frames,
-            frames_per_second=frames_per_second,
-        )
-    except DomainError as exc:
-        raise _handle_domain_error(request, exc) from exc
-
+    result = await service.submit_video_recognition(
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+        file=_UploadFileStream(video),
+        sampling_mode=sampling_mode,
+        every_n_frames=every_n_frames,
+        frames_per_second=frames_per_second,
+    )
     return _to_recognize_response(request_id, result)
 
 
@@ -226,10 +160,7 @@ async def get_video(
     service: VideoUploadService = Depends(get_video_upload_service),
 ) -> VideoResponse:
     request_id = str(request.state.request_id)
-    try:
-        snapshot = await service.get_video(video_id, request_id)
-    except DomainError as exc:
-        raise _handle_domain_error(request, exc) from exc
+    snapshot = await service.get_video(video_id, request_id)
     return _to_video_response(request_id, snapshot)
 
 
@@ -240,10 +171,7 @@ async def get_job(
     service: VideoUploadService = Depends(get_video_upload_service),
 ) -> VideoJobResponse:
     request_id = str(request.state.request_id)
-    try:
-        snapshot = await service.get_job(job_id, request_id)
-    except DomainError as exc:
-        raise _handle_domain_error(request, exc) from exc
+    snapshot = await service.get_job(job_id, request_id)
     return _to_job_response(request_id, snapshot)
 
 
@@ -254,10 +182,7 @@ async def cancel_job(
     service: VideoUploadService = Depends(get_video_upload_service),
 ) -> VideoJobResponse:
     request_id = str(request.state.request_id)
-    try:
-        snapshot = await service.cancel_job(job_id, request_id)
-    except DomainError as exc:
-        raise _handle_domain_error(request, exc) from exc
+    snapshot = await service.cancel_job(job_id, request_id)
     return _to_job_response(request_id, snapshot)
 
 
@@ -268,20 +193,10 @@ async def retry_job(
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     service: VideoUploadService = Depends(get_video_upload_service),
 ) -> VideoRecognizeResponse:
-    if idempotency_key is None:
-        raise _error_response(
-            request,
-            code="MISSING_IDEMPOTENCY_KEY",
-            message="Idempotency-Key header is required for retry requests.",
-            status_code=status.HTTP_400_BAD_REQUEST,
-        )
-
+    _require_idempotency_key(request, idempotency_key)
+    assert idempotency_key is not None
     request_id = str(request.state.request_id)
-    try:
-        result = await service.retry_job(job_id, idempotency_key, request_id)
-    except DomainError as exc:
-        raise _handle_domain_error(request, exc) from exc
-
+    result = await service.retry_job(job_id, idempotency_key, request_id)
     return _to_recognize_response(request_id, result)
 
 
@@ -292,17 +207,18 @@ async def get_job_result(
     service: VideoUploadService = Depends(get_video_upload_service),
 ) -> VideoJobResultResponse:
     request_id = str(request.state.request_id)
-    try:
-        snapshot = await service.get_job_result(job_id, request_id)
-    except DomainError as exc:
-        raise _handle_domain_error(request, exc) from exc
-
+    snapshot = await service.get_job_result(job_id, request_id)
     if not snapshot.result_available:
-        raise _error_response(
-            request,
-            code="JOB_NOT_COMPLETED",
-            message="Job result is not available until the job is completed.",
+        raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "requestId": request_id,
+                "error": {
+                    "code": "JOB_NOT_COMPLETED",
+                    "message": "Job result is not available until the job is completed.",
+                    "retryable": False,
+                    "details": {},
+                },
+            },
         )
-
     return _to_result_response(request_id, snapshot)

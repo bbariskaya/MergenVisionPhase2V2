@@ -227,7 +227,9 @@ def upgrade() -> None:
 
     # ------------------------------------------------------------------
     # process_event: append-only audit stream for process/job lifetime
+    # Re-create with cross-job FK and independent indexes.
     # ------------------------------------------------------------------
+    op.execute("DROP TABLE IF EXISTS process_event CASCADE")
     op.create_table(
         "process_event",
         sa.Column("event_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -278,7 +280,9 @@ def upgrade() -> None:
 
     # ------------------------------------------------------------------
     # outbox_event: durable cross-store/out-process notifications
+    # Re-create with dispatch/publish indexes.
     # ------------------------------------------------------------------
+    op.execute("DROP TABLE IF EXISTS outbox_event CASCADE")
     op.create_table(
         "outbox_event",
         sa.Column("outbox_event_id", postgresql.UUID(as_uuid=True), nullable=False),

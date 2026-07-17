@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities.face_identity import FaceIdentity
@@ -117,4 +117,23 @@ class SqlAlchemyFaceIdentityRepository:
         result = await self._session.execute(
             select(FaceIdentityOrm).order_by(desc(FaceIdentityOrm.created_at))
         )
+        return [_to_domain(orm) for orm in result.scalars().all()]
+
+    async def search(
+        self,
+        query: str | None = None,
+        status: str | None = None,
+        is_active: bool = True,
+    ) -> list[FaceIdentity]:
+        stmt = select(FaceIdentityOrm)
+        if is_active:
+            stmt = stmt.where(FaceIdentityOrm.is_active.is_(True))
+        if status:
+            stmt = stmt.where(FaceIdentityOrm.status == status)
+        if query:
+            stmt = stmt.where(
+                func.lower(FaceIdentityOrm.display_name).contains(query.lower())
+            )
+        stmt = stmt.order_by(desc(FaceIdentityOrm.created_at))
+        result = await self._session.execute(stmt)
         return [_to_domain(orm) for orm in result.scalars().all()]
