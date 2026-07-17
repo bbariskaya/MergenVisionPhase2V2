@@ -1,3 +1,50 @@
+TOOL / MCP DİSİPLİNİ — BAĞLAYICI
+
+Kod yazmadan önce ve her büyük karar noktasında aktif biçimde araç kullan:
+
+1. `codebase-memory-mcp` / mem0:
+   - Her yeni görev, context reseti, refactor ve test hatasında önce repository call graph/context ara.
+   - Mevcut symbol, caller, test ve migration’ı bulmadan duplicate kod yazma.
+   - Sprint sonunda önemli karar, blocker ve doğrulanmış sonucu mem0’a kaydet.
+
+2. `context7`:
+   - Kullandığın FastAPI, SQLAlchemy, Alembic, GStreamer, DeepStream, TensorRT, CUDA, Protobuf, MinIO veya Qdrant API’si version-sensitive ise önce resmi/current dokümantasyonu doğrula.
+   - Hafızadan API/property/function adı uydurma.
+
+3. `deepwiki` + gerçek upstream source:
+   - NVIDIA DeepStream, GStreamer, ByteTrack, RetinaFace veya TensorRT pattern’i adapte etmeden önce upstream architecture/call path incele.
+   - Sonra container içindeki gerçek sample source’u ve ilgili official source dosyasını doğrula.
+   - DeepWiki özeti tek başına kanıt değildir.
+
+4. `exa`:
+   - Context7/DeepWiki yetmezse yalnız official vendor docs, upstream release veya primary source bulmak için kullan.
+
+5. Shell/filesystem:
+   - Her iddiayı gerçek source, `git status`, test output, Docker runtime ve artifact ile doğrula.
+   - “PASS” yalnız gerçek çalıştırılmış command sonucu varsa kullanılabilir.
+
+6. `postman`:
+   - API endpoint acceptance olduğunda gerçek çalışan servis üzerinde kullan; mümkün değilse exact blocker yaz ve curl/TestClient fallback’i açıkça belirt.
+
+7. `playwright`:
+   - React UI/overlay sprintinde gerçek backend ile smoke/E2E çalıştır; backend/native-only sprintte `SKIPPED_NOT_RELEVANT`.
+
+8. `21st` ve Ruflo:
+   - Kesin yasak. Çağırma, önerme, generated code kullanma.
+
+Her final raporda araçları şu formatta yaz:
+
+- codebase-memory-mcp: USED / SKIPPED + neden
+- context7: USED / SKIPPED + neden
+- deepwiki: USED / SKIPPED + neden
+- exa: USED / SKIPPED + neden
+- postman: USED / SKIPPED + neden
+- playwright: USED / SKIPPED + neden
+- 21st: FORBIDDEN_NOT_USED
+- Ruflo: FORBIDDEN_NOT_USED
+
+Araçları göstermelik çağırma; her biri gerçek bir kararı, source path’i, API davranışını veya test kapsamını etkilemelidir.
+
 QWEN — CONTINUE IN BUILD MODE NOW
 M5 REAL NATIVE GPU VIDEO PIPELINE + M6 TRACKING/PERSISTENCE
 
