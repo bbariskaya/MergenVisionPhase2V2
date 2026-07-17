@@ -1,0 +1,56 @@
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.609: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmplex.so': libmjpegutils-2.1.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.646: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmpg123.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.658: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopenmpt.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.789: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/deepstream/libnvdsgst_udp.so': librivermax.so.1: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.848: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdvdread.so': libdvdread.so.8: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.849: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstspandsp.so': libjbig.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.861: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstsndfile.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.877: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpulseaudio.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.932: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstfluidsynthmidi.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.942: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlame.so': libmp3lame.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.962: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstresindvd.so': libdvdnav.so.4: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:22.967: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdtsdec.so': libdca.so.0: cannot open shared object file: No such file or directory
+[decode_smoke] mux request pad acquired: sink_0
+[decode_smoke] config: batch_size=1 batched_push_timeout=40000 us gpu_id=0
+Opening in BLOCKING MODE 
+[decode_smoke] demux video pad linked to parser
+[decode_smoke] ignoring non-video pad: audio/mpeg
+  frame frame_num=0 pts=41708us src=1920x1080 batch_id=0
+  surface batchSize=1 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3200000
+[batch 1] frames_in_batch=1
+  frame frame_num=1 pts=83416us src=1920x1080 batch_id=0
+  surface batchSize=1 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3600000
+[batch 2] frames_in_batch=1
+  frame frame_num=2 pts=125125us src=1920x1080 batch_id=0
+  surface batchSize=1 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3a00000
+[batch 3] frames_in_batch=1
+[decode_smoke] progress: batches=3319 frames=3319
+nvstreammux: Successfully handled EOS for source_id=0
+
+=== decode smoke summary ===
+batches: 6665
+frames: 6665
+NVMM surface seen: yes
+NVMM (cuda-device) memory: yes
+NvDsBatchMeta seen: yes
+batch frames  min: 1  max: 1  avg: 1.00
+wall time: 10032.92 ms (10.033 s)
+decode fps: 664.31
+video duration: 278.036 s
+effective speedup: 27.71x
+decode smoke PASSED

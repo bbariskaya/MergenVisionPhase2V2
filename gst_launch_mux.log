@@ -1,0 +1,45 @@
+0:00:00.003843378 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libmjpegutils-2.1.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:36.762: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmplex.so': libmjpegutils-2.1.so.0: cannot open shared object file: No such file or directory
+0:00:00.040748233 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:36.799: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmpg123.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+0:00:00.052611494 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:36.811: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopenmpt.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+0:00:00.182104393 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: librivermax.so.1: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:36.940: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/deepstream/libnvdsgst_udp.so': librivermax.so.1: cannot open shared object file: No such file or directory
+0:00:00.238194754 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00m           vadisplay gstvadisplay_drm.c:142:gst_va_display_drm_create_va_display:<vadisplaydrm0>[00m Failed to open /dev/dri/renderD128: No such file or directory
+0:00:00.238256352 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00m           vadisplay gstvadisplay_drm.c:142:gst_va_display_drm_create_va_display:<vadisplaydrm1>[00m Failed to open /dev/dri/renderD129: No such file or directory
+0:00:00.238280789 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00m           vadisplay gstvadisplay_drm.c:142:gst_va_display_drm_create_va_display:<vadisplaydrm2>[00m Failed to open /dev/dri/renderD130: No such file or directory
+0:00:00.238301795 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00m           vadisplay gstvadisplay_drm.c:142:gst_va_display_drm_create_va_display:<vadisplaydrm3>[00m Failed to open /dev/dri/renderD131: No such file or directory
+0:00:00.240885300 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libdvdread.so.8: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:36.999: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdvdread.so': libdvdread.so.8: cannot open shared object file: No such file or directory
+0:00:00.241773632 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libjbig.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:37.000: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstspandsp.so': libjbig.so.0: cannot open shared object file: No such file or directory
+0:00:00.244550852 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00m              ladspa gstladspa.c:509:plugin_init:<plugin171>[00m no LADSPA plugins found, check LADSPA_PATH
+0:00:00.253660962 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:37.012: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstsndfile.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+0:00:00.270194503 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:37.028: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpulseaudio.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+0:00:00.321863553 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00m         msdkcontext gstmsdkcontext.c:176:gst_msdk_context_use_vaapi:[00m Couldn't find a drm device node to open
+0:00:00.324632081 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:37.083: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstfluidsynthmidi.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+0:00:00.333691929 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libmp3lame.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:37.092: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlame.so': libmp3lame.so.0: cannot open shared object file: No such file or directory
+0:00:00.354081707 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libdvdnav.so.4: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:37.112: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstresindvd.so': libdvdnav.so.4: cannot open shared object file: No such file or directory
+0:00:00.359088375 [33m   32[00m 0x5e2135df2de0 [33;01mWARN   [00m [00;01;36m  GST_PLUGIN_LOADING gstplugin.c:883:_priv_gst_plugin_load_file_for_registry:[00m module_open failed: libdca.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:32): GStreamer-WARNING **: 14:51:37.117: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdtsdec.so': libdca.so.0: cannot open shared object file: No such file or directory
+0:00:00.474859242 [32m   31[00m 0x5b8238fa6db0 [31;01mERROR  [00m [00m         nvstreammux gstnvstreammux.cpp:1852:gst_nvstreammux_request_new_pad:<m>[00m Pad should be named 'sink_%u' when requesting a pad
+0:00:00.474952729 [32m   31[00m 0x5b8238fa6db0 [31;01mERROR  [00m [00;01;37;41m        GST_PIPELINE gst/parse/grammar.y:1133:gst_parse_perform_link:[00m could not link nvv4l2decoder0 to m, m can't handle caps video/x-raw(memory:NVMM), format=(string)NV12
+WARNING: erroneous pipeline: could not link nvv4l2decoder0 to m, m can't handle caps video/x-raw(memory:NVMM), format=(string)NV12

@@ -1,0 +1,88 @@
+--- nvv4l2decoder ---
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.320: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmplex.so': libmjpegutils-2.1.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.356: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmpg123.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.368: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopenmpt.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.494: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/deepstream/libnvdsgst_udp.so': librivermax.so.1: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.552: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdvdread.so': libdvdread.so.8: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.553: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstspandsp.so': libjbig.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.564: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstsndfile.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.580: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpulseaudio.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.634: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstfluidsynthmidi.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.643: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlame.so': libmp3lame.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.664: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstresindvd.so': libdvdnav.so.4: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:34): GStreamer-WARNING **: 14:46:56.669: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdtsdec.so': libdca.so.0: cannot open shared object file: No such file or directory
+Factory Details:
+  Rank                     primary + 11 (267)
+  Long-name                NVIDIA v4l2 video decoder
+  Klass                    Codec/Decoder/Video
+  Description              Decode video streams via V4L2 API
+  Author                   Nicolas Dufresne <nicolas.dufresne@collabora.com>, Viranjan Pagar <vpagar@nvidia.com>
+--- nvstreammux ---
+Factory Details:
+  Rank                     primary (256)
+  Long-name                Stream multiplexer
+  Klass                    Generic
+  Description              N-to-1 pipe stream multiplexing
+  Author                   NVIDIA Corporation. Post on Deepstream for Tesla forum for any queries @ https://devtalk.nvidia.com/default/board/209/
+
+Plugin Details:
+  Name                     nvdsgst_multistream
+  Description              NVIDIA Multistream mux/demux plugin
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/deepstream/libnvdsgst_multistream.so
+  Version                  9.0.0
+  License                  Proprietary
+  Source module            nvmultistream
+  Binary package           NVIDIA Multistream Plugins
+  Origin URL               http://nvidia.com/
+
+GObject
+ +----GInitiallyUnowned
+       +----GstObject
+             +----GstElement
+                   +----GstNvStreamMux
+
+Pad Templates:
+  SINK template: 'sink_%u'
+    Availability: On request
+    Capabilities:
+      video/x-raw(memory:NVMM)
+                 format: { (string)NV12, (string)RGBA, (string)I420 }
+                  width: [ 1, 2147483647 ]
+                 height: [ 1, 2147483647 ]
+              framerate: [ 0/1, 2147483647/1 ]
+  
+  SRC template: 'src'
+    Availability: Always
+    Capabilities:
+      video/x-raw(memory:NVMM)
+                 format: { (string)NV12, (string)RGBA, (string)I420 }
+                  width: [ 1, 2147483647 ]
+                 height: [ 1, 2147483647 ]
+              framerate: [ 0/1, 2147483647/1 ]
+
+Element has no clocking capabilities.
+Element has no URI handling capabilities.
+
+Pads:
+  SRC: 'src'
+    Pad Template: 'src'
+
+Element Properties:
+--- headers ---
+--- libs ---
+--- pkgconfig ---
+-I/usr/include/gstreamer-1.0 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/x86_64-linux-gnu -pthread -I/usr/include/orc-0.4 -lgstapp-1.0 -lgstvideo-1.0 -lgstbase-1.0 -lgstreamer-1.0 -lgobject-2.0 -lglib-2.0 
+--- protobuf pkg ---
+-lprotobuf 

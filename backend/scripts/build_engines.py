@@ -38,11 +38,18 @@ def _tensorrt_version() -> str:
 
         return ".".join(str(x) for x in trt.__version_info__)
     except Exception:
-        out = _run(["trtexec", "--version"], check=False)
-        for line in (out.stdout + out.stderr).splitlines():
-            if "TensorRT version" in line:
-                return line.split(":")[-1].strip()
-        return "unknown"
+        pass
+    out = _run(["trtexec", "--version"], check=False)
+    text = out.stdout + out.stderr
+    for line in text.splitlines():
+        if "TensorRT version" in line or "TensorRT v" in line:
+            parts = line.split()
+            for token in parts:
+                if token.startswith("v") and token[1:].replace(".", "").isdigit():
+                    return token[1:]
+                if token.count(".") >= 2 and token.replace(".", "").isdigit():
+                    return token
+    return "unknown"
 
 
 def _cuda_version() -> str:
@@ -65,7 +72,10 @@ def _gpu_info() -> tuple[str, str]:
     )
     if out.returncode != 0 or not out.stdout.strip():
         return ("unknown", "unknown")
-    uuid, compute_cap = out.stdout.strip().split(",", 1)
+    lines = [ln.strip() for ln in out.stdout.strip().splitlines() if ln.strip()]
+    if not lines:
+        return ("unknown", "unknown")
+    uuid, compute_cap = lines[0].split(",", 1)
     return uuid.strip(), compute_cap.strip()
 
 
@@ -145,8 +155,8 @@ def build(profile_path: pathlib.Path, engines_dir: pathlib.Path | None) -> None:
     container_digest = manifest.get(
         "container_digest",
         os.environ.get(
-            "TENSORRT_IMAGE",
-            "nvcr.io/nvidia/tensorrt:26.03-py3@sha256:ade1b30517b3d66b911a3cd7faf0146484ab8956098abe66b96b944fa36f4861",
+            "DEEPSTREAM_IMAGE",
+            "mergenvision/deepstream-dev:9.0@sha256:309dce0982d2643a51c3d17aded6d0ebc890c834f3621b439d93496f0d46b616",
         ),
     )
 

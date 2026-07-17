@@ -1,0 +1,218 @@
+{
+  "schema_version": "1.0.0",
+  "model_version": "retinaface_r50_glintr100_v1",
+  "preprocess_version": "v1",
+  "detector": {
+    "name": "retinaface_r50",
+    "input_layout": "NCHW",
+    "color_order": "BGR",
+    "input_tensor_name": "input",
+    "input_dtype": "float32",
+    "input_shape": [
+      1,
+      3,
+      640,
+      640
+    ],
+    "dynamic_profile": {
+      "min": [
+        1,
+        3,
+        640,
+        640
+      ],
+      "opt": [
+        8,
+        3,
+        640,
+        640
+      ],
+      "max": [
+        64,
+        3,
+        640,
+        640
+      ]
+    },
+    "output_tensors": {
+      "location": "loc",
+      "confidence": "conf",
+      "landmarks": "landms"
+    },
+    "confidence_threshold": 0.5,
+    "nms_threshold": 0.4,
+    "max_candidates": 300,
+    "anchor_strides": [
+      8,
+      16,
+      32,
+      64,
+      128
+    ],
+    "anchor_sizes": [
+      [
+        16,
+        32
+      ],
+      [
+        64,
+        128
+      ],
+      [
+        256,
+        512
+      ]
+    ],
+    "anchor_ratios": [
+      1.0
+    ],
+    "variances": [
+      0.1,
+      0.2
+    ],
+    "landmark_order": [
+      "left_eye",
+      "right_eye",
+      "nose",
+      "left_mouth",
+      "right_mouth"
+    ]
+  },
+  "recognizer": {
+    "name": "glintr100",
+    "input_layout": "NCHW",
+    "color_order": "RGB",
+    "input_tensor_name": "input.1",
+    "input_dtype": "float32",
+    "input_shape": [
+      1,
+      3,
+      112,
+      112
+    ],
+    "dynamic_profile": {
+      "min": [
+        1,
+        3,
+        112,
+        112
+      ],
+      "opt": [
+        8,
+        3,
+        112,
+        112
+      ],
+      "max": [
+        64,
+        3,
+        112,
+        112
+      ]
+    },
+    "output_tensors": {
+      "embedding": "1333"
+    },
+    "embedding_dim": 512,
+    "normalize": "l2"
+  },
+  "alignment": {
+    "template": [
+      [
+        38.2946,
+        51.6963
+      ],
+      [
+        73.5318,
+        51.5014
+      ],
+      [
+        56.0252,
+        71.7366
+      ],
+      [
+        41.5493,
+        92.3655
+      ],
+      [
+        70.7299,
+        92.2041
+      ]
+    ],
+    "crop_size": [
+      112,
+      112
+    ]
+  },
+  "models": {
+    "retinaface_r50_dynamic": {
+      "onnx_path": "backend/artifacts/models/retinaface_r50_dynamic.onnx",
+      "onnx_sha256": "fd8a87a6f2837d425604e0f88efca91e661947dbc3707f54da53ec27a8dc9a8a"
+    },
+    "glintr100": {
+      "onnx_path": "backend/artifacts/models/glintr100.onnx",
+      "onnx_sha256": "4ab1d6435d639628a6f3e5008dd4f929edf4c4124b1a7169e1048f9fef534cdf"
+    }
+  },
+  "engine_manifest": {
+    "retinaface_r50_dynamic": {
+      "engine_path": "backend/artifacts/engines/deepstream9/retinaface_r50_dynamic.bs1.opt8.max64.fp16.trt1014.engine",
+      "engine_sha256": "a96127de8751042a9ed42d5d9e9f9740db718ca59cfbc373ae7db3c01f5bec00",
+      "profile": {
+        "min": [
+          1,
+          3,
+          640,
+          640
+        ],
+        "opt": [
+          8,
+          3,
+          640,
+          640
+        ],
+        "max": [
+          64,
+          3,
+          640,
+          640
+        ]
+      },
+      "precision": "fp16",
+      "build_command": "trtexec --onnx=/workspace/backend/artifacts/models/retinaface_r50_dynamic.onnx --saveEngine=/workspace/backend/artifacts/engines/deepstream9/retinaface_r50_dynamic.bs1.opt8.max64.fp16.trt1014.engine --fp16 --minShapes=input:1x3x640x640 --optShapes=input:8x3x640x640 --maxShapes=input:64x3x640x640"
+    },
+    "glintr100": {
+      "engine_path": "backend/artifacts/engines/deepstream9/glintr100.bs1.opt8.max64.fp16.trt1014.engine",
+      "engine_sha256": "11555847da2493694c1bb06eb3a6cb7d0dcfe63ba4c4829ab41df04e9a45eb58",
+      "profile": {
+        "min": [
+          1,
+          3,
+          112,
+          112
+        ],
+        "opt": [
+          8,
+          3,
+          112,
+          112
+        ],
+        "max": [
+          64,
+          3,
+          112,
+          112
+        ]
+      },
+      "precision": "fp16",
+      "build_command": "trtexec --onnx=/workspace/backend/artifacts/models/glintr100.onnx --saveEngine=/workspace/backend/artifacts/engines/deepstream9/glintr100.bs1.opt8.max64.fp16.trt1014.engine --fp16 --minShapes=input.1:1x3x112x112 --optShapes=input.1:8x3x112x112 --maxShapes=input.1:64x3x112x112"
+    },
+    "build_command": "trtexec --onnx=/workspace/backend/artifacts/models/glintr100.onnx --saveEngine=/workspace/backend/artifacts/engines/deepstream9/glintr100.bs1.opt8.max64.fp16.trt1014.engine --fp16 --minShapes=input.1:1x3x112x112 --optShapes=input.1:8x3x112x112 --maxShapes=input.1:64x3x112x112",
+    "tensorrt_version": "--getPlanVersionOnly               Print TensorRT version when loaded plan was created. Works without deserialization of the plan.",
+    "cuda_version": "13.1",
+    "container_digest": "mergenvision/deepstream-dev:9.0@sha256:309dce0982d2643a51c3d17aded6d0ebc890c834f3621b439d93496f0d46b616",
+    "gpu_compute_capability": "7.5\nGPU-c4e86f22-9be2-20fa-e97a-2bf441cb461f, 7.5\nGPU-a2ac89d8-0b46-2703-8fd0-5e74a7f74a00, 7.5",
+    "gpu_uuid": "GPU-22f04c0c-b6c2-9b75-6f9d-7e08fa7d7537",
+    "build_timestamp": "2026-07-17T14:40:17.826589+00:00"
+  }
+}

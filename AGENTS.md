@@ -591,3 +591,16 @@ Finalde her MCP ve kullanılan skill için gerçekten ne yaptığı veya neden s
 Her sprint cohesive, çalışan bir vertical outcome veya açık teknik gate üretir. Report-only sprint açılmaz. Sprint sonunda `CURRENT_SPRINT.md` ve `IMPLEMENTATION_DETAILS.md` güncellenir; meaningful implementation için `docs/implementation/review_packages/SPRINT-<NNN>-CODE-REVIEW-PACKAGE.md` hazırlanır.
 
 Completion verdict yalnız `PASS`, `PARTIAL`, `BLOCKED` veya `NOT_TESTED` olur. Final cevapta çalışan kullanıcı davranışı, exact validation komutları, raw sonuç özeti, changed-source map, known limitations, MCP/skill accountability ve tek önerilen sonraki sprint bulunur. Kanıtsız `production-ready`, `GPU-only`, `600 FPS`, `fully optimized` veya `accuracy verified` denmez.
+## 36. Compaction sonrası context recovery (prompt-memory-mcp) — ZORUNLU
+
+OpenCode uzun konuşmalarda `compaction` yaparak eski mesajları özetleyip atabilir. Bu durumda agent’ın görev devamlılığı ve kullanıcı talimatlarını hatırlaması bozulmamalıdır.
+
+Compaction gerçekleştikten sonra, kullanıcıya cevap vermeden veya kod/doküman değiştirmeden ÖNCE şunları MANDATORY olarak yap:
+
+1. **`prompt-memory-mcp` üzerinden `search_memory` çağrısı** ile mevcut görevle ilgili son kararları, kullanıcı talimatlarını, onaylanmış planları ve önceki context’i geri getir.
+   - Query’de mevcut task adı, dosya adı, karar konusu veya kullanıcının son talebi geçsin.
+   - `labels` olarak `["Message", "Session", "Decision"]` kullan.
+2. Eğer session UUID biliniyorsa (`session:opencode:<sessionID>` formatında), **`get_session_context`** ile o session’ın tam geçmişini çek.
+3. Geri getirilen context’i yeni cevabının/mevcut kararının bir parçası olarak kullan. **"Hatırlamıyorum" veya "Önceki konuşmadan bahset" deme.**
+
+Bu adım MANDATORY’dir. Compaction sonrası context recall atlanmadan devam edilemez. Gerekirse önce `index_sessions` çağrıp sonra `search_memory` ile ara.

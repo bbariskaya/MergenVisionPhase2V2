@@ -303,7 +303,9 @@ PHASE2_COMPOSE := docker compose -p $(PHASE2_PROJECT) -f $(COMPOSE_FILE)
         phase2-step0-static phase2-step0-api-contract phase2-step0-storage \
         phase2-step0-failure phase2-step0-native phase2-step0-closure \
         phase2-migrations phase2-control-plane phase2-m3-worker-control \
-        phase2-m4-device-pipeline phase2-m5-video-observation
+        phase2-m4-device-pipeline phase2-m5-video-observation \
+        phase2-m5-native-runtime-gate phase2-m5-build-engines phase2-m5-native-build \
+        phase2-m5-gpu-decode-smoke phase2-m5-sequence-contract
 
 phase2-services:
 	$(PHASE2_COMPOSE) up -d $(TEST_SERVICES) --wait
@@ -370,3 +372,55 @@ phase2-m5-video-observation:
 	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
 	    tests/unit/contracts/test_video_observation_proto.py -v
 	@echo "==> phase2-m5-video-observation contract present; real GPU smoke NOT_RUN"
+
+phase2-m5-native-runtime-gate:
+	@echo "==> phase2-m5-native-runtime-gate: DeepStream/TensorRT runtime + model/engine manifest"
+	docker run --rm --gpus all \
+	    -v $(PWD):/workspace \
+	    -w /workspace \
+	    -e MERGENVISION_REPO_ROOT=/workspace \
+    --entrypoint python3 \
+    mergenvision/deepstream-dev:9.0 \
+    backend/scripts/inspect_video_runtime.py
+	@echo "==> phase2-m5-native-runtime-gate passed"
+
+phase2-m5-build-engines:
+	@echo "==> building TensorRT engines inside DeepStream 9.0 container"
+	docker run --rm --gpus all \
+	    -v $(PWD):/workspace \
+	    -w /workspace \
+    --entrypoint python3 \
+    mergenvision/deepstream-dev:9.0 \
+    backend/scripts/build_engines.py \
+--profile backend/config/model_profiles/retinaface_r50_glintr100_v1_deepstream9.json
+	@echo "==> engines built"
+
+phase2-m5-native-build: phase2-m5-native-runtime-gate
+	@echo "==> building native video worker inside DeepStream 9.0 container"
+	docker run --rm --gpus all \
+	    -v $(PWD):/workspace \
+	    -w /workspace \
+	    --entrypoint bash \
+	    mergenvision/deepstream-dev:9.0 \
+	    -c "cmake -S backend/native/video_worker -B backend/native/video_worker/build && cmake --build backend/native/video_worker/build -j$(shell nproc)"
+	@echo "==> native video worker built"
+
+phase2-m5-gpu-decode-smoke: phase2-m5-native-build
+	@echo "==> running real GPU decode smoke on Friends.mp4"
+	docker run --rm --gpus all \
+	    -v $(PWD):/workspace \
+	    -w /workspace \
+	    --entrypoint bash \
+	    mergenvision/deepstream-dev:9.0 \
+	    -c "unset USE_NEW_NVSTREAMMUX && backend/native/video_worker/build/decode_smoke --input test_videos/Friends.mp4 --all-frames"
+	@echo "==> GPU decode smoke passed"
+
+phase2-m5-sequence-contract: phase2-m5-native-runtime-gate
+	@echo "==> building and running M5.1 sequence contract tests"
+	docker run --rm --gpus all \
+	    -v $(PWD):/workspace \
+	    -w /workspace \
+	    --entrypoint bash \
+	    mergenvision/deepstream-dev:9.0 \
+	    -c "cmake -S backend/native/video_worker -B backend/native/video_worker/build && cmake --build backend/native/video_worker/build --target sequence_contract -j$$(nproc) && backend/native/video_worker/build/sequence_contract"
+	@echo "==> M5.1 sequence contract passed"

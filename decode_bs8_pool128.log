@@ -1,0 +1,100 @@
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.214: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmplex.so': libmjpegutils-2.1.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.252: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmpg123.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.264: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopenmpt.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.395: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/deepstream/libnvdsgst_udp.so': librivermax.so.1: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.454: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdvdread.so': libdvdread.so.8: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.455: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstspandsp.so': libjbig.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.467: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstsndfile.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.484: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpulseaudio.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.539: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstfluidsynthmidi.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.548: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlame.so': libmp3lame.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.569: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstresindvd.so': libdvdnav.so.4: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:07:07.573: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdtsdec.so': libdca.so.0: cannot open shared object file: No such file or directory
+[decode_smoke] mux request pad acquired: sink_0
+[decode_smoke] config: batch_size=8 batched_push_timeout=40000 us gpu_id=0
+Opening in BLOCKING MODE 
+[decode_smoke] demux video pad linked to parser
+[decode_smoke] ignoring non-video pad: audio/mpeg
+  frame frame_num=0 pts=41708us src=1920x1080 batch_id=0
+  frame frame_num=1 pts=83416us src=1920x1080 batch_id=1
+  frame frame_num=2 pts=125125us src=1920x1080 batch_id=2
+  frame frame_num=3 pts=166833us src=1920x1080 batch_id=3
+  surface batchSize=8 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3200000
+    surface[1] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3600000
+    surface[2] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3a00000
+    surface[3] 1920x1080 pitch=2048 fmt=33 dataPtr=0x760729a00000
+    surface[4] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[5] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[6] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[7] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+[batch 1] frames_in_batch=4
+  frame frame_num=4 pts=208541us src=1920x1080 batch_id=0
+  frame frame_num=5 pts=250250us src=1920x1080 batch_id=1
+  frame frame_num=6 pts=291958us src=1920x1080 batch_id=2
+  surface batchSize=8 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3200000
+    surface[1] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3600000
+    surface[2] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3a00000
+    surface[3] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[4] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[5] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[6] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[7] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+[batch 2] frames_in_batch=3
+  frame frame_num=7 pts=333666us src=1920x1080 batch_id=0
+  frame frame_num=8 pts=375375us src=1920x1080 batch_id=1
+  frame frame_num=9 pts=417083us src=1920x1080 batch_id=2
+  surface batchSize=8 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x760729a00000
+    surface[1] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3200000
+    surface[2] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3600000
+    surface[3] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[4] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[5] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[6] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[7] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+[batch 3] frames_in_batch=3
+[decode_smoke] progress: batches=121 frames=364
+[decode_smoke] progress: batches=245 frames=736
+[decode_smoke] progress: batches=369 frames=1108
+[decode_smoke] progress: batches=494 frames=1483
+[decode_smoke] progress: batches=618 frames=1855
+[decode_smoke] progress: batches=742 frames=2227
+[decode_smoke] progress: batches=866 frames=2599
+[decode_smoke] progress: batches=990 frames=2971
+[decode_smoke] progress: batches=1114 frames=3343
+[decode_smoke] progress: batches=1237 frames=3712
+[decode_smoke] progress: batches=1359 frames=4078
+[decode_smoke] progress: batches=1483 frames=4450
+[decode_smoke] progress: batches=1607 frames=4822
+[decode_smoke] progress: batches=1731 frames=5194
+[decode_smoke] progress: batches=1855 frames=5566
+[decode_smoke] progress: batches=1980 frames=5941
+[decode_smoke] progress: batches=2104 frames=6313
+nvstreammux: Successfully handled EOS for source_id=0
+
+=== decode smoke summary ===
+batches: 2222
+frames: 6665
+NVMM surface seen: yes
+NVMM (cuda-device) memory: yes
+NvDsBatchMeta seen: yes
+batch frames  min: 1  max: 4  avg: 3.00
+wall time: 90039.80 ms (90.040 s)
+decode fps: 74.02
+video duration: 278.036 s
+effective speedup: 3.09x
+decode smoke PASSED

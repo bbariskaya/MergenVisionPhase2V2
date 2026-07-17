@@ -1,0 +1,225 @@
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.107: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmplex.so': libmjpegutils-2.1.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.145: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmpg123.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.157: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopenmpt.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.288: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/deepstream/libnvdsgst_udp.so': librivermax.so.1: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.348: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdvdread.so': libdvdread.so.8: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.349: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstspandsp.so': libjbig.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.361: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstsndfile.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.377: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpulseaudio.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.433: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstfluidsynthmidi.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.442: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlame.so': libmp3lame.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.463: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstresindvd.so': libdvdnav.so.4: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 14:55:22.468: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdtsdec.so': libdca.so.0: cannot open shared object file: No such file or directory
+Factory Details:
+  Rank                     primary (256)
+  Long-name                Stream multiplexer
+  Klass                    Generic
+  Description              N-to-1 pipe stream multiplexing
+  Author                   NVIDIA Corporation. Post on Deepstream for Tesla forum for any queries @ https://devtalk.nvidia.com/default/board/209/
+
+Plugin Details:
+  Name                     nvdsgst_multistream
+  Description              NVIDIA Multistream mux/demux plugin
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/deepstream/libnvdsgst_multistream.so
+  Version                  9.0.0
+  License                  Proprietary
+  Source module            nvmultistream
+  Binary package           NVIDIA Multistream Plugins
+  Origin URL               http://nvidia.com/
+
+GObject
+ +----GInitiallyUnowned
+       +----GstObject
+             +----GstElement
+                   +----GstNvStreamMux
+
+Pad Templates:
+  SINK template: 'sink_%u'
+    Availability: On request
+    Capabilities:
+      video/x-raw(memory:NVMM)
+                 format: { (string)NV12, (string)RGBA, (string)I420 }
+                  width: [ 1, 2147483647 ]
+                 height: [ 1, 2147483647 ]
+              framerate: [ 0/1, 2147483647/1 ]
+  
+  SRC template: 'src'
+    Availability: Always
+    Capabilities:
+      video/x-raw(memory:NVMM)
+                 format: { (string)NV12, (string)RGBA, (string)I420 }
+                  width: [ 1, 2147483647 ]
+                 height: [ 1, 2147483647 ]
+              framerate: [ 0/1, 2147483647/1 ]
+
+Element has no clocking capabilities.
+Element has no URI handling capabilities.
+
+Pads:
+  SRC: 'src'
+    Pad Template: 'src'
+
+Element Properties:
+
+  align-first-buffer  : Align only the first buffer of all sources within frame rate range
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  align-inputs        : Boolean property to force timestamp align of input frames.
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  async-process       : Boolean property to enable/disable asynchronous processing of input frames for performance.
+                        flags: readable, writable
+                        Boolean. Default: true
+  
+  attach-sys-ts       : If set to TRUE, system timestamp will be attached as ntp timestamp.
+			If set to FALSE, ntp timestamp from rtspsrc, if available, will be attached.
+                        flags: readable, writable
+                        Boolean. Default: true
+  
+  batch-size          : Maximum number of buffers in a batch
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 1024 Default: 0 
+  
+  batched-push-timeout: Timeout in microseconds to wait after the first buffer is available
+			to push the batch even if the complete batch is not formed.
+			Set to -1 to wait infinitely
+                        flags: readable, writable
+                        Integer. Range: -1 - 2147483647 Default: -1 
+  
+  buffer-pool-size    : Maximum number of buffers from muxer's output pool
+                        flags: readable, writable
+                        Unsigned Integer. Range: 4 - 1024 Default: 4 
+  
+  cache-buffer        : Render previous frame in case new frame is delayed
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  cache-buffer-timeout: Timeout in microseconds to reuse previous rendered buffer
+			Post timeout and when no initial buffer available , grey image to be rendered
+			Set to -1 to wait infinitely
+                        flags: readable, writable
+                        Integer. Range: -1 - 2147483647 Default: -1 
+  
+  compute-hw          : Compute Scaling HW
+                        flags: readable, writable, controllable
+                        Enum "GstNvComputeHWType" Default: 0, "Default"
+                           (0): Default          - Default, GPU for Tesla, VIC for Jetson
+                           (1): GPU              - GPU
+                           (2): VIC              - VIC
+  
+  drop-backward-sei   : Drop incoming buffers whose SEI timestamp is behind the previous buffer's SEI timestamp (per sink pad)
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  drop-pipeline-eos   : Boolean property so that EOS is not propagated downstream when all the sink pads are at EOS. (Experimental)
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  enable-padding      : Maintain input aspect ratio when scaling by padding with black bands.
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  extract-sei-sim-time: Set to extract and attach simulation time on output buffer
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  extract-sei-type5-data: Set to extract and attach SEI type5 unregistered data on output buffer, for debugging purpose
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  failsafe-flush-count: Maximum iterations before forcing batch push to prevent buffer leaks (failsafe mechanism). Should be less than buffer-pool-size. If set higher, it will be capped at buffer-pool-size - 1.
+                        flags: readable, writable
+                        Unsigned Integer. Range: 1 - 1024 Default: 4 
+  
+  frame-duration      : Duration of input frames in milliseconds for use in NTP timestamp correction based on frame rate.
+			If set to 0, frame duration is inferred automatically from PTS values.
+			If set to -1, disables frame rate based NTP timestamp correction. (default)
+                        flags: readable, writable
+                        Unsigned Integer64. Range: 0 - 18446744073709551615 Default: 18446744073709 
+  
+  frame-num-reset-on-eos: Reset frame numbers to 0 for a source from which EOS is received (For debugging purpose only)
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  frame-num-reset-on-stream-reset: Reset frame numbers to 0 for a source which needs to be reset. (For debugging purpose only)
+Needs to be paired with tracking-id-reset-mode=1 in the tracker config.
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  gpu-id              : Set GPU Device ID
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 4294967295 Default: 0 
+  
+  height              : Height of each frame in output batched buffer. This property MUST be set.
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 4294967295 Default: 0 
+  
+  interpolation-method: Set interpolation methods
+                        flags: readable, writable, controllable
+                        Enum "GstNvInterpolationMethod" Default: 1, "Bilinear"
+                           (0): Nearest          - Nearest
+                           (1): Bilinear         - Bilinear
+                           (2): Algo-1           - GPU - Cubic, VIC - 5 Tap
+                           (3): Algo-2           - GPU - Super, VIC - 10 Tap
+                           (4): Algo-3           - GPU - LanzoS, VIC - Smart
+                           (5): Algo-4           - GPU - Ignored, VIC - Nicest
+                           (6): Default          - GPU - Nearest, VIC - Nearest
+  
+  live-source         : Boolean property to inform muxer that sources are live.
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  max-latency         : Additional latency in live mode to allow upstream to take longer to produce buffers for the current position (in nanoseconds)
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 4294967295 Default: 0 
+  
+  name                : The name of the object
+                        flags: readable, writable
+                        String. Default: "nvstreammux0"
+  
+  num-surfaces-per-frame: Max number of surfaces per frame
+                        flags: readable, writable
+                        Unsigned Integer. Range: 1 - 4 Default: 1 
+  
+  nvbuf-memory-type   : Type of NvBufSurface Memory to be allocated for output buffers
+                        flags: readable, writable, changeable only in NULL or READY state
+                        Enum "GstNvBufMemoryType" Default: 2, "nvbuf-mem-cuda-device"
+                           (0): nvbuf-mem-default - Default memory allocated, specific to particular platform
+                           (1): nvbuf-mem-cuda-pinned - Allocate Pinned/Host cuda memory
+                           (2): nvbuf-mem-cuda-device - Allocate Device cuda memory
+                           (3): nvbuf-mem-cuda-unified - Allocate Unified cuda memory
+  
+  parent              : The parent of the object
+                        flags: readable, writable
+                        Object of type "GstObject"
+  
+  sort-batch          : Sort Batch Buffer in ascending order of pad-ids
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  sync-inputs         : Boolean property to force sychronization of input frames.
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  sync-inputs-ntp     : Time in nanoseconds to synchronize incoming inputs based on ntp
+                        flags: readable, writable
+                        Integer. Range: 0 - 2147483647 Default: 0 
+  
+  width               : Width of each frame in output batched buffer. This property MUST be set.
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 4294967295 Default: 0 
+  

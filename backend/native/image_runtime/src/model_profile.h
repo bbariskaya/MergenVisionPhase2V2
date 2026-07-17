@@ -1,13 +1,12 @@
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-namespace py = pybind11;
+namespace pybind11 {
+class dict;
+} // namespace pybind11
 
 namespace mergenvision {
 
@@ -51,7 +50,7 @@ struct ModelProfile {
     int alignment_crop_w = 112;
     int alignment_crop_size = 112;  // legacy alias, kept equal to alignment_crop_h
 
-    static ModelProfile from_py_dict(const py::dict& d);
+    static ModelProfile from_py_dict(const pybind11::dict& d);
 };
 
 } // namespace mergenvision

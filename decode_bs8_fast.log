@@ -1,0 +1,78 @@
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.463: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmplex.so': libmjpegutils-2.1.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.500: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmpg123.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.512: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopenmpt.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.646: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/deepstream/libnvdsgst_udp.so': librivermax.so.1: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.706: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdvdread.so': libdvdread.so.8: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.707: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstspandsp.so': libjbig.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.719: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstsndfile.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.736: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpulseaudio.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.792: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstfluidsynthmidi.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.801: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlame.so': libmp3lame.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.822: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstresindvd.so': libdvdnav.so.4: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:06:42.827: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdtsdec.so': libdca.so.0: cannot open shared object file: No such file or directory
+[decode_smoke] mux request pad acquired: sink_0
+[decode_smoke] config: batch_size=8 batched_push_timeout=1000 us gpu_id=0
+Opening in BLOCKING MODE 
+[decode_smoke] demux video pad linked to parser
+[decode_smoke] ignoring non-video pad: audio/mpeg
+  frame frame_num=0 pts=41708us src=1920x1080 batch_id=0
+  surface batchSize=8 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3200000
+    surface[1] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[2] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[3] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[4] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[5] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[6] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[7] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+[batch 1] frames_in_batch=1
+  frame frame_num=1 pts=83416us src=1920x1080 batch_id=0
+  surface batchSize=8 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3600000
+    surface[1] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[2] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[3] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[4] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[5] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[6] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[7] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+[batch 2] frames_in_batch=1
+  frame frame_num=2 pts=125125us src=1920x1080 batch_id=0
+  frame frame_num=3 pts=166833us src=1920x1080 batch_id=1
+  surface batchSize=8 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3a00000
+    surface[1] 1920x1080 pitch=2048 fmt=33 dataPtr=0x7780f9a00000
+    surface[2] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[3] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[4] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[5] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[6] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[7] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+[batch 3] frames_in_batch=2
+[decode_smoke] progress: batches=2065 frames=3320
+nvstreammux: Successfully handled EOS for source_id=0
+
+=== decode smoke summary ===
+batches: 4193
+frames: 6665
+NVMM surface seen: yes
+NVMM (cuda-device) memory: yes
+NvDsBatchMeta seen: yes
+batch frames  min: 1  max: 3  avg: 1.59
+wall time: 10032.68 ms (10.033 s)
+decode fps: 664.33
+video duration: 278.036 s
+effective speedup: 27.71x
+decode smoke PASSED

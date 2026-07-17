@@ -1,0 +1,99 @@
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:11.832: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmplex.so': libmjpegutils-2.1.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:11.869: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmpg123.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:11.881: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopenmpt.so': libmpg123.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:12.010: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/deepstream/libnvdsgst_udp.so': librivermax.so.1: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:12.069: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdvdread.so': libdvdread.so.8: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:12.070: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstspandsp.so': libjbig.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:12.082: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstsndfile.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:12.099: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpulseaudio.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:12.154: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstfluidsynthmidi.so': libFLAC.so.12: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:12.163: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlame.so': libmp3lame.so.0: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:12.184: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstresindvd.so': libdvdnav.so.4: cannot open shared object file: No such file or directory
+
+(gst-plugin-scanner:31): GStreamer-WARNING **: 15:04:12.189: Failed to load plugin '/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdtsdec.so': libdca.so.0: cannot open shared object file: No such file or directory
+[decode_smoke] mux request pad acquired: sink_0
+Opening in BLOCKING MODE 
+[decode_smoke] demux video pad linked to parser
+[decode_smoke] ignoring non-video pad: audio/mpeg
+  frame frame_num=0 pts=41708us src=1920x1080 batch_id=0
+  frame frame_num=1 pts=83416us src=1920x1080 batch_id=1
+  frame frame_num=2 pts=125125us src=1920x1080 batch_id=2
+  frame frame_num=3 pts=166833us src=1920x1080 batch_id=3
+  surface batchSize=8 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3200000
+    surface[1] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3600000
+    surface[2] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3a00000
+    surface[3] 1920x1080 pitch=2048 fmt=33 dataPtr=0x79edbda00000
+    surface[4] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[5] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[6] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[7] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+[batch 1] frames_in_batch=4
+  frame frame_num=4 pts=208541us src=1920x1080 batch_id=0
+  frame frame_num=5 pts=250250us src=1920x1080 batch_id=1
+  frame frame_num=6 pts=291958us src=1920x1080 batch_id=2
+  surface batchSize=8 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3200000
+    surface[1] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3600000
+    surface[2] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3a00000
+    surface[3] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[4] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[5] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[6] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[7] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+[batch 2] frames_in_batch=3
+  frame frame_num=7 pts=333666us src=1920x1080 batch_id=0
+  frame frame_num=8 pts=375375us src=1920x1080 batch_id=1
+  frame frame_num=9 pts=417083us src=1920x1080 batch_id=2
+  surface batchSize=8 memType=2
+    surface[0] 1920x1080 pitch=2048 fmt=33 dataPtr=0x79edbda00000
+    surface[1] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3200000
+    surface[2] 1920x1080 pitch=2048 fmt=33 dataPtr=0x3600000
+    surface[3] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[4] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[5] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[6] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+    surface[7] 0x0 pitch=0 fmt=0 dataPtr=(nil)
+[batch 3] frames_in_batch=3
+[decode_smoke] progress: batches=121 frames=364
+[decode_smoke] progress: batches=245 frames=736
+[decode_smoke] progress: batches=369 frames=1106
+[decode_smoke] progress: batches=493 frames=1478
+[decode_smoke] progress: batches=617 frames=1850
+[decode_smoke] progress: batches=741 frames=2222
+[decode_smoke] progress: batches=866 frames=2595
+[decode_smoke] progress: batches=990 frames=2967
+[decode_smoke] progress: batches=1114 frames=3339
+[decode_smoke] progress: batches=1238 frames=3711
+[decode_smoke] progress: batches=1362 frames=4083
+[decode_smoke] progress: batches=1486 frames=4455
+[decode_smoke] progress: batches=1610 frames=4827
+[decode_smoke] progress: batches=1734 frames=5199
+[decode_smoke] progress: batches=1858 frames=5571
+[decode_smoke] progress: batches=1982 frames=5943
+[decode_smoke] progress: batches=2107 frames=6318
+nvstreammux: Successfully handled EOS for source_id=0
+
+=== decode smoke summary ===
+batches: 2223
+frames: 6665
+NVMM surface seen: yes
+NVMM (cuda-device) memory: yes
+NvDsBatchMeta seen: yes
+batch frames  min: 1  max: 4  avg: 3.00
+wall time: 89781.11 ms (89.781 s)
+decode fps: 74.24
+video duration: 278.036 s
+effective speedup: 3.10x
+decode smoke PASSED

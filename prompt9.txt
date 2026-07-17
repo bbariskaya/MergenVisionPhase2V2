@@ -1,0 +1,494 @@
+Abi sorun büyük ihtimalle model değil: NV12 frame’i RGBA kernel’ine veriyor. Kanıt şu:
+
+Frame: 1920x1080
+Pitch: 2048
+Gerçek RGBA pitch yaklaşık 1920×4 = 7680 civarında olmalı.
+Kullanılan fonksiyon: mergenvision_preprocess_detector_rgba_batch
+Decoder yüzeyi ise muhtemelen NV12; kernel Y/UV belleğini RGBA gibi okuyor.
+
+Ayrıca ilk 16 frame’de gerçekten yüz olmayabilir. -88 değerleri “tensor sıfır” demek değil; normalize edilmiş koyu pixel olabilir. Threshold düşürmesin. Bunu hemen gönder:
+ACİL SYSTEMATIC FIX — ZERO RETINAFACE DETECTIONS
+
+Rastgele debug print, threshold değişikliği veya tracker çalışmasına devam etme. Önce detector input contract’ını kanıtla ve düzelt.
+
+Mevcut kanıt:
+
+  surface = 1920x1080
+  pitch = 2048
+  preprocessing function = mergenvision_preprocess_detector_rgba_batch
+  detector output = 0 detections
+
+1920 genişliğinde gerçek RGBA surface pitch yaklaşık width×4, yani en az 7680 byte civarında olmalıdır. 2048 pitch, surface’in RGBA olmadığını; büyük ihtimalle NV12 Y plane olduğunu güçlü biçimde gösteriyor.
+
+Şu anda en olası root cause:
+
+  NVDEC NV12 NvBufSurface
+    → RGBA kabul eden CUDA kernel
+    → Y/UV bytes yanlışlıkla RGBA channels gibi okunuyor
+    → RetinaFace input tensor anlamsız
+    → confidence düşük / 0 detection
+
+`first10=-88` tek başına tensor doğru demek değildir. Border veya yanlış yorumlanmış luminance bytes olabilir.
+
+Ayrıca Friends’in yalnız ilk 16 frame’inde yüz bulunmaması mümkündür. 16-frame test detector correctness fixture’ı değildir.
+
+======================================================================
+1. ÖNCE SURFACE CONTRACT’I KANITLA
+======================================================================
+
+İlk batch için şunları logla:
+
+- negotiated decoder src caps
+- streammux src caps
+- appsink caps
+- `NvBufSurface.memType`
+- `NvBufSurface.numFilled`
+- `surfaceList[batch_id].colorFormat`
+- width / height / pitch
+- `planeParams.num_planes`
+- her plane için:
+  - width
+  - height
+  - pitch
+  - offset
+  - bytesPerPix
+- dataPtr
+- batch_id
+
+String/enum helper ekleyerek `colorFormat` değerini okunabilir yaz.
+
+Hard assertions:
+
+- RGBA kernel yalnız `NVBUF_COLOR_FORMAT_RGBA` surface kabul edebilir.
+- NV12 surface’e RGBA kernel çağrılırsa:
+  `VIDEO_PREPROCESS_COLOR_FORMAT_MISMATCH`
+- Unsupported format sessizce işlenmeyecek.
+
+Pitch kontrolü yalnız diagnostic olacak; esas karar `colorFormat + planeParams + caps` üzerinden verilecek.
+
+======================================================================
+2. İKİ AŞAMALI ÇÖZÜM UYGULA
+======================================================================
+
+Aşama A — GPU RGBA correctness oracle
+
+Önce root cause’u hızlı kanıtlamak için diagnostic/reference GPU path oluştur:
+
+  nvv4l2decoder
+    → nvvideoconvert
+    → video/x-raw(memory:NVMM),format=RGBA
+    → nvstreammux
+    → appsink
+    → mevcut RGBA CUDA preprocessing kernel
+    → RetinaFace
+
+`nvvideoconvert` CPU değildir; NVIDIA GPU conversion kullanır.
+
+Properties:
+
+  gpu-id = configured GPU
+  nvbuf-memory-type = cuda-device
+  compute-hw = GPU
+
+Appsink tarafında doğrula:
+
+  colorFormat == RGBA
+  pitch >= width * 4
+  memory is device-compatible
+
+Bu path yalnız correctness oracle/debug baseline olarak kullanılacak.
+
+Aşama B — production fused NV12 path
+
+RGBA oracle yüz bulduktan sonra production hot path’i:
+
+  NV12 NvBufSurface
+    → fused CUDA NV12→model tensor resize/letterbox/normalize
+    → RetinaFace
+
+olarak implemente et.
+
+Yeni kernel:
+
+  mergenvision_preprocess_detector_nv12_batch(...)
+
+NV12 kernel input’u frame başına açıkça taşımalı:
+
+- Y plane device pointer
+- UV plane device pointer
+- Y pitch
+- UV pitch
+- source width/height
+- plane offsets
+- color matrix/range
+- destination tensor pointer
+- scale/padding metadata
+
+Plane pointer’larını `base + planeParams.offset[n]` veya container’daki approved NvBufSurface API pattern’iyle oluştur. Offset/pitch’i tahmin etme.
+
+NV12 conversion:
+
+- negotiated caps/colorimetry’den BT.601 veya BT.709 seç
+- limited/full range bilgisini doğrula
+- 1080p diye körlemesine BT.709 hardcode etme
+- Y ve interleaved UV’yi doğru plane/pitch ile oku
+- RGB/BGR channel order model profile’dan gelsin
+- pixel clamp ve normalization exact image-runtime contract ile aynı olsun
+
+Fused kernel aynı launch içinde:
+
+1. destination pixel → source coordinate mapping
+2. bilinear NV12 sampling
+3. YUV → RGB/BGR
+4. letterbox fill
+5. channel reorder
+6. normalization
+7. planar NCHW write
+
+yapsın.
+
+Ara RGBA full-frame allocation üretme.
+
+======================================================================
+3. MODEL PREPROCESS CONTRACT’INI TAHMİN ETME
+======================================================================
+
+Şunları tamamen oku ve karşılaştır:
+
+- `backend/config/model_profiles/retinaface_r50_glintr100_v1.*`
+- mevcut çalışan image runtime preprocessing source
+- RetinaFace ONNX input metadata
+- eski read-only parity/reference implementation
+- varsa preprocess contract JSON
+
+Exact olarak doğrula:
+
+- RGB mi BGR mı?
+- NCHW mi NHWC mi?
+- pixel range 0..255 mi?
+- `pixel - 127.5` mi?
+- `(pixel - 127.5) / 128` mi?
+- letterbox fill 0 mı, 127.5 mi?
+- bilinear pixel-center davranışı ne?
+- aspect ratio/scale nasıl hesaplanıyor?
+- pad left/top rounding nasıl?
+- input binding name/shape/dtype ne?
+
+Mevcut çalışan image runtime ne yapıyorsa native video path aynı contract’ı uygulamalı.
+
+Normalization veya channel order’ı InsightFace genel bilgisinden tahmin etme; repository’deki gerçek working path üzerinden doğrula.
+
+======================================================================
+4. BİLİNEN YÜZLE DETERMINISTIC DEBUG FIXTURE OLUŞTUR
+======================================================================
+
+Friends’in ilk 16 frame’ini detector correctness oracle’ı olarak kullanma.
+
+Repository’de şu local rights-cleared fixture’ları ara:
+
+- `test_gallery/Rachel/1.jpg`
+- `backend/tests/fixtures/gpu/single_face.jpg`
+- başka approved local single-face fixture
+
+Önce aynı JPEG’i mevcut çalışan image runtime’dan geçir:
+
+Expected evidence:
+
+- detection_count > 0
+- bbox
+- landmarks
+- detector score
+
+Sonra bu JPEG’den yalnız local debug için kısa H.264 video oluştur:
+
+  24 veya 32 frame boyunca aynı yüz
+  640×640 veya kaynak aspect ratio korunmuş
+  `/tmp` veya gitignored artifact
+  Git’e ekleme
+
+Bu kısa video:
+
+  NVDEC → NV12 → video preprocessing → RetinaFace
+
+zincirinden geçsin.
+
+Beklenen:
+
+- her geçerli frame’de en az bir yüz
+- bbox image runtime ile makul tolerance içinde
+- batch 1 ve batch 8’de aynı mantıksal sonuç
+
+Bu fixture yüz bulamıyorsa Friends/tracker testine geçme.
+
+======================================================================
+5. DEBUG TENSOR PARITY EKLE
+======================================================================
+
+İlk 10 float yazdırmak yeterli değildir.
+
+Yalnız debug build/flag altında detector input tensor için frame başına:
+
+- min
+- max
+- mean
+- standard deviation
+- finite count
+- zero count
+- channel 0/1/2 ayrı statistics
+- stable sampled coordinates
+- optional quantized checksum
+
+üret.
+
+Production full run’da tensor D2H yapılmayacak.
+
+Debug-only parity:
+
+1. Aynı known face image için image runtime detector tensor üret.
+2. RGBA GPU oracle tensoruyla karşılaştır.
+3. Fused NV12 tensoruyla karşılaştır.
+4. Border dışındaki valid image region üzerinde tolerance ölç.
+
+Kontrol et:
+
+- bütün kanallar aynı mı?
+- channel swap var mı?
+- tensor yalnız letterbox value mu?
+- valid region gerçekten image içeriyor mu?
+- source coordinate mapping doğru mu?
+- Y/UV plane pointer doğru mu?
+
+Debug tamamlanınca ad hoc `g_print` bloklarını kaldır veya `--debug-tensor` flag’ine bağla.
+
+======================================================================
+6. TENSORRT EXECUTION VE RAW OUTPUT’U AYIR
+======================================================================
+
+Input doğru olduktan sonra şu sırayla doğrula:
+
+1. TensorRT input dynamic shape gerçekten:
+   `B×3×640×640`
+2. B değeri execution context’e set edilmiş mi?
+3. Bütün tensor addresses set edilmiş mi?
+4. `enqueueV3` success dönüyor mu?
+5. CUDA stream error kontrol ediliyor mu?
+6. Output tensor names/shapes profile ile eşleşiyor mu?
+
+NMS/threshold öncesi confidence output için debug-only:
+
+- min confidence
+- max confidence
+- top-10 confidence
+- anchor index
+- per-frame max confidence
+
+raporla.
+
+Karar ağacı:
+
+- RGBA oracle input doğru ama raw confidence düşük:
+  - normalization/channel order/engine binding sorunu
+- Raw confidence yüksek ama `raw_dets=0`:
+  - confidence layout, threshold veya parser sorunu
+- Raw detection var ama bbox bozuk:
+  - anchor/variance/stride veya reverse mapping sorunu
+- Bbox doğru ama tracking sıfır:
+  - eligibility/tracker input sorunu
+
+Raw confidence görülmeden threshold düşürme.
+
+======================================================================
+7. RETINAFACE OUTPUT CONTRACT’INI DOĞRULA
+======================================================================
+
+Exact engine output tensor’larını runtime manifestten yaz:
+
+- tensor name
+- dtype
+- runtime shape
+- semantic role:
+  - loc/bbox
+  - conf/score
+  - landmarks
+
+Output binding’i yalnız output sırasına göre varsayma; isim/profile semantic mapping kullan.
+
+Doğrula:
+
+- confidence tensor softmax gerektiriyor mu?
+- face score hangi class index?
+- anchors count input resolution ile uyumlu mu?
+- strides/feature-map sizes doğru mu?
+- bbox variance değerleri doğru mu?
+- landmark variance doğru mu?
+- output batch stride doğru mu?
+
+Batch frame offset:
+
+  frame_output = output_base + frame_batch_position * per_frame_output_size
+
+olmalı.
+
+Bütün framelerin output’unu frame 0 offset’inden okumadığını test et.
+
+======================================================================
+8. FRAME LIMIT 304/300 DAVRANIŞINI DOĞRU DÜZELT
+======================================================================
+
+`--max-frames 300` demek:
+
+  processed/inference/observation frame count == 300
+
+demektir.
+
+Mux son batch’i 296..303 olarak sekiz frame getirebilir. Bu durumda:
+
+- 296,297,298,299 kabul edilir
+- 300,301,302,303 `limit_discarded` olarak bırakılır
+- inference’a gönderilmez
+- observation yazılmaz
+- tracker’a verilmez
+
+Counters dürüst olsun:
+
+- `decoder_emitted_count` 304 olabilir
+- `accepted_frame_count` 300 olmalı
+- `processed_frame_count` 300 olmalı
+- `limit_discarded_count` 4 olabilir
+
+`decoded_count == 300` diye sahte counter yazma.
+
+Assembler, kalan kapasiteyi batch oluşturulmadan önce uygulasın:
+
+  remaining = max_frames - accepted_count
+  take = min(remaining, incoming_frames.size())
+
+Kalan frame owner’ları güvenli release edilsin ve pipeline bounded biçimde durdurulsun.
+
+======================================================================
+9. ZORUNLU GATE SIRASI
+======================================================================
+
+Gate 1 — Surface contract
+
+  NV12/RGBA caps, colorFormat, pitches ve plane layout kanıtı.
+
+Gate 2 — Known-face JPEG oracle
+
+  Mevcut image runtime aynı fixture’da face buluyor.
+
+Gate 3 — GPU RGBA video oracle
+
+  nvvideoconvert RGBA path aynı known-face video’da face buluyor.
+
+Gate 4 — Fused NV12 parity
+
+  NV12 kernel tensor/bbox/landmark sonucu RGBA oracle ile tolerance içinde.
+
+Gate 5 — Friends 64-frame test
+
+İlk 16 yerine en az 64 frame kullan. Kanıt:
+
+- face detections > 0 veya referans oracle aynı 64 frame’de yüz olmadığını kanıtlıyor
+- raw confidence distribution
+- no format mismatch
+
+Gate 6 — Friends 300-frame
+
+- processed exactly 300
+- detections > 0
+- valid bbox/landmarks
+- embeddings > 0
+- tracks > 0
+- no frame mapping error
+
+Gate 7 — Batch parity
+
+- detector batch 1/4/8
+- same known-face video
+- same Friends segment
+- bbox/landmark/embedding tolerance
+- logical track identity parity
+
+Tracker ve full-video acceptance yalnız Gate 1–6 green olduktan sonra devam etsin.
+
+======================================================================
+10. TESTLER
+======================================================================
+
+Eklenmesi gereken targeted tests:
+
+1. NV12 surface RGBA kernel tarafından reddedilir.
+2. RGBA pitch/format contract.
+3. NV12 plane offset/pitch extraction.
+4. Known NV12 color blocks → expected RGB/BGR values.
+5. BT.601 limited conversion.
+6. BT.709 limited conversion.
+7. Odd dimensions/chroma sampling bounds.
+8. Letterbox scale/pad mapping.
+9. Image runtime vs RGBA GPU tensor parity.
+10. RGBA GPU vs fused NV12 tensor parity.
+11. Batch 1 vs 8 tensor/output mapping.
+12. Raw output frame stride.
+13. Exact 300 accepted frames with 304 decoder-emitted frames.
+14. Final partial inference batch size 4.
+15. Known-face repeated video detector acceptance.
+
+Make targets:
+
+  make phase2-m5-surface-contract
+  make phase2-m5-known-face-oracle
+  make phase2-m5-nv12-preprocess-parity
+  make phase2-m5-retinaface-runtime
+  make phase2-m5-real-gpu-batching
+
+Empty test, host-only skip veya mocked detector PASS değildir.
+
+======================================================================
+11. ŞU ANDA YAPILMAYACAKLAR
+======================================================================
+
+- Detector threshold düşürme.
+- Model değiştirme.
+- SCRFD’ye dönme.
+- CPU inference fallback.
+- OpenCV/PIL production decode.
+- Friends’in ilk 16 frame’inden accuracy sonucu çıkarma.
+- Tracking kodunu detector çalışmadan debug etme.
+- NV12’i `uchar4` olarak okumaya devam etme.
+- Full frame’i CPU’ya kopyalama.
+- Tensor dump’ını production path’te bırakma.
+- Ad hoc print’lerle source’u kirli bırakma.
+- “Tensor değerleri sıfır değil, o halde doğru” sonucuna varma.
+
+======================================================================
+12. COMPLETION EVIDENCE
+======================================================================
+
+Final raporda kesin olarak göster:
+
+- İlk root cause neydi?
+- Surface gerçek formatı neydi?
+- İlk pitch neden 2048’di?
+- RGBA oracle detection sonucu ne?
+- Fused NV12 detection sonucu ne?
+- Image/RGBA/NV12 tensor parity metrikleri ne?
+- Raw confidence max/top-K ne?
+- RetinaFace bbox/landmark parity ne?
+- 300-frame counters:
+  - decoder emitted
+  - accepted
+  - processed
+  - limit discarded
+- detections/embeddings/tracks
+- batch 1/4/8 parity
+- exact commands ve raw output
+- remaining limitation
+
+Şimdi ilk olarak `NvBufSurface.colorFormat + planeParams + caps` kanıtını çıkar.
+
+Ardından GPU RGBA correctness oracle’ı çalıştır.
+
+RGBA oracle face bulmadan fused NV12 kernel veya tracker üzerinde tahminle ilerleme.
+
+Root cause düzeldikten sonra production fused NV12 path’i tamamla ve Friends 300-frame gate’e devam et. Yeni kullanıcı onayı isteme.
