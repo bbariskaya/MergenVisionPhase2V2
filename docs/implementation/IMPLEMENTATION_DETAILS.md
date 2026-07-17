@@ -205,3 +205,99 @@ make phase1-sprint-01-acceptance
 ```
 
 All targets passed twice on 2026-07-16 (78 tests total: 44 unit + 34 integration, ruff, mypy, format check, Docker build/import, restart probe, git diff --check).
+
+## 9. Phase 2 Native Video Observation Baseline
+
+Recorded after `make phase2-m6-native-full-observation` on `test_videos/Friends.mp4` inside `mergenvision/deepstream-dev:9.0`:
+
+| Metric | Value |
+|---|---|
+| Processed frames | 6665 |
+| Detections | 9020 |
+| Raw tracks | 150 |
+| Embeddings | 9020 |
+| Embedding dimension | 512 |
+| Embedding L2 norm range | 1.0 .. 1.0 |
+| Detector batch | 16 (default) |
+| Recognizer batch | 32 |
+| NVMM device memory | yes |
+| Pipeline FPS (full decode→detect→align→embed→track) | ~385.5 FPS |
+| Pure detector+raw-track throughput | ~529.4 FPS (batch 16) |
+
+Full observation path:
+
+```text
+filesrc -> qtdemux -> h264parse -> nvv4l2decoder -> nvstreammux(batch=16) -> pad probe
+  -> VideoFacePipeline::infer_detector_batch
+    -> RGBA/NV12 preprocess kernel -> RetinaFace R50
+    -> RetinaFacePostproc::processBatch
+    -> run_recognition_for_batch
+      -> five-point CUDA similarity transform
+      -> warp_align_rgba_pitch / warp_align_nv12_pitch -> 112x112
+      -> GlintR100Engine::enqueue
+      -> L2 normalize
+    -> NaiveTracker
+```
+
+Default detector temporal batch size is 16. The engine profile supports dynamic batches 1..64, but batch 16 is the chosen sweet spot because detection and track counts are invariant and two runs are consistent.
+
+Quality gating and crop-persistence decisions happen later in the Python application layer; native runtime marks every detection `recognition_eligible=true` for the full-observation gate only.
+
+## 10. Phase 2 Milestone 7 — Video Identity Resolution & Persistence
+
+`make phase2-m7-video-identity` green on 2026-07-17:
+
+- `tests/unit/services/test_video_identity_resolution_service.py` — 6 passed:
+  - first unknown track → `new_anonymous`
+  - repeated vector → same `faceId` as existing anonymous
+  - enrolled identity → `known` match
+  - overlapping canonical tracks cannot reuse the same existing `faceId`
+  - close top-2 margin → `new_anonymous`
+  - missing crop bytes → structured error
+- `tests/unit/services/test_video_track_persistence_service.py` — 1 passed (fake UoW)
+- `tests/integration/video/test_video_identity_persistence.py` — 1 passed (real PostgreSQL)
+
+Key implementation:
+
+- `VideoIdentityResolutionService` resolves each `CanonicalTrack` by reusing `IdentityStorageLifecycleService`:
+  - query existing sample candidates in Qdrant
+  - accept known/anonymous matches when top-1 ≥ threshold and margin is safe
+  - create a new anonymous identity when unmatched or ambiguous
+  - temporal overlap guard inside one video/job prevents two overlapping tracks from sharing the same existing `faceId`
+- `VideoTrackPersistenceService` persists canonical tracks, raw tracklets, appearance intervals, and best-sample links to PostgreSQL under one UoW.
+- `UnitOfWork.flush()` added to the port to guarantee `video_track` rows exist before dependent `video_tracklet`/`appearance_interval` inserts.
+- `RecognitionOutcome` now carries `result_id` so every video track references an immutable `recognition_result` snapshot.
+
+Known next gap: the caller must supply a best-shot crop for each new-anonymous track; the native observation writer does not yet materialize those crops.
+
+## 11. Phase 2 Milestone 8 — Worker / Job Integration + Result API
+
+`make phase2-m8-video-result` green on 2026-07-17:
+
+- `tests/integration/video/test_video_processing_and_result_api.py` — 1 passed (real PostgreSQL)
+  - creates a `video_asset` in `ready` state + a `processing` `video_job`
+  - feeds 5 synthetic `VideoObservationFrame`s through `VideoProcessingService.process`
+  - asserts the job becomes `completed`/`finalize`, `person_count == 1`, result manifest key written
+  - verifies one persisted `video_track` linked to `recognition_result`
+  - reads `/api/v1/videos/jobs/{job_id}/people`, `/appearances`, `/timeline` and checks counts/schema
+
+Key implementation:
+
+- New ports:
+  - `app/application/ports/video_observations.py` — compact observation contract between native worker and Python tracker.
+  - `app/application/ports/track_crop_provider.py` — best-shot crop source for persistent samples.
+- New services:
+  - `app/application/services/video_tracking_service.py` — ByteTrack-style IoU tracker; produces `rawTracklet`s.
+  - `app/application/services/video_reconciliation_service.py` — merges/reconciles raw tracklets into canonical `trackId`s per job.
+  - `app/application/services/video_identity_resolution_service.py` — maps canonical tracks to persistent `faceId`s via `IdentityStorageLifecycleService`.
+  - `app/application/services/video_track_persistence_service.py` — persists tracks/tracklets/appearances/best-sample links.
+  - `app/application/services/video_processing_service.py` — end-to-end orchestration of a claimed job: decode observations, track, reconcile, resolve identity, persist, finalize.
+  - `app/application/services/video_result_service.py` — read-side aggregation for people, appearances, and timeline records.
+- New API routes (`app/api/routes/videos.py`):
+  - `GET /api/v1/videos/jobs/{job_id}/people`
+  - `GET /api/v1/videos/jobs/{job_id}/appearances`
+  - `GET /api/v1/videos/jobs/{job_id}/timeline`
+- New schema models (`app/api/schemas.py`) with camelCase aliases for the response payloads.
+- Placeholder crop adapter (`app/infrastructure/runtime/track_crop_provider.py`) keeps the pipeline testable until native best-shot crop extraction lands.
+
+Known next gap: `result_manifest_key` points to a generated key but the manifest JSON is not yet written to MinIO; the backend contract and persistence path are in place.

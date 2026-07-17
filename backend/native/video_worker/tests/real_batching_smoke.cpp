@@ -13,6 +13,8 @@
  * the observation protobuf artifact (that comes in mv_video_worker).
  */
 
+#include <algorithm>
+#include <unordered_map>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 
@@ -25,7 +27,23 @@
 #include "mv/video/tracker_adapter.hpp"
 #include "mv/video/video_face_pipeline.hpp"
 
+#ifdef MV_VIDEO_WORKER
+#include "video_observation_v1.pb.h"
+#include "video_track_template_v1.pb.h"
+#include <google/protobuf/io/coded_stream.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <google/protobuf/util/delimited_message_util.h>
+#include <NvInfer.h>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <nvml.h>
+#include <webp/encode.h>
+#include <zstd.h>
+#endif
+
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cinttypes>
 #include <cstdint>
@@ -33,9 +51,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <condition_variable>
+#include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -43,10 +65,17 @@ namespace {
 struct SmokeOptions {
     std::string video_path;
     int gpu_id = 0;
-    int detector_batch_size = 8;
+    int detector_batch_size = 16;
     int recognizer_batch_size = 32;
     int max_frames = 300;
-    bool rgba_oracle = false;
+#ifdef MV_VIDEO_WORKER
+    std::string output_dir;
+    std::string job_id;
+    std::string video_id;
+    std::string model_profile;
+    std::string detector_engine;
+    std::string recognizer_engine;
+#endif
 };
 
 struct SmokeStats {
@@ -74,8 +103,61 @@ struct SmokeStats {
     uint64_t pipeline_preprocess_us = 0;
     uint64_t pipeline_engine_us = 0;
     uint64_t pipeline_postproc_us = 0;
+    uint64_t pipeline_recognition_us = 0;
     uint64_t pipeline_mapping_us = 0;
     uint64_t pipeline_calls = 0;
+    int total_embeddings = 0;
+    int embedding_dim_errors = 0;
+    int embedding_finite_errors = 0;
+    double embedding_norm_min = 0.0;
+    double embedding_norm_max = 0.0;
+};
+
+struct WorkQueue {
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::deque<std::vector<mergenvision::video::FrameEnvelope>> items;
+    bool eos = false;
+    bool error = false;
+    std::string error_message;
+
+    void push(std::vector<mergenvision::video::FrameEnvelope> frames) {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (eos) return;
+            items.emplace_back(std::move(frames));
+        }
+        cv.notify_one();
+    }
+
+    void set_error(const std::string& msg) {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!error) {
+                error = true;
+                error_message = msg;
+            }
+            eos = true;
+        }
+        cv.notify_all();
+    }
+
+    void set_eos() {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            eos = true;
+        }
+        cv.notify_all();
+    }
+
+    std::optional<std::vector<mergenvision::video::FrameEnvelope>> pop() {
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait(lock, [&] { return !items.empty() || eos; });
+        if (items.empty()) return std::nullopt;
+        auto front = std::move(items.front());
+        items.pop_front();
+        return front;
+    }
 };
 
 struct PipelineContext {
@@ -93,16 +175,454 @@ struct PipelineContext {
     std::string error_message;
 };
 
+#ifdef MV_VIDEO_WORKER
+struct ArtifactState;
+#endif
+
 struct ProbeState {
     SmokeOptions* opts = nullptr;
     SmokeStats* stats = nullptr;
+    WorkQueue* queue = nullptr;
     mergenvision::video::TemporalFrameBatchAssembler* assembler = nullptr;
     mergenvision::video::VideoFacePipeline* pipeline = nullptr;
     mergenvision::video::NaiveTracker* tracker = nullptr;
     int64_t presentation_counter = 0;
     int64_t mux_counter = 0;
     bool stop_requested = false;
+#ifdef MV_VIDEO_WORKER
+    ArtifactState* artifact = nullptr;
+#endif
 };
+
+#ifdef MV_VIDEO_WORKER
+
+using AlignedCropBuffer = mergenvision::video::AlignedCropBuffer;
+
+static void delete_file_silent(const std::filesystem::path& p) {
+    std::error_code ec;
+    std::filesystem::remove(p, ec);
+}
+
+static void compress_file_zstd(const std::filesystem::path& src,
+                               const std::filesystem::path& dst) {
+    std::ifstream in(src, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("cannot open source file for zstd compression: " + src.string());
+    }
+    in.seekg(0, std::ios::end);
+    const std::streamoff src_size_off = in.tellg();
+    in.seekg(0, std::ios::beg);
+    if (src_size_off < 0) {
+        throw std::runtime_error("cannot determine source file size: " + src.string());
+    }
+    const size_t src_size = static_cast<size_t>(src_size_off);
+    std::vector<char> input(src_size);
+    in.read(input.data(), static_cast<std::streamsize>(src_size));
+    if (!in) {
+        throw std::runtime_error("failed to read source file for zstd compression: " + src.string());
+    }
+
+    const size_t bound = ZSTD_compressBound(src_size);
+    std::vector<uint8_t> output(bound);
+    const size_t compressed = ZSTD_compress(
+        output.data(), output.size(),
+        input.data(), input.size(),
+        3 /* level */);
+    if (ZSTD_isError(compressed)) {
+        throw std::runtime_error(std::string("zstd compression failed: ") + ZSTD_getErrorName(compressed));
+    }
+
+    std::ofstream out(dst, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(output.data()), static_cast<std::streamsize>(compressed));
+    if (!out) {
+        throw std::runtime_error("failed to write zstd compressed file: " + dst.string());
+    }
+}
+
+static std::string collect_runtime_fingerprint(int gpu_id) {
+    std::ostringstream oss;
+
+    int cuda_runtime = 0;
+    if (cudaRuntimeGetVersion(&cuda_runtime) != cudaSuccess) {
+        cuda_runtime = 0;
+    }
+    oss << "cuda_runtime=" << cuda_runtime;
+
+#if defined(NV_TENSORRT_MAJOR) && defined(NV_TENSORRT_MINOR)
+    oss << ";tensorrt=" << NV_TENSORRT_MAJOR << "." << NV_TENSORRT_MINOR;
+#if defined(NV_TENSORRT_PATCH)
+    oss << "." << NV_TENSORRT_PATCH;
+#endif
+#else
+    oss << ";tensorrt=unknown";
+#endif
+
+#if defined(NVDS_VERSION_MAJOR)
+    oss << ";deepstream=" << NVDS_VERSION_MAJOR;
+#if defined(NVDS_VERSION_MINOR)
+    oss << "." << NVDS_VERSION_MINOR;
+#endif
+#else
+    oss << ";deepstream=9.0";
+#endif
+
+    nvmlReturn_t nvml_init = nvmlInit_v2();
+    if (nvml_init == NVML_SUCCESS) {
+        nvmlDevice_t device = nullptr;
+        nvmlReturn_t dev_ret = nvmlDeviceGetHandleByIndex_v2(static_cast<unsigned int>(gpu_id), &device);
+        if (dev_ret == NVML_SUCCESS && device != nullptr) {
+            char uuid[NVML_DEVICE_UUID_V2_BUFFER_SIZE] = {0};
+            if (nvmlDeviceGetUUID(device, uuid, sizeof(uuid)) == NVML_SUCCESS) {
+                oss << ";gpu_uuid=" << uuid;
+            }
+        }
+        nvmlShutdown();
+    }
+
+    char hostname[256] = {0};
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        oss << ";hostname=" << hostname;
+    }
+    return oss.str();
+}
+
+struct RepresentativeCandidate {
+    float score = -1.0f;
+    int64_t pts_ns = -1;
+    int32_t ordinal = -1;
+    std::string observation_id;
+    AlignedCropBuffer crop;
+};
+
+struct TrackAccumulator {
+    std::string raw_track_key;
+    int64_t first_pts_ns = -1;
+    int64_t last_pts_ns = -1;
+    int64_t observation_count = 0;
+    int64_t eligible_observation_count = 0;
+    std::vector<float> mean_embedding;
+    bool has_template = false;
+    RepresentativeCandidate representative;
+
+    void update_template(const mergenvision::video::FaceDetection& face) {
+        if (!face.recognition_eligible || face.embedding.size() != 512) {
+            return;
+        }
+        if (mean_embedding.empty()) {
+            mean_embedding.assign(face.embedding.begin(), face.embedding.end());
+        } else {
+            const float n = static_cast<float>(eligible_observation_count);
+            for (size_t i = 0; i < 512; ++i) {
+                mean_embedding[i] += (face.embedding[i] - mean_embedding[i]) / n;
+            }
+        }
+        ++eligible_observation_count;
+        has_template = true;
+    }
+};
+
+class ArtifactState {
+public:
+    explicit ArtifactState(const std::string& output_dir,
+                           const std::string& job_id,
+                           const std::string& video_id,
+                           int gpu_id,
+                           const std::string& detector_engine,
+                           const std::string& recognizer_engine)
+        : output_dir_(output_dir),
+          job_id_(job_id),
+          video_id_(video_id),
+          gpu_id_(gpu_id),
+          detector_engine_(detector_engine),
+          recognizer_engine_(recognizer_engine) {
+        std::filesystem::create_directories(output_dir_ / "crops");
+        obs_stream_.open(output_dir_ / "observations.pb", std::ios::binary);
+        tmpl_stream_.open(output_dir_ / "track_templates.pb", std::ios::binary);
+        if (!obs_stream_ || !tmpl_stream_) {
+            throw std::runtime_error("failed to open artifact streams");
+        }
+    }
+
+    ~ArtifactState() {
+        if (obs_stream_.is_open()) obs_stream_.close();
+        if (tmpl_stream_.is_open()) tmpl_stream_.close();
+    }
+
+    void write_observation_frame(const mergenvision::video::v1::VideoObservationFrame& frame) {
+        google::protobuf::util::SerializeDelimitedToOstream(frame, &obs_stream_);
+        ++observation_frame_count_;
+    }
+
+    void update_track(const std::string& raw_track_key,
+                      const mergenvision::video::FaceDetection& face,
+                      const AlignedCropBuffer& crop,
+                      uint32_t display_width,
+                      uint32_t display_height) {
+        auto& acc = accumulators_[raw_track_key];
+        acc.raw_track_key = raw_track_key;
+        if (acc.first_pts_ns < 0 || face.frame.pts_ns < acc.first_pts_ns) {
+            acc.first_pts_ns = face.frame.pts_ns;
+        }
+        if (face.frame.pts_ns > acc.last_pts_ns) {
+            acc.last_pts_ns = face.frame.pts_ns;
+        }
+        ++acc.observation_count;
+        acc.update_template(face);
+
+        if (crop.size() != 3 * 112 * 112 || !face.recognition_eligible) {
+            return;
+        }
+
+        const float w = std::max(1.0f, face.bbox.x2 - face.bbox.x1);
+        const float h = std::max(1.0f, face.bbox.y2 - face.bbox.y1);
+        const float face_area = w * h;
+        const float image_area = static_cast<float>(display_width * display_height);
+        float margin = 1.0f;
+        if (face.bbox.x1 > 0 && face.bbox.y1 > 0 &&
+            face.bbox.x2 < display_width && face.bbox.y2 < display_height) {
+            margin = std::min({face.bbox.x1, face.bbox.y1,
+                               display_width - face.bbox.x2,
+                               display_height - face.bbox.y2});
+        }
+        const float score = face.quality_score * (face_area / image_area) * std::min(margin, 50.0f);
+
+        RepresentativeCandidate cand;
+        cand.score = score;
+        cand.pts_ns = face.frame.pts_ns;
+        cand.ordinal = static_cast<int32_t>(face.detection_ordinal);
+        cand.observation_id = face.observation_id;
+        cand.crop = crop;
+
+        auto& rep = acc.representative;
+        if (rep.observation_id.empty() ||
+            cand.score > rep.score ||
+            (cand.score == rep.score && cand.pts_ns < rep.pts_ns) ||
+            (cand.score == rep.score && cand.pts_ns == rep.pts_ns && cand.ordinal < rep.ordinal)) {
+            rep = std::move(cand);
+        }
+    }
+
+    void finalize(const std::string& model_version,
+                  const std::string& preprocess_version,
+                  const std::string& config_version,
+                  const std::string& input_video_path,
+                  uint64_t wall_us) {
+        (void)input_video_path;
+        finalize_templates(model_version, preprocess_version, config_version);
+        finalize_observations();
+        write_crops();
+
+        auto obs_pb = output_dir_ / "observations.pb";
+        auto obs_zst = output_dir_ / "observations.pb.zst";
+        auto tmpl_pb = output_dir_ / "track_templates.pb";
+        auto tmpl_zst = output_dir_ / "track_templates.pb.zst";
+
+        compress_file_zstd(obs_pb, obs_zst);
+        delete_file_silent(obs_pb);
+        compress_file_zstd(tmpl_pb, tmpl_zst);
+        delete_file_silent(tmpl_pb);
+
+        write_manifest(model_version, preprocess_version, config_version,
+                       "", wall_us);
+    }
+
+    int64_t observation_frame_count() const { return observation_frame_count_; }
+    int64_t raw_track_count() const { return static_cast<int64_t>(accumulators_.size()); }
+    int64_t crop_count() const {
+        int64_t n = 0;
+        for (const auto& kv : accumulators_) {
+            if (!kv.second.representative.crop.empty()) ++n;
+        }
+        return n;
+    }
+
+private:
+    std::filesystem::path output_dir_;
+    std::string job_id_;
+    std::string video_id_;
+    int gpu_id_ = 0;
+    std::string detector_engine_;
+    std::string recognizer_engine_;
+    std::ofstream obs_stream_;
+    std::ofstream tmpl_stream_;
+    int64_t observation_frame_count_ = 0;
+    std::unordered_map<std::string, TrackAccumulator> accumulators_;
+
+    void finalize_observations() {
+        mergenvision::video::v1::ObservationChunkFooter footer;
+        footer.set_job_id(job_id_);
+        footer.set_sequence_no(0);
+        footer.set_frame_count(observation_frame_count_);
+        google::protobuf::util::SerializeDelimitedToOstream(footer, &obs_stream_);
+        obs_stream_.close();
+    }
+
+    void finalize_templates(const std::string& model_version,
+                            const std::string& preprocess_version,
+                            const std::string& config_version) {
+        {
+            mergenvision::video::v1::TrackTemplateBundle bundle;
+            bundle.set_job_id(job_id_);
+            bundle.set_video_id(video_id_);
+            bundle.set_sequence_no(0);
+            bundle.set_model_version(model_version);
+            bundle.set_preprocess_version(preprocess_version);
+            bundle.set_config_version(config_version);
+            google::protobuf::util::SerializeDelimitedToOstream(bundle, &tmpl_stream_);
+        }
+
+        for (const auto& kv : accumulators_) {
+            const auto& acc = kv.second;
+            mergenvision::video::v1::RawTrackTemplate t;
+            t.set_raw_track_key(acc.raw_track_key);
+            t.set_first_pts_ns(acc.first_pts_ns);
+            t.set_last_pts_ns(acc.last_pts_ns);
+            t.set_observation_count(acc.observation_count);
+            t.set_eligible_observation_count(acc.eligible_observation_count);
+            if (acc.has_template && !acc.mean_embedding.empty()) {
+                float norm = 0.0f;
+                for (float v : acc.mean_embedding) norm += v * v;
+                norm = std::sqrt(norm);
+                const float inv_norm = norm > 1e-12f ? 1.0f / norm : 0.0f;
+                for (float v : acc.mean_embedding) {
+                    t.add_template_embedding(v * inv_norm);
+                }
+                t.set_template_quality(1.0f);  // TODO: replace with real quality estimate
+            }
+            if (!acc.representative.crop.empty()) {
+                std::string rel = "crops/" + acc.raw_track_key + ".webp";
+                t.set_representative_crop_relative_key(rel);
+                t.set_representative_pts_ns(acc.representative.pts_ns);
+                t.set_representative_ordinal(acc.representative.ordinal);
+            } else {
+                t.set_no_crop_reason("insufficient_representative_crop");
+            }
+            google::protobuf::util::SerializeDelimitedToOstream(t, &tmpl_stream_);
+        }
+
+        {
+            mergenvision::video::v1::TrackTemplateFooter footer;
+            footer.set_job_id(job_id_);
+            footer.set_sequence_no(0);
+            footer.set_template_count(static_cast<int64_t>(accumulators_.size()));
+            google::protobuf::util::SerializeDelimitedToOstream(footer, &tmpl_stream_);
+        }
+        tmpl_stream_.close();
+    }
+
+    void write_crops() {
+        for (const auto& kv : accumulators_) {
+            const auto& acc = kv.second;
+            if (acc.representative.crop.empty()) continue;
+            auto path = output_dir_ / "crops" / (acc.raw_track_key + ".webp");
+            std::vector<uint8_t> bytes = encode_webp(acc.representative.crop);
+            std::ofstream f(path, std::ios::binary);
+            f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        }
+    }
+
+    static std::vector<uint8_t> encode_webp(const AlignedCropBuffer& crop) {
+        constexpr int k = 112;
+        std::vector<uint8_t> rgb(k * k * 3);
+        for (int y = 0; y < k; ++y) {
+            for (int x = 0; x < k; ++x) {
+                int plane = y * k + x;
+                size_t idx = (y * k + x) * 3;
+                auto denorm = [](float v) {
+                    float p = v * 127.5f + 127.5f;
+                    return static_cast<uint8_t>(std::clamp(p, 0.0f, 255.0f) + 0.5f);
+                };
+                rgb[idx + 0] = denorm(crop[plane + 0 * k * k]);
+                rgb[idx + 1] = denorm(crop[plane + 1 * k * k]);
+                rgb[idx + 2] = denorm(crop[plane + 2 * k * k]);
+            }
+        }
+        uint8_t* out = nullptr;
+        size_t size = WebPEncodeRGB(rgb.data(), k, k, k * 3, 90, &out);
+        if (size == 0 || !out) {
+            throw std::runtime_error("WebP encode failed");
+        }
+        std::vector<uint8_t> result(out, out + size);
+        WebPFree(out);
+        return result;
+    }
+
+    void write_manifest(const std::string& model_version,
+                        const std::string& preprocess_version,
+                        const std::string& config_version,
+                        const std::string& input_sha256,
+                        uint64_t wall_us) {
+        (void)input_sha256;
+        auto obs_path = output_dir_ / "observations.pb.zst";
+        auto tmpl_path = output_dir_ / "track_templates.pb.zst";
+        int64_t crop_n = crop_count();
+        const std::string runtime_fingerprint = collect_runtime_fingerprint(gpu_id_);
+
+        std::ostringstream oss;
+        oss << "{\n";
+        oss << "  \"schema_versions\": {\n";
+        oss << "    \"observation\": \"mergenvision.video.v1.VideoObservationFrame\",\n";
+        oss << "    \"template\": \"mergenvision.video.v1.TrackTemplateBundle\",\n";
+        oss << "    \"manifest\": \"1\"\n";
+        oss << "  },\n";
+        oss << "  \"job_id\": \"" << escape_json(job_id_) << "\",\n";
+        oss << "  \"video_id\": \"" << escape_json(video_id_) << "\",\n";
+        oss << "  \"model_version\": \"" << escape_json(model_version) << "\",\n";
+        oss << "  \"preprocess_version\": \"" << escape_json(preprocess_version) << "\",\n";
+        oss << "  \"config_version\": \"" << escape_json(config_version) << "\",\n";
+        oss << "  \"observation_frame_count\": " << observation_frame_count_ << ",\n";
+        oss << "  \"raw_track_count\": " << accumulators_.size() << ",\n";
+        oss << "  \"template_count\": " << accumulators_.size() << ",\n";
+        oss << "  \"crop_count\": " << crop_n << ",\n";
+        oss << "  \"runtime_fingerprint\": \"" << escape_json(runtime_fingerprint) << "\",\n";
+        oss << "  \"artifacts\": {\n";
+        oss << "    \"observations.pb.zst\": {\"size\": " << std::filesystem::file_size(obs_path) << "},\n";
+        oss << "    \"track_templates.pb.zst\": {\"size\": " << std::filesystem::file_size(tmpl_path) << "}";
+
+        std::vector<std::string> crop_entries;
+        for (const auto& kv : accumulators_) {
+            const auto& acc = kv.second;
+            if (acc.representative.crop.empty()) continue;
+            auto crop_path = output_dir_ / "crops" / (acc.raw_track_key + ".webp");
+            std::error_code ec;
+            if (!std::filesystem::exists(crop_path, ec)) continue;
+            std::string rel = "crops/" + acc.raw_track_key + ".webp";
+            std::ostringstream entry;
+            entry << "    \"" << escape_json(rel) << "\": {\"size\": "
+                  << std::filesystem::file_size(crop_path) << "}";
+            crop_entries.push_back(entry.str());
+        }
+        for (const auto& entry : crop_entries) {
+            oss << ",\n" << entry;
+        }
+        oss << "\n  },\n";
+        oss << "  \"wall_us\": " << wall_us << "\n";
+        oss << "}\n";
+
+        std::ofstream f(output_dir_ / "manifest.json");
+        f << oss.str();
+    }
+
+    static std::string escape_json(const std::string& s) {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            switch (c) {
+                case '"': out += "\\\""; break;
+                case '\\': out += "\\\\"; break;
+                case '\b': out += "\\b"; break;
+                case '\f': out += "\\f"; break;
+                case '\n': out += "\\n"; break;
+                case '\r': out += "\\r"; break;
+                case '\t': out += "\\t"; break;
+                default: out += c; break;
+            }
+        }
+        return out;
+    }
+};
+
+#endif  // MV_VIDEO_WORKER
 
 static void set_stat_error(SmokeStats* stats, const std::string& msg) {
     std::lock_guard<std::mutex> lock(stats->mtx);
@@ -255,12 +775,98 @@ static void on_demux_pad_added(GstElement* /*element*/, GstPad* pad, gpointer us
     ctx->cv.notify_all();
 }
 
+#ifdef MV_VIDEO_WORKER
+// Build a UI-safe observation frame protobuf. For this vertical slice we still
+// include per-detection embeddings because downstream Python reconciliation
+// services consume them; they will be moved to the template artifact in a
+// follow-up refactor of those services.
+static mergenvision::video::v1::VideoObservationFrame build_proto_frame(
+    const std::string& job_id,
+    const std::string& video_id,
+    const mergenvision::video::FrameDetections& fd) {
+    using FD = mergenvision::video::FaceDetection;
+    mergenvision::video::v1::VideoObservationFrame proto;
+    proto.set_job_id(job_id);
+    proto.set_video_id(video_id);
+    proto.set_stream_index(0);
+    proto.set_frame_index(static_cast<int64_t>(fd.frame.presentation_index));
+    proto.set_source_pts(fd.frame.pts_ns);
+    proto.set_pts_ns(fd.frame.pts_ns);
+    proto.set_time_base_num(1);
+    proto.set_time_base_den(1'000'000'000);
+    proto.set_display_width(static_cast<int32_t>(fd.frame.display_width));
+    proto.set_display_height(static_cast<int32_t>(fd.frame.display_height));
+    proto.set_rotation(fd.frame.rotation_degrees);
+
+    for (const FD& face : fd.detections) {
+        auto* pd = proto.add_detections();
+        pd->set_detection_id(face.observation_id);
+        pd->set_ordinal(static_cast<int32_t>(face.detection_ordinal));
+        pd->set_x(static_cast<int32_t>(face.bbox.x1));
+        pd->set_y(static_cast<int32_t>(face.bbox.y1));
+        pd->set_width(static_cast<int32_t>(face.bbox.x2 - face.bbox.x1));
+        pd->set_height(static_cast<int32_t>(face.bbox.y2 - face.bbox.y1));
+        for (float v : face.landmarks) pd->add_landmarks(v);
+        pd->set_detector_score(face.detector_score);
+        pd->set_quality_score(face.quality_score);
+        pd->set_tracking_eligible(face.tracking_eligible);
+        pd->set_recognition_eligible(face.recognition_eligible);
+        pd->set_rejection_code(face.rejection_code);
+        if (face.recognition_eligible && face.embedding.size() == 512) {
+            for (float v : face.embedding) pd->add_embedding(v);
+        }
+        pd->set_model_version(face.model_version);
+        pd->set_preprocess_version(face.preprocess_version);
+        pd->set_raw_track_key(face.raw_track_key);
+    }
+    return proto;
+}
+#endif
+
 static void process_complete_inference_batch(
     const mergenvision::video::InferenceFrameBatch& batch,
     ProbeState* ps,
     SmokeStats* stats) {
     auto frame_detections = ps->pipeline->infer_detector_batch(batch);
+#ifdef MV_VIDEO_WORKER
+    auto aligned_crops = ps->pipeline->take_recognition_crops();
+#endif
     auto m = ps->pipeline->metrics();
+
+    // Verify full observation output: every detection must now carry a valid,
+    // L2-normalized 512-D embedding from the RGBA warp-align + GlintR100 path.
+    {
+        std::lock_guard<std::mutex> lock(stats->mtx);
+        for (const auto& fd : frame_detections) {
+            for (const auto& face : fd.detections) {
+                if (!face.recognition_eligible || face.embedding.empty()) continue;
+                ++stats->total_embeddings;
+                const size_t expected = 512;
+                if (face.embedding.size() != expected) {
+                    ++stats->embedding_dim_errors;
+                    continue;
+                }
+                double norm_sq = 0.0;
+                bool finite = true;
+                for (float v : face.embedding) {
+                    if (!std::isfinite(v)) finite = false;
+                    norm_sq += static_cast<double>(v) * static_cast<double>(v);
+                }
+                if (!finite) {
+                    ++stats->embedding_finite_errors;
+                    continue;
+                }
+                double norm = std::sqrt(norm_sq);
+                if (stats->total_embeddings == 1) {
+                    stats->embedding_norm_min = norm;
+                    stats->embedding_norm_max = norm;
+                } else {
+                    stats->embedding_norm_min = std::min(stats->embedding_norm_min, norm);
+                    stats->embedding_norm_max = std::max(stats->embedding_norm_max, norm);
+                }
+            }
+        }
+    }
 
     auto t_tracker_start = std::chrono::steady_clock::now();
     // Tracker update must be strictly chronological and batch-boundary aware.
@@ -278,6 +884,40 @@ static void process_complete_inference_batch(
             if (stats->first_pts_ns < 0) stats->first_pts_ns = fd.frame.pts_ns;
             stats->last_pts_ns = fd.frame.pts_ns;
         }
+
+#ifdef MV_VIDEO_WORKER
+        if (ps->artifact) {
+            // Tag detections with raw-track correlation before building the
+            // observation artifact.  |tracked| owns copies of the FaceDetection
+            // structs, so we write the key back into |fd.detections| by
+            // observation_id before serializing the frame.
+            std::unordered_map<std::string, std::string> obs_to_track;
+            for (const auto& tracked_det : tracked) {
+                obs_to_track[tracked_det.detection.observation_id] = tracked_det.local_track_key;
+            }
+            for (auto& det : fd.detections) {
+                auto it = obs_to_track.find(det.observation_id);
+                if (it != obs_to_track.end()) {
+                    det.raw_track_key = it->second;
+                }
+            }
+            ps->artifact->write_observation_frame(
+                build_proto_frame(ps->opts->job_id, ps->opts->video_id, fd));
+
+            for (const auto& tracked_det : tracked) {
+                const mergenvision::video::FaceDetection& face = tracked_det.detection;
+                auto it = aligned_crops.find(face.observation_id);
+                const AlignedCropBuffer* crop = (it != aligned_crops.end()) ? &it->second : nullptr;
+                AlignedCropBuffer empty_crop;
+                ps->artifact->update_track(
+                    tracked_det.local_track_key,
+                    face,
+                    crop ? *crop : empty_crop,
+                    fd.frame.display_width,
+                    fd.frame.display_height);
+            }
+        }
+#endif
     }
     auto t_tracker_end = std::chrono::steady_clock::now();
     uint64_t tracker_us = static_cast<uint64_t>(
@@ -290,14 +930,39 @@ static void process_complete_inference_batch(
         stats->pipeline_engine_us += m.engine_enqueue_us;
         stats->pipeline_postproc_us += m.postproc_us;
         stats->pipeline_mapping_us += m.mapping_us;
+        stats->pipeline_recognition_us += m.recognition_us;
         stats->pipeline_calls += m.total_calls;
+    }
+}
+
+static void processing_thread_loop(WorkQueue* queue,
+                                   ProbeState* ps,
+                                   SmokeStats* stats) {
+    auto* assembler = ps->assembler;
+    try {
+        while (auto maybe_frames = queue->pop()) {
+            auto complete_batches = assembler->push(std::move(maybe_frames.value()));
+            for (auto& inf_batch : complete_batches) {
+                process_complete_inference_batch(inf_batch, ps, stats);
+            }
+        }
+        // End of stream: flush any partial inference batch.
+        auto final_batch = assembler->flush_eos();
+        if (final_batch) {
+            process_complete_inference_batch(final_batch.value(), ps, stats);
+            {
+                std::lock_guard<std::mutex> lock(stats->mtx);
+                ++stats->partial_batches;
+            }
+        }
+    } catch (const std::exception& e) {
+        queue->set_error(std::string("processing thread error: ") + e.what());
     }
 }
 
 static GstPadProbeReturn on_mux_src_buffer(GstPad* pad, GstPadProbeInfo* info, gpointer user_data) {
     auto* ps = static_cast<ProbeState*>(user_data);
     auto* stats = ps->stats;
-    auto* assembler = ps->assembler;
     GstBuffer* buffer = GST_PAD_PROBE_INFO_BUFFER(info);
     if (!buffer || ps->stop_requested) {
         return GST_PAD_PROBE_OK;
@@ -410,29 +1075,21 @@ static GstPadProbeReturn on_mux_src_buffer(GstPad* pad, GstPadProbeInfo* info, g
         }
     }
 
-    // Feed the authoritative assembler; it may emit complete inference batches.
-    try {
-        auto complete_batches = assembler->push(std::move(mux_frames));
-        for (auto& inf_batch : complete_batches) {
-            process_complete_inference_batch(inf_batch, ps, stats);
+    {
+        std::lock_guard<std::mutex> lock(stats->mtx);
+        ++stats->mux_buffers;
+        stats->decoded_frames += frames_in_buffer;
+        stats->accepted_frames += accepted_now;
+        stats->batch_size_min = std::min(stats->batch_size_min, frames_in_buffer);
+        stats->batch_size_max = std::max(stats->batch_size_max, frames_in_buffer);
+        if (ps->opts->max_frames > 0 && stats->accepted_frames >= ps->opts->max_frames) {
+            ps->stop_requested = true;
         }
-
-        {
-            std::lock_guard<std::mutex> lock(stats->mtx);
-            ++stats->mux_buffers;
-            stats->decoded_frames += frames_in_buffer;
-            stats->accepted_frames += accepted_now;
-            stats->batch_size_min = std::min(stats->batch_size_min, frames_in_buffer);
-            stats->batch_size_max = std::max(stats->batch_size_max, frames_in_buffer);
-            if (ps->opts->max_frames > 0 && stats->accepted_frames >= ps->opts->max_frames) {
-                ps->stop_requested = true;
-            }
-        }
-    } catch (const std::exception& e) {
-        gst_buffer_unmap(buffer, &map_info);
-        set_stat_error(stats, std::string("assembler/pipeline error: ") + e.what());
-        return GST_PAD_PROBE_OK;
     }
+
+    // Hand off retained frames to the background processing thread. The pad
+    // probe must return immediately so GStreamer decode is not throttled.
+    ps->queue->push(std::move(mux_frames));
 
     gst_buffer_unmap(buffer, &map_info);
 
@@ -454,13 +1111,28 @@ static bool parse_options(int argc, char** argv, SmokeOptions* opts) {
             opts->max_frames = std::atoi(argv[++i]);
         } else if (arg == "--all-frames") {
             opts->max_frames = 0;
-        } else if (arg == "--rgba-oracle") {
-            opts->rgba_oracle = true;
+#ifdef MV_VIDEO_WORKER
+        } else if (arg == "--output" && i + 1 < argc) {
+            opts->output_dir = argv[++i];
+        } else if (arg == "--job-id" && i + 1 < argc) {
+            opts->job_id = argv[++i];
+        } else if (arg == "--video-id" && i + 1 < argc) {
+            opts->video_id = argv[++i];
+        } else if (arg == "--model-profile" && i + 1 < argc) {
+            opts->model_profile = argv[++i];
+        } else if (arg == "--detector-engine" && i + 1 < argc) {
+            opts->detector_engine = argv[++i];
+        } else if (arg == "--recognizer-engine" && i + 1 < argc) {
+            opts->recognizer_engine = argv[++i];
+#endif
         } else if (arg == "--help" || arg == "-h") {
             std::fprintf(stdout,
                 "usage: %s --input <video_path> [--max-frames N | --all-frames]\n"
                 "       [--gpu-id ID] [--detector-batch-size N] [--recognizer-batch-size N]\n"
-                "       [--rgba-oracle]\n",
+#ifdef MV_VIDEO_WORKER
+                "       [--output <dir>] [--job-id <uuid>] [--video-id <uuid>]\n"
+#endif
+                ,
                 argv[0]);
             std::exit(0);
         } else {
@@ -476,6 +1148,14 @@ static bool parse_options(int argc, char** argv, SmokeOptions* opts) {
         std::fprintf(stderr, "error: batch sizes must be positive\n");
         return false;
     }
+#ifdef MV_VIDEO_WORKER
+    if (opts->output_dir.empty() || opts->job_id.empty() || opts->video_id.empty() ||
+        opts->detector_engine.empty() || opts->recognizer_engine.empty()) {
+        std::fprintf(stderr,
+            "error: --output, --job-id, --video-id, --detector-engine, --recognizer-engine are required\n");
+        return false;
+    }
+#endif
     return true;
 }
 
@@ -490,10 +1170,15 @@ int main(int argc, char** argv) {
     setenv("USE_NEW_NVSTREAMMUX", "0", 1);
     gst_init(&argc, &argv);
 
+#ifdef MV_VIDEO_WORKER
+    const std::string retina_engine_path = opts.detector_engine;
+    const std::string glint_engine_path = opts.recognizer_engine;
+#else
     const std::string retina_engine_path =
         "backend/artifacts/engines/deepstream9/retinaface_r50_dynamic.bs1.opt8.max64.fp16.trt1014.engine";
     const std::string glint_engine_path =
         "backend/artifacts/engines/deepstream9/glintr100.bs1.opt8.max64.fp16.trt1014.engine";
+#endif
 
     mergenvision::video::VideoFacePipeline face_pipeline;
     {
@@ -509,11 +1194,33 @@ int main(int argc, char** argv) {
     mergenvision::video::NaiveTracker tracker;
     SmokeStats stats;
     ProbeState ps;
+    WorkQueue queue;
     ps.opts = &opts;
     ps.stats = &stats;
+    ps.queue = &queue;
     ps.assembler = &assembler;
     ps.pipeline = &face_pipeline;
     ps.tracker = &tracker;
+
+#ifdef MV_VIDEO_WORKER
+    std::optional<ArtifactState> artifact_state;
+    std::filesystem::path worker_tmp_output;
+    if (!opts.output_dir.empty()) {
+        worker_tmp_output = opts.output_dir;
+        worker_tmp_output += ".tmp";
+        std::filesystem::remove_all(worker_tmp_output);
+        artifact_state.emplace(
+            worker_tmp_output.string(),
+            opts.job_id,
+            opts.video_id,
+            opts.gpu_id,
+            opts.detector_engine,
+            opts.recognizer_engine);
+        ps.artifact = &*artifact_state;
+    }
+#endif
+
+    std::thread processing_thread(processing_thread_loop, &queue, &ps, &stats);
 
     PipelineContext ctx;
     ctx.pipeline = gst_pipeline_new("real-batching-smoke");
@@ -522,17 +1229,17 @@ int main(int argc, char** argv) {
     ctx.decoder = make_element_checked("nvv4l2decoder", "decoder", &ctx);
     ctx.mux = make_element_checked("nvstreammux", "mux", &ctx);
     GstElement* streamdemux = make_element_checked("nvstreamdemux", "streamdemux", &ctx);
-    GstElement* queue = make_element_checked("queue", "queue", &ctx);
+    GstElement* queue_element = make_element_checked("queue", "queue", &ctx);
     GstElement* sink = make_element_checked("fakesink", "sink", &ctx);
 
     if (!ctx.pipeline || !ctx.demux || !ctx.parser || !ctx.decoder || !ctx.mux ||
-        !streamdemux || !queue || !sink) {
+        !streamdemux || !queue_element || !sink) {
         return 1;
     }
 
     gst_bin_add_many(GST_BIN(ctx.pipeline),
         ctx.demux, ctx.parser, ctx.decoder, ctx.mux,
-        streamdemux, queue, sink, nullptr);
+        streamdemux, queue_element, sink, nullptr);
 
     g_object_set(ctx.decoder,
         "gpu-id", opts.gpu_id,
@@ -545,8 +1252,8 @@ int main(int argc, char** argv) {
     g_object_set(ctx.mux,
         "batch-size", opts.detector_batch_size,
         "batched-push-timeout", 33333,
-        "width", opts.rgba_oracle ? 640 : 1920,
-        "height", opts.rgba_oracle ? 640 : 1080,
+        "width", 1920,
+        "height", 1080,
         "enable-padding", FALSE,
         "gpu-id", opts.gpu_id,
         "live-source", FALSE,
@@ -560,56 +1267,22 @@ int main(int argc, char** argv) {
 
     if (!link_static(ctx.parser, ctx.decoder, &ctx)) return 1;
     if (!link_static(ctx.mux, streamdemux, &ctx)) return 1;
-    if (!link_static(queue, sink, &ctx)) return 1;
+    if (!link_static(queue_element, sink, &ctx)) return 1;
 
-    if (opts.rgba_oracle) {
-        GstElement* nvvidconv = make_element_checked("nvvideoconvert", "nvvidconv", &ctx);
-        GstElement* capsfilter = make_element_checked("capsfilter", "capsfilter", &ctx);
-        if (!nvvidconv || !capsfilter) return 1;
-        gst_bin_add_many(GST_BIN(ctx.pipeline), nvvidconv, capsfilter, nullptr);
-        g_object_set(nvvidconv,
-            "gpu-id", opts.gpu_id,
-            "nvbuf-memory-type", 2,
-            nullptr);
-        GstCaps* rgba_caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=RGBA");
-        g_object_set(capsfilter, "caps", rgba_caps, nullptr);
-        gst_caps_unref(rgba_caps);
-
-        if (!gst_element_link(ctx.decoder, nvvidconv)) {
-            std::fprintf(stderr, "decoder->nvvidconv link failed\n");
-            return 1;
-        }
-        if (!gst_element_link(nvvidconv, capsfilter)) {
-            std::fprintf(stderr, "nvvidconv->capsfilter link failed\n");
-            return 1;
-        }
-        ctx.mux_sink_pad = gst_element_request_pad_simple(ctx.mux, "sink_0");
-        if (!ctx.mux_sink_pad) {
-            std::fprintf(stderr, "failed to request mux sink_0\n");
-            return 1;
-        }
-        GstPad* capsfilter_src = gst_element_get_static_pad(capsfilter, "src");
-        if (gst_pad_link(capsfilter_src, ctx.mux_sink_pad) != GST_PAD_LINK_OK) {
-            std::fprintf(stderr, "capsfilter->mux link failed\n");
-            return 1;
-        }
-        gst_object_unref(capsfilter_src);
-    } else {
-        ctx.mux_sink_pad = gst_element_request_pad_simple(ctx.mux, "sink_0");
-        if (!ctx.mux_sink_pad) {
-            std::fprintf(stderr, "failed to request mux sink_0\n");
-            return 1;
-        }
-        GstPad* decoder_src = gst_element_get_static_pad(ctx.decoder, "src");
-        if (gst_pad_link(decoder_src, ctx.mux_sink_pad) != GST_PAD_LINK_OK) {
-            std::fprintf(stderr, "decoder->mux link failed\n");
-            return 1;
-        }
-        gst_object_unref(decoder_src);
+    ctx.mux_sink_pad = gst_element_request_pad_simple(ctx.mux, "sink_0");
+    if (!ctx.mux_sink_pad) {
+        std::fprintf(stderr, "failed to request mux sink_0\n");
+        return 1;
     }
+    GstPad* decoder_src = gst_element_get_static_pad(ctx.decoder, "src");
+    if (gst_pad_link(decoder_src, ctx.mux_sink_pad) != GST_PAD_LINK_OK) {
+        std::fprintf(stderr, "decoder->mux link failed\n");
+        return 1;
+    }
+    gst_object_unref(decoder_src);
 
     GstPad* streamdemux_src = gst_element_request_pad_simple(streamdemux, "src_0");
-    GstPad* queue_sink = gst_element_get_static_pad(queue, "sink");
+    GstPad* queue_sink = gst_element_get_static_pad(queue_element, "sink");
     if (streamdemux_src && queue_sink) {
         gst_pad_link(streamdemux_src, queue_sink);
         gst_object_unref(streamdemux_src);
@@ -693,13 +1366,14 @@ int main(int argc, char** argv) {
         gst_message_unref(msg);
     }
 
-    // Flush any partial batch at EOS.
-    auto final_batch = assembler.flush_eos();
-    if (final_batch) {
-        process_complete_inference_batch(final_batch.value(), &ps, &stats);
-        {
-            std::lock_guard<std::mutex> lock(stats.mtx);
-            ++stats.partial_batches;
+    // Signal the processing thread to drain and flush any partial batch.
+    queue.set_eos();
+    processing_thread.join();
+    {
+        std::lock_guard<std::mutex> lock(stats.mtx);
+        if (queue.error && !stats.error) {
+            stats.error = true;
+            stats.error_message = queue.error_message;
         }
     }
 
@@ -710,6 +1384,22 @@ int main(int argc, char** argv) {
         gst_object_unref(ctx.mux_sink_pad);
     }
     gst_object_unref(ctx.pipeline);
+
+#ifdef MV_VIDEO_WORKER
+    if (artifact_state) {
+        const uint64_t wall_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - t_start).count());
+        artifact_state->finalize(
+            opts.model_profile.empty() ? "retinaface_r50_glintr100_v1" : opts.model_profile,
+            "cuda_five_point_align",
+            "1",
+            opts.video_path,
+            wall_us);
+        std::filesystem::remove_all(opts.output_dir);
+        std::filesystem::rename(worker_tmp_output, opts.output_dir);
+    }
+#endif
 
     const auto t_end = std::chrono::steady_clock::now();
     const double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
@@ -732,7 +1422,13 @@ int main(int argc, char** argv) {
     uint64_t final_pipeline_engine_us = 0;
     uint64_t final_pipeline_postproc_us = 0;
     uint64_t final_pipeline_mapping_us = 0;
+    uint64_t final_pipeline_recognition_us = 0;
     uint64_t final_pipeline_calls = 0;
+    int final_embeddings = 0;
+    int final_embedding_dim_errors = 0;
+    int final_embedding_finite_errors = 0;
+    double final_embedding_norm_min = 0.0;
+    double final_embedding_norm_max = 0.0;
 
     {
         std::lock_guard<std::mutex> lock(stats.mtx);
@@ -754,7 +1450,13 @@ int main(int argc, char** argv) {
         final_pipeline_engine_us = stats.pipeline_engine_us;
         final_pipeline_postproc_us = stats.pipeline_postproc_us;
         final_pipeline_mapping_us = stats.pipeline_mapping_us;
+        final_pipeline_recognition_us = stats.pipeline_recognition_us;
         final_pipeline_calls = stats.pipeline_calls;
+        final_embeddings = stats.total_embeddings;
+        final_embedding_dim_errors = stats.embedding_dim_errors;
+        final_embedding_finite_errors = stats.embedding_finite_errors;
+        final_embedding_norm_min = stats.embedding_norm_min;
+        final_embedding_norm_max = stats.embedding_norm_max;
     }
 
     const double fps = (elapsed_ms > 0.0 && final_processed > 0)
@@ -769,6 +1471,8 @@ int main(int argc, char** argv) {
     g_print("tracked observations: %d\n", final_tracked);
     g_print("raw tracks: %d\n", final_raw_tracks);
     g_print("partial batches: %d\n", final_partial_batches);
+    g_print("embeddings: %d\n", final_embeddings);
+    g_print("embedding norm: %.5f .. %.5f\n", final_embedding_norm_min, final_embedding_norm_max);
     g_print("NVMM device memory: %s\n", final_got_nvm ? "yes" : "no");
     g_print("PTS range: %" G_GINT64_FORMAT " .. %" G_GINT64_FORMAT " ns\n",
             final_first_pts, final_last_pts);
@@ -776,11 +1480,12 @@ int main(int argc, char** argv) {
     g_print("pipeline fps: %.2f\n", fps);
     if (final_pipeline_calls > 0) {
         auto avg = [&](uint64_t us) { return static_cast<double>(us) / static_cast<double>(final_pipeline_calls); };
-        g_print("per-call avg (us): preprocess=%.0f enqueue=%.0f postproc=%.0f mapping=%.0f tracker=%.0f\n",
+        g_print("per-call avg (us): preprocess=%.0f enqueue=%.0f postproc=%.0f mapping=%.0f recognition=%.0f tracker=%.0f\n",
                 avg(final_pipeline_preprocess_us),
                 avg(final_pipeline_engine_us),
                 avg(final_pipeline_postproc_us),
                 avg(final_pipeline_mapping_us),
+                avg(final_pipeline_recognition_us),
                 avg(final_tracker_us));
     }
 
@@ -808,6 +1513,24 @@ int main(int argc, char** argv) {
     }
     if (final_raw_tracks == 0) {
         std::fprintf(stderr, "no raw tracks produced\n");
+        pass = false;
+    }
+    if (final_embeddings == 0) {
+        std::fprintf(stderr, "no embeddings produced\n");
+        pass = false;
+    }
+    if (final_embedding_dim_errors > 0) {
+        std::fprintf(stderr, "embedding dimension errors: %d\n", final_embedding_dim_errors);
+        pass = false;
+    }
+    if (final_embedding_finite_errors > 0) {
+        std::fprintf(stderr, "embedding non-finite errors: %d\n", final_embedding_finite_errors);
+        pass = false;
+    }
+    if (final_embeddings > 0 &&
+        (final_embedding_norm_min < 0.98 || final_embedding_norm_max > 1.02)) {
+        std::fprintf(stderr, "embedding L2 norm out of range: %.5f .. %.5f\n",
+                     final_embedding_norm_min, final_embedding_norm_max);
         pass = false;
     }
 

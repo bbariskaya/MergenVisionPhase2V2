@@ -12,4 +12,11 @@ export const queryKeys = {
   enrollmentStats: () => ['stats', 'enrollment'] as const,
   bulkJob: (jobId: string) => ['bulk-job', jobId] as const,
   latestBulkJob: () => ['bulk-job', 'latest'] as const,
+  video: (videoId: string) => ['video', videoId] as const,
+  videoJob: (jobId: string) => ['video-job', jobId] as const,
+  videoResult: (jobId: string) => ['video-result', jobId] as const,
+  videoPeople: (jobId: string) => ['video-people', jobId] as const,
+  videoAppearances: (jobId: string) => ['video-appearances', jobId] as const,
+  videoTimelineFrames: (jobId: string, params: { start_pts_ns: number; end_pts_ns: number }) =>
+    ['video-timeline-frames', jobId, params] as const,
 }

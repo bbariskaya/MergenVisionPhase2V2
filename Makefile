@@ -298,6 +298,7 @@ video-reference-acceptance: video-reference-ci video-reference-doctor-cpu video-
 
 PHASE2_PROJECT := mergenvision-p2-test
 PHASE2_COMPOSE := docker compose -p $(PHASE2_PROJECT) -f $(COMPOSE_FILE)
+FRONTEND_DIR   := frontend
 
 .PHONY: phase2-services \
         phase2-step0-static phase2-step0-api-contract phase2-step0-storage \
@@ -305,7 +306,13 @@ PHASE2_COMPOSE := docker compose -p $(PHASE2_PROJECT) -f $(COMPOSE_FILE)
         phase2-migrations phase2-control-plane phase2-m3-worker-control \
         phase2-m4-device-pipeline phase2-m5-video-observation \
         phase2-m5-native-runtime-gate phase2-m5-build-engines phase2-m5-native-build \
-        phase2-m5-gpu-decode-smoke phase2-m5-sequence-contract
+        phase2-m5-gpu-decode-smoke phase2-m5-sequence-contract \
+        phase2-m6-native-full-observation phase2-m6-track-template \
+        phase2-m6-track-reconcile \
+        phase2-m7-video-identity \
+        phase2-m8-video-result \
+        phase2-m8-ui-static phase2-m8-ui-unit phase2-m8-ui-build \
+        phase2-m8-ui-playwright phase2-video-e2e-acceptance
 
 phase2-services:
 	$(PHASE2_COMPOSE) up -d $(TEST_SERVICES) --wait
@@ -402,7 +409,7 @@ phase2-m5-native-build: phase2-m5-native-runtime-gate
 	    -w /workspace \
 	    --entrypoint bash \
 	    mergenvision/deepstream-dev:9.0 \
-	    -c "cmake -S backend/native/video_worker -B backend/native/video_worker/build && cmake --build backend/native/video_worker/build -j$(shell nproc)"
+	    -c "apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends libwebp-dev libzstd-dev >/dev/null 2>&1 && cmake -S backend/native/video_worker -B backend/native/video_worker/build && cmake --build backend/native/video_worker/build -j$(shell nproc)"
 	@echo "==> native video worker built"
 
 phase2-m5-gpu-decode-smoke: phase2-m5-native-build
@@ -424,3 +431,77 @@ phase2-m5-sequence-contract: phase2-m5-native-runtime-gate
 	    mergenvision/deepstream-dev:9.0 \
 	    -c "cmake -S backend/native/video_worker -B backend/native/video_worker/build && cmake --build backend/native/video_worker/build --target sequence_contract -j$$(nproc) && backend/native/video_worker/build/sequence_contract"
 	@echo "==> M5.1 sequence contract passed"
+
+phase2-m6-native-full-observation: phase2-m5-native-build
+	@echo "==> running full GPU observation pipeline on Friends.mp4 (RGBA alignment + GlintR100)"
+	docker run --rm --gpus all \
+	    -v $(PWD):/workspace \
+	    -w /workspace \
+	    --entrypoint bash \
+	    mergenvision/deepstream-dev:9.0 \
+	    -c "unset USE_NEW_NVSTREAMMUX && backend/native/video_worker/build/real_batching_smoke --input test_videos/Friends.mp4 --all-frames --detector-batch-size 16 --recognizer-batch-size 32"
+	@echo "==> M6 native full observation passed"
+
+phase2-m6-track-template: phase2-services
+	@echo "==> phase2-m6-track-template: raw tracklet builder + quality template selector"
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/unit/services/test_video_tracking_service.py -v
+	@echo "==> phase2-m6-track-template passed"
+
+phase2-m6-track-reconcile: phase2-services
+	@echo "==> phase2-m6-track-reconcile: conservative raw-track reconciliation"
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/unit/services/test_video_reconciliation_service.py -v
+	@echo "==> phase2-m6-track-reconcile passed"
+
+phase2-m7-video-identity: phase2-services
+	@echo "==> phase2-m7-video-identity: canonical track -> persistent faceId resolution"
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/unit/services/test_video_identity_resolution_service.py \
+	    tests/unit/services/test_video_track_persistence_service.py \
+	    tests/integration/video/test_video_identity_persistence.py -v
+	@echo "==> phase2-m7-video-identity passed"
+
+phase2-m8-video-result: phase2-services
+	@echo "==> phase2-m8-video-result: job processing flow + people/appearances/timeline API"
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/integration/video/test_video_processing_and_result_api.py -v
+	@echo "==> phase2-m8-video-result passed"
+
+phase2-m8-ui-static:
+	@echo "==> phase2-m8-ui-static: TypeScript + lint"
+	cd $(FRONTEND_DIR) && npm run typecheck
+	cd $(FRONTEND_DIR) && npm run lint
+	@echo "==> phase2-m8-ui-static passed"
+
+phase2-m8-ui-unit:
+	@echo "==> phase2-m8-ui-unit: frontend unit/component tests"
+	cd $(FRONTEND_DIR) && npm test
+	@echo "==> phase2-m8-ui-unit passed"
+
+phase2-m8-ui-build:
+	@echo "==> phase2-m8-ui-build: production build"
+	cd $(FRONTEND_DIR) && npm run build
+	@echo "==> phase2-m8-ui-build passed"
+
+PHASE2_E2E_LOG := $(PWD)/test-reports/backend-e2e.log
+PHASE2_E2E_PID := $(PWD)/test-reports/backend-e2e.pid
+
+phase2-video-e2e-acceptance: phase2-services
+	@echo "==> phase2-video-e2e-acceptance: real backend + frontend E2E"
+	@mkdir -p $(TEST_REPORTS)
+	@if curl -sf http://localhost:8090/health/live >/dev/null 2>&1; then \
+	    echo "==> backend already running on port 8090"; \
+	else \
+	    echo "==> starting backend on port 8090"; \
+	    cd $(BACKEND_DIR) && $(WITH_TEST_ENV) nohup $(PYTHON) -m uvicorn app.api.main:create_app --factory --host 0.0.0.0 --port 8090 > $(PHASE2_E2E_LOG) 2>&1 & echo $$! > $(PHASE2_E2E_PID); \
+	fi
+	@for i in $$(seq 1 60); do \
+	    if curl -sf http://localhost:8090/health/live >/dev/null 2>&1; then echo "==> backend ready"; break; fi; \
+	    if [ $$i -eq 60 ]; then echo "==> backend failed to start"; cat $(PHASE2_E2E_LOG); exit 1; fi; \
+	    sleep 1; \
+	done
+	cd $(FRONTEND_DIR) && npx playwright test
+	@echo "==> stopping managed backend (if any)"
+	@if [ -f $(PHASE2_E2E_PID) ]; then kill `cat $(PHASE2_E2E_PID)` 2>/dev/null || true; rm -f $(PHASE2_E2E_PID); fi
+	@echo "==> phase2-video-e2e-acceptance finished"

@@ -87,6 +87,116 @@ services:
               count: 1
               capabilities: [gpu]
 
+  worker-gpu-0:
+    image: mergenvision-worker:gpu
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.worker.gpu
+    container_name: mergenvision-worker-gpu-0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mergenvision:mergenvision@postgres:5432/mergenvision
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_SECURE: "false"
+      MINIO_BUCKET_NAME: mergenvision-face-samples
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION_NAME: face_samples_retinaface_r50_glintr100_v1
+      WORKER_ID: worker-gpu-0
+      GPU_DEVICE_ID: "0"
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  worker-gpu-1:
+    image: mergenvision-worker:gpu
+    container_name: mergenvision-worker-gpu-1
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mergenvision:mergenvision@postgres:5432/mergenvision
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_SECURE: "false"
+      MINIO_BUCKET_NAME: mergenvision-face-samples
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION_NAME: face_samples_retinaface_r50_glintr100_v1
+      WORKER_ID: worker-gpu-1
+      GPU_DEVICE_ID: "0"
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+
+  worker-gpu-2:
+    image: mergenvision-worker:gpu
+    container_name: mergenvision-worker-gpu-2
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mergenvision:mergenvision@postgres:5432/mergenvision
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_SECURE: "false"
+      MINIO_BUCKET_NAME: mergenvision-face-samples
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION_NAME: face_samples_retinaface_r50_glintr100_v1
+      WORKER_ID: worker-gpu-2
+      GPU_DEVICE_ID: "0"
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["2"]
+              capabilities: [gpu]
+
+  ui:
+    image: mergenvision-ui:gpu
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mergenvision-ui
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8082:80"
+    links:
+      - backend:api
+
 volumes:
   mergenvision_postgres_data:
   mergenvision_minio_data:

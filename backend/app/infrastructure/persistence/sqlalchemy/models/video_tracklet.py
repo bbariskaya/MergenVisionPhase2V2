@@ -26,7 +26,7 @@ class VideoTrackletOrm(Base):
     __tablename__ = "video_tracklet"
 
     __table_args__ = (
-        UniqueConstraint("job_id", "tracklet_ordinal", name="uq_video_tracklet_job_ordinal"),
+        UniqueConstraint("job_id", "track_id", "tracklet_ordinal", name="uq_video_tracklet_job_ordinal"),
         CheckConstraint(
             "state IN ('confirmed', 'lost', 'removed')",
             name="ck_video_tracklet_state",

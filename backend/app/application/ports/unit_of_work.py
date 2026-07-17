@@ -11,6 +11,11 @@ from app.application.ports.repositories import (
     FaceSampleRepository,
     ProcessRepository,
     RecognitionResultRepository,
+    VideoAppearanceIntervalRepository,
+    VideoTimelineChunkRepository,
+    VideoTrackletRepository,
+    VideoTrackRepository,
+    VideoTrackSampleRepository,
 )
 
 
@@ -25,6 +30,11 @@ class UnitOfWork(ABC):
     idempotency: Any
     process_events: Any
     outbox: Any
+    video_tracks: VideoTrackRepository
+    video_tracklets: VideoTrackletRepository
+    video_appearance_intervals: VideoAppearanceIntervalRepository
+    video_track_samples: VideoTrackSampleRepository
+    video_timeline_chunks: VideoTimelineChunkRepository
 
     @abstractmethod
     async def __aenter__(self) -> Self: ...
@@ -42,6 +52,9 @@ class UnitOfWork(ABC):
 
     @abstractmethod
     async def rollback(self) -> None: ...
+
+    @abstractmethod
+    async def flush(self) -> None: ...
 
 
 class UnitOfWorkFactory(Protocol):

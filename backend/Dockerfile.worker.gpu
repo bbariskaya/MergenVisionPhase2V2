@@ -1,0 +1,56 @@
+# MergenVision GPU video worker
+# Build context must be the repository root.
+#
+# Runs the native mv_video_worker binary inside the pinned DeepStream 9.0
+# container and consumes its artifacts with the Python worker orchestrator.
+
+FROM mergenvision/deepstream-dev:9.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libwebp-dev \
+        libzstd1 \
+        python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY backend/pyproject.toml backend/README.md ./
+COPY backend/requirements.lock ./
+
+RUN python3 -m pip install --no-cache-dir --break-system-packages -e .
+
+COPY backend/app ./app
+COPY backend/alembic.ini ./
+COPY backend/config ./config
+COPY backend/artifacts ./artifacts
+COPY backend/scripts/inspect_video_runtime.py ./scripts/inspect_video_runtime.py
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+
+ENV DATABASE_URL=""
+ENV MINIO_ENDPOINT=""
+ENV MINIO_ACCESS_KEY=""
+ENV MINIO_SECRET_KEY=""
+ENV MINIO_SECURE="false"
+ENV MINIO_BUCKET_NAME=""
+ENV QDRANT_URL=""
+ENV QDRANT_COLLECTION_NAME=""
+ENV MODEL_VERSION="retinaface_r50_glintr100_v1"
+ENV MODEL_PROFILE_PATH="/app/config/model_profiles/retinaface_r50_glintr100_v1_deepstream9.json"
+ENV DETECTOR_ENGINE_PATH="/app/artifacts/engines/deepstream9/retinaface_r50_dynamic.bs1.opt8.max64.fp16.trt1014.engine"
+ENV RECOGNIZER_ENGINE_PATH="/app/artifacts/engines/deepstream9/glintr100.bs1.opt8.max64.fp16.trt1014.engine"
+ENV GPU_DEVICE_ID=0
+ENV MV_VIDEO_WORKER_PATH="/app/mv_video_worker"
+ENV DETECTOR_BATCH_SIZE="16"
+ENV RECOGNIZER_BATCH_SIZE="32"
+ENV WORKER_LEASE_SECONDS="1800"
+ENV WORKER_ID="worker-gpu-0"
+
+COPY backend/native/video_worker/build/mv_video_worker /app/mv_video_worker
+RUN chmod +x /app/mv_video_worker
+
+CMD ["python3", "-m", "app.worker.video_worker_main"]

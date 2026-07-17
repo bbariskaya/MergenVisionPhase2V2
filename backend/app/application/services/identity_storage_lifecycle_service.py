@@ -34,6 +34,7 @@ class RecognitionOutcome:
     process_id: ProcessId
     face_id: FaceId
     sample_id: SampleId | None
+    result_id: ResultId | None
     status: str  # "known" | "anonymous" | "new_anonymous"
     bounding_box: BoundingBox
     match_confidence: float
@@ -407,6 +408,59 @@ class IdentityStorageLifecycleService:
             await self._delete_object_best_effort(object_key)
 
     # ------------------------------------------------------------------
+    # Public API - lower-level primitives for video/reuse
+    # ------------------------------------------------------------------
+    async def query_candidates(
+        self,
+        embedding: Sequence[float],
+        top_k: int | None = None,
+    ) -> list[VectorCandidate]:
+        self._validate_embedding(embedding)
+        limit = top_k if top_k is not None else self._candidate_limit
+        try:
+            candidates = await self._vector_store.query(embedding, top_k=limit)
+        except Exception as exc:
+            raise IdentityResolutionError("Vector query failed during candidate search") from exc
+        return [c for c in candidates if math.isfinite(c.score)]
+
+    async def accept_candidate_for_process(
+        self,
+        process_id: ProcessId,
+        candidate: VectorCandidate,
+        bbox: BoundingBox,
+    ) -> RecognitionOutcome:
+        self._validate_bounding_box(bbox)
+        outcome = await self._try_accept_candidate(
+            process_id=process_id,
+            candidate=candidate,
+            bbox=bbox,
+            complete_process=False,
+        )
+        if outcome is None:
+            raise IdentityResolutionError("Candidate could not be accepted")
+        return outcome
+
+    async def create_new_identity_for_process(
+        self,
+        process_id: ProcessId,
+        crop_bytes: bytes,
+        embedding: Sequence[float],
+        bbox: BoundingBox,
+        match_confidence: float = 0.0,
+    ) -> RecognitionOutcome:
+        self._validate_crop_bytes(crop_bytes)
+        self._validate_embedding(embedding)
+        self._validate_bounding_box(bbox)
+        return await self._create_new_identity(
+            process_id=process_id,
+            crop_bytes=crop_bytes,
+            embedding=embedding,
+            bbox=bbox,
+            match_confidence=self._to_match_confidence(match_confidence),
+            complete_process=False,
+        )
+
+    # ------------------------------------------------------------------
     # Core resolution (shared)
     # ------------------------------------------------------------------
     async def _resolve_or_create_core(
@@ -507,6 +561,7 @@ class IdentityStorageLifecycleService:
                     process_id=process_id,
                     face_id=identity.face_id,
                     sample_id=sample.sample_id,
+                    result_id=result.result_id,
                     status=status,
                     bounding_box=bbox,
                     match_confidence=confidence,
@@ -605,6 +660,7 @@ class IdentityStorageLifecycleService:
             process_id=process_id,
             face_id=face_id,
             sample_id=sample_id,
+            result_id=result.result_id,
             status="new_anonymous",
             bounding_box=bbox,
             match_confidence=match_confidence,

@@ -1,0 +1,38 @@
+{
+  "schema_versions": {
+    "observation": "mergenvision.video.v1.VideoObservationFrame",
+    "template": "mergenvision.video.v1.TrackTemplateBundle",
+    "manifest": "1"
+  },
+  "job_id": "b0fc0833-6ac9-49e1-ba4d-9a202195462d",
+  "video_id": "258dfbe6-d0c8-447d-8a49-7f08ae309733",
+  "model_version": "/workspace/backend/config/model_profiles/retinaface_r50_glintr100_v1_deepstream9.json",
+  "preprocess_version": "cuda_five_point_align",
+  "config_version": "1",
+  "observation_frame_count": 300,
+  "raw_track_count": 16,
+  "template_count": 16,
+  "crop_count": 16,
+  "runtime_fingerprint": "cuda_runtime=13010;tensorrt=10.14.1;deepstream=9.0;gpu_uuid=GPU-22f04c0c-b6c2-9b75-6f9d-7e08fa7d7537;hostname=6cdd012ef65f",
+  "artifacts": {
+    "observations.pb.zst": {"size": 1072414},
+    "track_templates.pb.zst": {"size": 31171},
+    "crops/RT000016.webp": {"size": 1274},
+    "crops/RT000014.webp": {"size": 1900},
+    "crops/RT000005.webp": {"size": 1014},
+    "crops/RT000010.webp": {"size": 1178},
+    "crops/RT000002.webp": {"size": 1328},
+    "crops/RT000015.webp": {"size": 872},
+    "crops/RT000012.webp": {"size": 1438},
+    "crops/RT000003.webp": {"size": 1788},
+    "crops/RT000006.webp": {"size": 1356},
+    "crops/RT000004.webp": {"size": 1464},
+    "crops/RT000009.webp": {"size": 1412},
+    "crops/RT000008.webp": {"size": 1404},
+    "crops/RT000007.webp": {"size": 1118},
+    "crops/RT000011.webp": {"size": 1904},
+    "crops/RT000001.webp": {"size": 1344},
+    "crops/RT000013.webp": {"size": 784}
+  },
+  "wall_us": 5285630
+}

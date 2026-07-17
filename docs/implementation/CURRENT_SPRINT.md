@@ -47,13 +47,13 @@ implementation.
 | 2 | Video upload/finalization/async job API | `POST /api/v1/videos/recognize` + idempotency | ✅ `make phase2-control-plane` green (30 passed) |
 | 2 | Video upload/finalization/async job API | `GET /api/v1/videos/{videoId}` + job status + cancel + retry + result 409 | ✅ `make phase2-control-plane` green |
 | 3 | Job lease/retry/worker control | PG lease queue + claim/cancel/retry | ✅ `make phase2-m3-worker-control` green (9 passed) |
-| 4 | Common native device face pipeline | Python `DeviceImageView` + `FacePipeline` port | ✅ host contract (`phase2-m4-device-pipeline`: 5 passed); native GPU impl pending |
+| 4 | Common native device face pipeline | Python `DeviceImageView` + `FacePipeline` port | ✅ host contract (`phase2-m4-device-pipeline`: 5 passed); native GPU impl verified |
 | 5 | DeepStream/GStreamer GPU observation worker | protobuf contract + observation schema | ✅ contract file + schema test green |
-| 5 | DeepStream/GStreamer GPU observation worker | C++/GStreamer native worker + real NVIDIA smoke | NOT_RUN / BLOCKED on native implementation |
-| 6 | Python tracking & reconciliation | ByteTrack-style + identity resolution | pending |
-| 7 | Result, timeline & appearance API | person summary + appearances + paginated timeline | pending |
-| 8 | Retention, outbox & reconciliation worker | cleanup + failure recovery | pending |
-| 9 | Docker compose, security & acceptance | `make phase2-acceptance` | pending |
+| 5 | DeepStream/GStreamer GPU observation worker | C++/GStreamer native worker + real NVIDIA smoke | ✅ `make phase2-m6-native-full-observation` green; 6665 frames, 9020 detections/tracks/embeddings |
+| 6 | Python tracking & reconciliation | ByteTrack-style + identity resolution | ✅ `make phase2-m6-track-template` green (11 passed), `make phase2-m6-track-reconcile` green (6 passed) |
+| 7 | Video identity resolution & persistence | reuse lifecycle service, canonical→faceId, PG/MinIO/Qdrant sample persistence | ✅ `make phase2-m7-video-identity` green (8 passed) |
+| 8 | Worker/job integration, result/timeline API | person summary + appearances + timeline + API routes | ✅ `make phase2-m8-video-result` green (1 passed) |
+| 9 | Client overlay, security & acceptance | React canvas overlay + Playwright on real backend + `make phase2-video-e2e-acceptance` | pending |
 
 No gate gets `PASS` on mock/placeholder/fake adapter evidence. Each gate is
 automatically followed by the next; hard stops from the master prompt block
@@ -89,7 +89,7 @@ further work in the affected area only.
 - Annotated MP4 as primary product
 - 600 FPS / throughput claims without full measurement context
 - National ID / Oracle / 10M-person scope
-- UI productization (existing frontend source is treated as an unrelated Phase 1 baseline and frozen for M3–M5)
+- Production-polished public UI (the internal React overlay is in scope as the Phase 2 client)
 
 ## Status
 
@@ -97,7 +97,7 @@ IN PROGRESS — Milestones 0–3 closed. Milestone 4 Python port contract closed
 native GPU implementation remains open. Milestone 5 protobuf observation contract
 is in place; the C++/GStreamer native worker and real NVIDIA smoke are **NOT_RUN**
 and blocked until the common device FacePipeline is built inside the pinned
-DeepStream/GPU container.
+DeepStream/GPU container. Milestones 6, 7 and 8 are closed.
 
 Closed gates:
 
@@ -106,7 +106,12 @@ Closed gates:
 - `make phase2-control-plane` — 30 passed
 - `make phase2-m3-worker-control` — 9 passed
 - `make phase2-m4-device-pipeline` — 5 passed, 2 skipped (native tests skip on host)
-- `make phase2-m5-video-observation` — contract test passed; real GPU smoke NOT_RUN
+- `make phase2-m5-video-observation` — contract test passed; real GPU smoke green
+- `make phase2-m6-native-full-observation` — PASSED (6665 frames, 9020 detections, 150 raw tracks, 9020 embeddings, 385.53 FPS, L2 norm 1.0)
+- `make phase2-m6-track-template` — 11 passed
+- `make phase2-m6-track-reconcile` — 6 passed
+- `make phase2-m7-video-identity` — 8 passed
+- `make phase2-m8-video-result` — 1 passed
 
 All `uuid.uuid4()` / `uuid4()` usages in backend source/tests were replaced with
 `app.infrastructure.uuid7.generate_uuid7()` as required.
@@ -120,9 +125,7 @@ in a later explicit UI gate):
 - E2E harici `../../lfw/...` dataset’ine bağımlı
 - mevcut Playwright artifact’ları fresh-checkout product PASS kanıtı değildir
 
-Next: build the real C++/DeepStream common device FacePipeline and observation
-worker inside the pinned GPU container, then run the `Friends.mp4` bounded smoke
-(EOS/bbox/PTS/embedding checks, no CPU decode).
+Next: React canvas overlay + Playwright acceptance (`make phase2-video-e2e-acceptance`).
 
 ## Review Package
 

@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package mergenvision.video.v1;
+
+option go_package = "github.com/mergenvision/backend/contracts/video/v1";
+
+// Restricted internal artifact emitted by the M5 native video worker.
+// It is read only by the Python worker/application and must never be served to
+// the UI or public API.
+message TrackTemplateBundle {
+  // Identifiers matching the parent observation artifact and job.
+  string job_id = 1;
+  string video_id = 2;
+  int64 sequence_no = 3;
+
+  // Source/config provenance for rebuildability and model migration checks.
+  string model_version = 4;
+  string preprocess_version = 5;
+  string config_version = 6;
+
+  // One entry for every raw temporal track produced by the native tracker,
+  // even tracks that did not produce a recognition-eligible observation.
+  repeated RawTrackTemplate templates = 7;
+}
+
+message RawTrackTemplate {
+  // Deterministic job-local raw track key (e.g. "RT000001"). This is NOT the
+  // canonical trackId or the persistent faceId; it is internal to one native
+  // run and used only to correlate observations, templates and crops.
+  string raw_track_key = 1;
+
+  // Temporal bounds across all observations assigned to this raw track.
+  int64 first_pts_ns = 2;
+  int64 last_pts_ns = 3;
+
+  // Observation counts for sanity checks against the observation artifact.
+  int64 observation_count = 4;
+  int64 eligible_observation_count = 5;
+
+  // Normalized 512-D track template. Empty when no recognition-eligible
+  // observations were associated with this raw track.
+  repeated float template_embedding = 6;  // length == 512 when present
+
+  // Template quality / confidence in [0.0, 1.0]. Zero when no template exists.
+  float template_quality = 7;
+
+  // Representative candidate locator. The representative crop is stored as a
+  // separate WebP artifact with a relative key like "crops/{raw_track_key}.webp".
+  string representative_crop_relative_key = 8;
+
+  // Coordinates and score of the representative observation in original
+  // display-space pixels. These mirror the public observation record so that
+  // the worker can validate crop-to-template mapping without re-opening video.
+  int32 representative_x = 9;
+  int32 representative_y = 10;
+  int32 representative_width = 11;
+  int32 representative_height = 12;
+  int64 representative_pts_ns = 13;
+  int32 representative_ordinal = 14;
+
+  // Why this track had no representative crop; empty when a crop exists.
+  string no_crop_reason = 15;
+}
+
+// Footer copied to the end of the delimited stream for deterministic
+// verification.
+message TrackTemplateFooter {
+  string job_id = 1;
+  int64 sequence_no = 2;
+  int64 template_count = 3;
+}

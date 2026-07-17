@@ -22,8 +22,13 @@ from app.infrastructure.persistence.sqlalchemy.repositories.process_event_reposi
 )
 from app.infrastructure.persistence.sqlalchemy.repositories.video_repositories import (
     SqlAlchemyIdempotencyRepository,
+    SqlAlchemyVideoAppearanceIntervalRepository,
     SqlAlchemyVideoAssetRepository,
     SqlAlchemyVideoJobRepository,
+    SqlAlchemyVideoTimelineChunkRepository,
+    SqlAlchemyVideoTrackletRepository,
+    SqlAlchemyVideoTrackRepository,
+    SqlAlchemyVideoTrackSampleRepository,
 )
 from app.infrastructure.persistence.sqlalchemy.video_job_queue import (
     SqlAlchemyVideoJobQueue,
@@ -48,6 +53,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self.idempotency = SqlAlchemyIdempotencyRepository(self._session)
         self.process_events = SqlAlchemyProcessEventRepository(self._session)
         self.outbox = SqlAlchemyOutboxEventRepository(self._session)
+        self.video_tracks = SqlAlchemyVideoTrackRepository(self._session)
+        self.video_tracklets = SqlAlchemyVideoTrackletRepository(self._session)
+        self.video_appearance_intervals = SqlAlchemyVideoAppearanceIntervalRepository(self._session)
+        self.video_track_samples = SqlAlchemyVideoTrackSampleRepository(self._session)
+        self.video_timeline_chunks = SqlAlchemyVideoTimelineChunkRepository(self._session)
         return self
 
     async def __aexit__(
@@ -74,3 +84,8 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         if self._session is None:
             raise RuntimeError("Unit of work is not active")
         await self._session.rollback()
+
+    async def flush(self) -> None:
+        if self._session is None:
+            raise RuntimeError("Unit of work is not active")
+        await self._session.flush()

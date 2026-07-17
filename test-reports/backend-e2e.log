@@ -1,0 +1,36 @@
+INFO:     Started server process [2878478]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8090 (Press CTRL+C to quit)
+INFO:     127.0.0.1:53322 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53328 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53340 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53350 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53354 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53360 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53374 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53384 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53394 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53410 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53412 - "GET /api/v1/faces/any-id HTTP/1.1" 503 Service Unavailable
+INFO:     127.0.0.1:53430 - "GET /api/v1/faces/any-id/samples HTTP/1.1" 503 Service Unavailable
+INFO:     127.0.0.1:53416 - "GET /api/v1/faces/any-id/history HTTP/1.1" 503 Service Unavailable
+INFO:     127.0.0.1:53940 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53948 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53952 - "POST /api/v1/videos/recognize HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:53960 - "GET /api/v1/videos/06a5a87a-ce97-7236-8000-6e9705023a0c HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53974 - "GET /api/v1/videos/jobs/06a5a87a-d0c2-7321-8000-d04fc9cafebb HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53986 - "GET /api/v1/videos/jobs/06a5a87a-d0c2-7321-8000-d04fc9cafebb/result HTTP/1.1" 409 Conflict
+INFO:     127.0.0.1:53988 - "GET /api/v1/videos/jobs/06a5a87a-d0c2-7321-8000-d04fc9cafebb/people HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54000 - "GET /api/v1/videos/jobs/06a5a87a-d0c2-7321-8000-d04fc9cafebb/appearances HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54016 - "GET /health/live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54022 - "POST /api/v1/videos/recognize HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:54032 - "GET /api/v1/videos/06a5a87a-df22-739f-8000-6263da588ff1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54040 - "GET /api/v1/videos/jobs/06a5a87a-e0fa-7f36-8000-69190e84f73f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54044 - "GET /api/v1/videos/jobs/06a5a87a-e0fa-7f36-8000-69190e84f73f/result HTTP/1.1" 409 Conflict
+INFO:     127.0.0.1:54072 - "GET /api/v1/videos/jobs/06a5a87a-e0fa-7f36-8000-69190e84f73f/appearances HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54056 - "GET /api/v1/videos/jobs/06a5a87a-e0fa-7f36-8000-69190e84f73f/people HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [2878478]

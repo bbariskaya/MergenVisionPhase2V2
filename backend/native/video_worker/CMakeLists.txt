@@ -42,6 +42,32 @@ if(NOT NVINFER_LIBRARY OR NOT NVINFER_INCLUDE_DIR)
     message(FATAL_ERROR "TensorRT (nvinfer) not found")
 endif()
 
+find_library(PROTOBUF_LIBRARY protobuf
+    PATHS /usr/lib/x86_64-linux-gnu /usr/local/lib)
+find_path(PROTOBUF_INCLUDE_DIR google/protobuf/message.h
+    PATHS /usr/include /usr/local/include)
+if(NOT PROTOBUF_LIBRARY OR NOT PROTOBUF_INCLUDE_DIR)
+    message(FATAL_ERROR "Protocol Buffers C++ library not found")
+endif()
+
+find_library(WEBP_LIBRARY webp
+    PATHS /usr/lib/x86_64-linux-gnu /usr/local/lib)
+if(NOT WEBP_LIBRARY)
+    message(FATAL_ERROR "libwebp not found")
+endif()
+
+find_library(ZSTD_LIBRARY zstd
+    PATHS /usr/lib/x86_64-linux-gnu /usr/local/lib)
+if(NOT ZSTD_LIBRARY)
+    message(FATAL_ERROR "libzstd not found")
+endif()
+
+find_library(NVML_LIBRARY nvidia-ml
+    PATHS /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64/stubs /usr/local/cuda/lib64)
+if(NOT NVML_LIBRARY)
+    message(FATAL_ERROR "libnvidia-ml not found")
+endif()
+
 # Pre-built CUDA kernels from the image_runtime package.
 set(IMAGE_RUNTIME_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../image_runtime/build/cp312-cp312-linux_x86_64")
 if(NOT EXISTS "${IMAGE_RUNTIME_BUILD_DIR}/libimage_runtime_cuda.a")
@@ -155,6 +181,8 @@ add_library(video_face_pipeline STATIC
     src/video_face_pipeline.cpp
     src/kernels/preprocess_detector_rgba_batch.cu
     src/kernels/preprocess_detector_nv12_batch.cu
+    ../image_runtime/src/kernels/warp_align_rgba_pitch.cu
+    src/kernels/warp_align_nv12_pitch.cu
     src/retained_buffer_handle.cpp
     ../image_runtime/src/retinaface_engine.cpp
     ../image_runtime/src/retinaface_postproc.cpp
@@ -237,5 +265,51 @@ target_link_libraries(real_batching_smoke PRIVATE
 )
 
 # -----------------------------------------------------------------------------
-# Future: mv_video_worker full binary and observation writer will be added here.
+# mv_video_worker: full GPU observation + template + representative crop producer.
 # -----------------------------------------------------------------------------
+add_executable(mv_video_worker
+    tests/real_batching_smoke.cpp
+    proto/video_observation_v1.pb.cc
+    proto/video_track_template_v1.pb.cc
+)
+
+target_compile_definitions(mv_video_worker PRIVATE MV_VIDEO_WORKER)
+
+target_include_directories(mv_video_worker PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/proto
+    ${GSTREAMER_INCLUDE_DIRS}
+    ${GSTREAMER_APP_INCLUDE_DIRS}
+    ${GSTREAMER_VIDEO_INCLUDE_DIRS}
+    "${DEEPSTREAM_ROOT}/sources/includes"
+    ${NVINFER_INCLUDE_DIR}
+    ${CUDAToolkit_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../image_runtime/src
+    ${PROTOBUF_INCLUDE_DIR}
+)
+
+target_compile_options(mv_video_worker PRIVATE
+    ${GSTREAMER_CFLAGS_OTHER}
+    ${GSTREAMER_APP_CFLAGS_OTHER}
+    ${GSTREAMER_VIDEO_CFLAGS_OTHER}
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+target_link_directories(mv_video_worker PRIVATE
+    "${DEEPSTREAM_ROOT}/lib"
+)
+
+target_link_libraries(mv_video_worker PRIVATE
+    video_face_pipeline
+    mv_video_core
+    ${GSTREAMER_LIBRARIES}
+    ${GSTREAMER_APP_LIBRARIES}
+    ${GSTREAMER_VIDEO_LIBRARIES}
+    ${VIDEO_WORKER_GPU_LIBS}
+    ${PROTOBUF_LIBRARY}
+    ${WEBP_LIBRARY}
+    ${ZSTD_LIBRARY}
+    ${NVML_LIBRARY}
+)

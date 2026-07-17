@@ -52,6 +52,11 @@ message FaceDetection {
 
   string model_version = 14;
   string preprocess_version = 15;
+
+  // Raw temporal-track key assigned by the native tracker for this detection.
+  // Carried into the Python domain so that canonical tracks can be correlated
+  // with the native template/crop artifacts.
+  string raw_track_key = 16;
 }
 
 // Footer written at the end of a chunk for deterministic verification.

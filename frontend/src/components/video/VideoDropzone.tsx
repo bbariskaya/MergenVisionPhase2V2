@@ -121,6 +121,7 @@ export function VideoDropzone({
             className="sr-only"
             onChange={handleFileSelect}
             aria-hidden="true"
+            data-testid="video-dropzone-input"
           />
         </div>
       )}

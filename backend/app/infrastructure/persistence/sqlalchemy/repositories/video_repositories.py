@@ -3,20 +3,54 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.ports.repositories import (
+    VideoAppearanceIntervalRepository,
+    VideoTimelineChunkRepository,
+    VideoTrackletRepository,
+    VideoTrackRepository,
+    VideoTrackSampleRepository,
+)
 from app.domain.entities.video_asset import VideoAsset
 from app.domain.entities.video_job import VideoJob
-from app.domain.value_objects import JobId, ProcessId, UploadSessionId, VideoId
+from app.domain.entities.video_timeline_chunk import VideoTimelineChunk
+from app.domain.entities.video_track import (
+    VideoAppearanceInterval,
+    VideoTrack,
+    VideoTracklet,
+    VideoTrackSample,
+)
+from app.domain.value_objects import (
+    FaceId,
+    JobId,
+    ProcessId,
+    ResultId,
+    SampleId,
+    UploadSessionId,
+    VideoId,
+)
+from app.infrastructure.persistence.sqlalchemy.models.appearance_interval import (
+    AppearanceIntervalOrm,
+)
 from app.infrastructure.persistence.sqlalchemy.models.idempotency_record import (
     IdempotencyRecordOrm,
 )
 from app.infrastructure.persistence.sqlalchemy.models.video_asset import VideoAssetOrm
 from app.infrastructure.persistence.sqlalchemy.models.video_job import VideoJobOrm
+from app.infrastructure.persistence.sqlalchemy.models.video_timeline_chunk import (
+    VideoTimelineChunkOrm,
+)
+from app.infrastructure.persistence.sqlalchemy.models.video_track import VideoTrackOrm
+from app.infrastructure.persistence.sqlalchemy.models.video_track_sample import (
+    VideoTrackSampleOrm,
+)
+from app.infrastructure.persistence.sqlalchemy.models.video_tracklet import VideoTrackletOrm
 
 
 def _asset_to_domain(orm: VideoAssetOrm) -> VideoAsset:
@@ -413,3 +447,336 @@ class SqlAlchemyIdempotencyRepository:
         orm.response_snapshot = response_snapshot
         orm.completed_at = datetime.now(UTC)
         orm.updated_at = datetime.now(UTC)
+
+
+def _video_track_to_domain(orm: VideoTrackOrm) -> VideoTrack:
+    return VideoTrack(
+        track_id=orm.track_id,
+        job_id=JobId(orm.job_id),
+        track_ordinal=orm.track_ordinal,
+        face_id=FaceId(orm.face_id),
+        recognition_result_id=ResultId(orm.recognition_result_id),
+        status_at_processing=orm.status_at_processing,
+        name_at_processing=orm.name_at_processing,
+        metadata_at_processing=dict(orm.metadata_at_processing or {}),
+        identity_version_at_processing=orm.identity_version_at_processing,
+        match_confidence=orm.match_confidence,
+        top1_score=orm.top1_score,
+        top2_score=orm.top2_score,
+        margin_score=orm.margin_score,
+        threshold_used=orm.threshold_used,
+        first_frame_index=orm.first_frame_index,
+        last_frame_index=orm.last_frame_index,
+        first_pts_ns=orm.first_pts_ns,
+        last_pts_ns=orm.last_pts_ns,
+        total_duration_ns=orm.total_duration_ns,
+        detection_count=orm.detection_count,
+        tracklet_count=orm.tracklet_count,
+        best_sample_id=SampleId(orm.best_sample_id) if orm.best_sample_id else None,
+    )
+
+
+class SqlAlchemyVideoTrackRepository(VideoTrackRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, track: VideoTrack) -> None:
+        orm = VideoTrackOrm(
+            track_id=track.track_id,
+            job_id=track.job_id,
+            track_ordinal=track.track_ordinal,
+            face_id=track.face_id,
+            recognition_result_id=track.recognition_result_id,
+            status_at_processing=track.status_at_processing,
+            name_at_processing=track.name_at_processing,
+            metadata_at_processing=track.metadata_at_processing,
+            identity_version_at_processing=track.identity_version_at_processing,
+            match_confidence=track.match_confidence,
+            top1_score=track.top1_score,
+            top2_score=track.top2_score,
+            margin_score=track.margin_score,
+            threshold_used=track.threshold_used,
+            first_frame_index=track.first_frame_index,
+            last_frame_index=track.last_frame_index,
+            first_pts_ns=track.first_pts_ns,
+            last_pts_ns=track.last_pts_ns,
+            total_duration_ns=track.total_duration_ns,
+            detection_count=track.detection_count,
+            tracklet_count=track.tracklet_count,
+            best_sample_id=track.best_sample_id,
+        )
+        self._session.add(orm)
+
+    async def get_by_id(self, track_id: uuid.UUID) -> VideoTrack | None:
+        result = await self._session.execute(
+            select(VideoTrackOrm).where(VideoTrackOrm.track_id == track_id)
+        )
+        orm = result.scalar_one_or_none()
+        return _video_track_to_domain(orm) if orm else None
+
+    async def list_by_job_id(self, job_id: JobId) -> Sequence[VideoTrack]:
+        result = await self._session.execute(
+            select(VideoTrackOrm)
+            .where(VideoTrackOrm.job_id == job_id)
+            .order_by(VideoTrackOrm.track_ordinal)
+        )
+        return [_video_track_to_domain(orm) for orm in result.scalars().all()]
+
+    async def update(self, track: VideoTrack) -> None:
+        result = await self._session.execute(
+            select(VideoTrackOrm).where(VideoTrackOrm.track_id == track.track_id)
+        )
+        orm = result.scalar_one_or_none()
+        if orm is None:
+            raise ValueError(f"VideoTrack {track.track_id} not found")
+        orm.face_id = track.face_id
+        orm.status_at_processing = track.status_at_processing
+        orm.name_at_processing = track.name_at_processing
+        orm.metadata_at_processing = track.metadata_at_processing
+        orm.identity_version_at_processing = track.identity_version_at_processing
+        orm.match_confidence = track.match_confidence
+        orm.top1_score = track.top1_score
+        orm.top2_score = track.top2_score
+        orm.margin_score = track.margin_score
+        orm.threshold_used = track.threshold_used
+        orm.first_frame_index = track.first_frame_index
+        orm.last_frame_index = track.last_frame_index
+        orm.first_pts_ns = track.first_pts_ns
+        orm.last_pts_ns = track.last_pts_ns
+        orm.total_duration_ns = track.total_duration_ns
+        orm.detection_count = track.detection_count
+        orm.tracklet_count = track.tracklet_count
+        orm.best_sample_id = track.best_sample_id
+
+    async def delete_by_job_id(self, job_id: JobId) -> int:
+        result = await self._session.execute(
+            delete(VideoTrackOrm).where(VideoTrackOrm.job_id == job_id)
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
+
+class SqlAlchemyVideoTrackletRepository(VideoTrackletRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, tracklet: VideoTracklet) -> None:
+        orm = VideoTrackletOrm(
+            tracklet_id=tracklet.tracklet_id,
+            job_id=tracklet.job_id,
+            track_id=tracklet.track_id,
+            tracklet_ordinal=tracklet.tracklet_ordinal,
+            first_frame_index=tracklet.first_frame_index,
+            last_frame_index=tracklet.last_frame_index,
+            first_pts_ns=tracklet.first_pts_ns,
+            last_pts_ns=tracklet.last_pts_ns,
+            observation_count=tracklet.observation_count,
+            valid_embedding_count=tracklet.valid_embedding_count,
+            state=tracklet.state,
+            mean_quality=tracklet.mean_quality,
+            max_quality=tracklet.max_quality,
+        )
+        self._session.add(orm)
+
+    async def list_by_track_id(self, track_id: uuid.UUID) -> Sequence[VideoTracklet]:
+        result = await self._session.execute(
+            select(VideoTrackletOrm)
+            .where(VideoTrackletOrm.track_id == track_id)
+            .order_by(VideoTrackletOrm.tracklet_ordinal)
+        )
+        return [
+            VideoTracklet(
+                tracklet_id=orm.tracklet_id,
+                job_id=JobId(orm.job_id),
+                track_id=orm.track_id,
+                tracklet_ordinal=orm.tracklet_ordinal,
+                first_frame_index=orm.first_frame_index,
+                last_frame_index=orm.last_frame_index,
+                first_pts_ns=orm.first_pts_ns,
+                last_pts_ns=orm.last_pts_ns,
+                observation_count=orm.observation_count,
+                valid_embedding_count=orm.valid_embedding_count,
+                state=orm.state,
+                mean_quality=orm.mean_quality,
+                max_quality=orm.max_quality,
+            )
+            for orm in result.scalars().all()
+        ]
+
+    async def list_by_job_id(self, job_id: JobId) -> Sequence[VideoTracklet]:
+        result = await self._session.execute(
+            select(VideoTrackletOrm)
+            .where(VideoTrackletOrm.job_id == job_id)
+            .order_by(VideoTrackletOrm.track_id, VideoTrackletOrm.tracklet_ordinal)
+        )
+        return [
+            VideoTracklet(
+                tracklet_id=orm.tracklet_id,
+                job_id=JobId(orm.job_id),
+                track_id=orm.track_id,
+                tracklet_ordinal=orm.tracklet_ordinal,
+                first_frame_index=orm.first_frame_index,
+                last_frame_index=orm.last_frame_index,
+                first_pts_ns=orm.first_pts_ns,
+                last_pts_ns=orm.last_pts_ns,
+                observation_count=orm.observation_count,
+                valid_embedding_count=orm.valid_embedding_count,
+                state=orm.state,
+                mean_quality=orm.mean_quality,
+                max_quality=orm.max_quality,
+            )
+            for orm in result.scalars().all()
+        ]
+
+    async def delete_by_job_id(self, job_id: JobId) -> int:
+        result = await self._session.execute(
+            delete(VideoTrackletOrm).where(VideoTrackletOrm.job_id == job_id)
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
+
+class SqlAlchemyVideoAppearanceIntervalRepository(VideoAppearanceIntervalRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, interval: VideoAppearanceInterval) -> None:
+        orm = AppearanceIntervalOrm(
+            appearance_id=interval.appearance_id,
+            job_id=interval.job_id,
+            track_id=interval.track_id,
+            interval_index=interval.interval_index,
+            start_frame_index=interval.start_frame_index,
+            end_frame_index=interval.end_frame_index,
+            start_pts_ns=interval.start_pts_ns,
+            end_pts_ns=interval.end_pts_ns,
+            detection_count=interval.detection_count,
+        )
+        self._session.add(orm)
+
+    async def list_by_track_id(self, track_id: uuid.UUID) -> Sequence[VideoAppearanceInterval]:
+        result = await self._session.execute(
+            select(AppearanceIntervalOrm)
+            .where(AppearanceIntervalOrm.track_id == track_id)
+            .order_by(AppearanceIntervalOrm.interval_index)
+        )
+        return [
+            VideoAppearanceInterval(
+                appearance_id=orm.appearance_id,
+                job_id=JobId(orm.job_id),
+                track_id=orm.track_id,
+                interval_index=orm.interval_index,
+                start_frame_index=orm.start_frame_index,
+                end_frame_index=orm.end_frame_index,
+                start_pts_ns=orm.start_pts_ns,
+                end_pts_ns=orm.end_pts_ns,
+                detection_count=orm.detection_count,
+            )
+            for orm in result.scalars().all()
+        ]
+
+    async def delete_by_job_id(self, job_id: JobId) -> int:
+        result = await self._session.execute(
+            delete(AppearanceIntervalOrm).where(AppearanceIntervalOrm.job_id == job_id)
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
+
+class SqlAlchemyVideoTrackSampleRepository(VideoTrackSampleRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, link: VideoTrackSample) -> None:
+        orm = VideoTrackSampleOrm(
+            track_id=link.track_id,
+            sample_id=link.sample_id,
+            sample_rank=link.sample_rank,
+            quality_score=link.quality_score,
+            purpose=link.purpose,
+        )
+        self._session.add(orm)
+
+    async def list_by_track_id(self, track_id: uuid.UUID) -> Sequence[VideoTrackSample]:
+        result = await self._session.execute(
+            select(VideoTrackSampleOrm)
+            .where(VideoTrackSampleOrm.track_id == track_id)
+            .order_by(VideoTrackSampleOrm.sample_rank)
+        )
+        return [
+            VideoTrackSample(
+                track_id=orm.track_id,
+                sample_id=SampleId(orm.sample_id),
+                sample_rank=orm.sample_rank,
+                quality_score=orm.quality_score,
+                purpose=orm.purpose,
+            )
+            for orm in result.scalars().all()
+        ]
+
+    async def delete_by_job_id(self, job_id: JobId) -> int:
+        result = await self._session.execute(
+            delete(VideoTrackSampleOrm).where(VideoTrackSampleOrm.track_id.in_(
+                select(VideoTrackOrm.track_id).where(VideoTrackOrm.job_id == job_id)
+            ))
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
+
+class SqlAlchemyVideoTimelineChunkRepository(VideoTimelineChunkRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, chunk: VideoTimelineChunk) -> None:
+        orm = VideoTimelineChunkOrm(
+            chunk_id=chunk.chunk_id,
+            job_id=chunk.job_id,
+            artifact_kind=chunk.artifact_kind,
+            sequence_no=chunk.sequence_no,
+            start_pts_ns=chunk.start_pts_ns,
+            end_pts_ns=chunk.end_pts_ns,
+            bucket=chunk.bucket,
+            object_key=chunk.object_key,
+            content_sha256=chunk.content_sha256,
+            size_bytes=chunk.size_bytes,
+            record_count=chunk.record_count,
+            schema_version=chunk.schema_version,
+            compression=chunk.compression,
+            expires_at=chunk.expires_at,
+            created_at=chunk.created_at,
+        )
+        self._session.add(orm)
+
+    async def list_by_job_id(
+        self,
+        job_id: JobId,
+        artifact_kind: str | None = None,
+    ) -> Sequence[VideoTimelineChunk]:
+        stmt = select(VideoTimelineChunkOrm).where(VideoTimelineChunkOrm.job_id == job_id)
+        if artifact_kind:
+            stmt = stmt.where(VideoTimelineChunkOrm.artifact_kind == artifact_kind)
+        stmt = stmt.order_by(VideoTimelineChunkOrm.sequence_no)
+        result = await self._session.execute(stmt)
+        return [
+            VideoTimelineChunk(
+                chunk_id=orm.chunk_id,
+                job_id=orm.job_id,
+                artifact_kind=orm.artifact_kind,
+                sequence_no=orm.sequence_no,
+                start_pts_ns=orm.start_pts_ns,
+                end_pts_ns=orm.end_pts_ns,
+                bucket=orm.bucket,
+                object_key=orm.object_key,
+                content_sha256=orm.content_sha256,
+                size_bytes=orm.size_bytes,
+                record_count=orm.record_count,
+                schema_version=orm.schema_version,
+                compression=orm.compression,
+                expires_at=orm.expires_at,
+                created_at=orm.created_at,
+            )
+            for orm in result.scalars().all()
+        ]
+
+    async def delete_by_job_id(self, job_id: JobId) -> int:
+        result = await self._session.execute(
+            delete(VideoTimelineChunkOrm).where(VideoTimelineChunkOrm.job_id == job_id)
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]

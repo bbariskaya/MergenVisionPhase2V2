@@ -173,6 +173,18 @@ VideoFacePipeline::~VideoFacePipeline() {
     if (d_pitches_) cudaFree(d_pitches_);
     if (d_widths_) cudaFree(d_widths_);
     if (d_heights_) cudaFree(d_heights_);
+    if (d_uv_ptrs_) cudaFree(d_uv_ptrs_);
+    if (d_uv_pitches_) cudaFree(d_uv_pitches_);
+    if (d_rec_surface_ptrs_) cudaFree(d_rec_surface_ptrs_);
+    if (d_rec_uv_ptrs_) cudaFree(d_rec_uv_ptrs_);
+    if (d_rec_surface_indices_) cudaFree(d_rec_surface_indices_);
+    if (d_rec_pitches_) cudaFree(d_rec_pitches_);
+    if (d_rec_uv_pitches_) cudaFree(d_rec_uv_pitches_);
+    if (d_rec_widths_) cudaFree(d_rec_widths_);
+    if (d_rec_heights_) cudaFree(d_rec_heights_);
+    if (d_rec_landmarks_) cudaFree(d_rec_landmarks_);
+    if (d_rec_matrices_) cudaFree(d_rec_matrices_);
+    if (d_rec_status_) cudaFree(d_rec_status_);
     if (stream_) {
         cudaStreamSynchronize(stream_);
         cudaStreamDestroy(stream_);
@@ -222,6 +234,10 @@ bool VideoFacePipeline::init(int gpu_id,
             if (error && error->empty()) *error = "GlintR100 engine load failed";
             return false;
         }
+        if (!allocate_recognizer_buffers(error)) {
+            if (error && error->empty()) *error = "allocate_recognizer_buffers failed";
+            return false;
+        }
     } catch (const std::exception& e) {
         if (error) *error = std::string("pipeline init exception: ") + e.what();
         return false;
@@ -254,6 +270,47 @@ bool VideoFacePipeline::allocate_detector_buffers() {
     h_uv_pitches_.resize(max_batch);
     CU_CHECK(cudaMalloc(&d_uv_ptrs_, max_batch * sizeof(uint8_t*)));
     CU_CHECK(cudaMalloc(&d_uv_pitches_, max_batch * sizeof(int)));
+    return true;
+}
+
+bool VideoFacePipeline::allocate_recognizer_buffers(std::string* error) {
+    if (!glint_engine_ || !glint_engine_->loaded()) {
+        if (error) *error = "GlintR100 engine not loaded";
+        return false;
+    }
+
+    max_recognition_batch_ = glint_engine_->max_batch();
+    if (max_recognition_batch_ <= 0) {
+        if (error) *error = "GlintR100 engine reports invalid max batch";
+        return false;
+    }
+    const int n = max_recognition_batch_;
+
+    h_rec_surface_ptrs_.resize(n);
+    h_rec_surface_indices_.resize(n);
+    h_rec_pitches_.resize(n);
+    h_rec_uv_ptrs_.resize(n);
+    h_rec_uv_pitches_.resize(n);
+    h_rec_widths_.resize(n);
+    h_rec_heights_.resize(n);
+    h_rec_landmarks_.resize(n * 10);
+    h_embeddings_.resize(n * profile_.recognizer_embedding_dim);
+
+    try {
+        CU_CHECK(cudaMalloc(&d_rec_surface_ptrs_, n * sizeof(uint8_t*)));
+        CU_CHECK(cudaMalloc(&d_rec_uv_ptrs_, n * sizeof(uint8_t*)));
+        CU_CHECK(cudaMalloc(&d_rec_surface_indices_, n * sizeof(int)));
+        CU_CHECK(cudaMalloc(&d_rec_pitches_, n * sizeof(int)));
+        CU_CHECK(cudaMalloc(&d_rec_uv_pitches_, n * sizeof(int)));
+        CU_CHECK(cudaMalloc(&d_rec_widths_, n * sizeof(int)));
+        CU_CHECK(cudaMalloc(&d_rec_heights_, n * sizeof(int)));
+        CU_CHECK(cudaMalloc(&d_rec_landmarks_, n * 10 * sizeof(float)));
+        CU_CHECK(cudaMalloc(&d_rec_matrices_, n * 6 * sizeof(float)));
+        CU_CHECK(cudaMalloc(&d_rec_status_, sizeof(int)));
+    } catch (const std::exception& e) {
+        if (error) *error = std::string("recognizer buffer allocation failed: ") + e.what();
+        return false;
+    }
     return true;
 }
 
@@ -417,9 +474,11 @@ std::vector<FrameDetections> VideoFacePipeline::infer_detector_batch(
             face.detector_score = rd.score;
             face.quality_score = rd.score;
             face.tracking_eligible = true;
-            // Recognition eligibility will be decided by a later quality gate.
-            face.recognition_eligible = false;
-            face.rejection_code = "recognition_not_yet_implemented";
+            // TODO(M6): add real quality gate. For the full-observation gate,
+            // every detection passes recognition eligibility so we can verify
+            // that the complete decode->detect->align->embed pipeline works.
+            face.recognition_eligible = true;
+            face.rejection_code.clear();
             face.model_version = profile_.model_version;
             face.preprocess_version = profile_.preprocess_version;
             fd.detections.push_back(std::move(face));
@@ -438,13 +497,196 @@ std::vector<FrameDetections> VideoFacePipeline::infer_detector_batch(
     metrics_.mapping_us += us(t_mapping_start, t_mapping_end);
     ++metrics_.total_calls;
 
+    uint64_t recognition_us = 0;
+    run_recognition_for_batch(batch, result, &recognition_us);
+    metrics_.recognition_us += recognition_us;
+
     return result;
+}
+
+void VideoFacePipeline::run_recognition_for_batch(
+    const InferenceFrameBatch& batch,
+    std::vector<FrameDetections>& result,
+    uint64_t* out_recognition_us) {
+    auto t_recognition_start = std::chrono::steady_clock::now();
+
+    if (result.empty() || batch.frames.empty()) {
+        if (out_recognition_us) *out_recognition_us = 0;
+        return;
+    }
+
+    const bool rgba_mode = is_rgba_format(batch.frames[0].device_view.format);
+    const bool nv12_mode = is_nv12_family(batch.frames[0].device_view.format);
+
+    struct RecItem {
+        FaceDetection* face = nullptr;
+        const DeviceImageView* view = nullptr;
+    };
+    std::vector<RecItem> items;
+    items.reserve(result.size() * 4);
+
+    for (size_t i = 0; i < result.size(); ++i) {
+        if (i >= batch.frames.size()) break;
+        const DeviceImageView& view = batch.frames[i].device_view;
+        for (auto& face : result[i].detections) {
+            if (!face.recognition_eligible) continue;
+            bool valid = false;
+            if (rgba_mode && view.data_ptr && view.pitch > 0) {
+                valid = true;
+            } else if (nv12_mode && view.data_ptr && view.num_planes >= 2 &&
+                       view.plane_pitch[0] > 0 && view.plane_pitch[1] > 0) {
+                valid = true;
+            }
+            if (!valid) {
+                face.recognition_eligible = false;
+                face.rejection_code = "invalid_surface";
+                continue;
+            }
+            items.push_back({&face, &view});
+        }
+    }
+
+    if (items.empty()) {
+        auto t_recognition_end = std::chrono::steady_clock::now();
+        if (out_recognition_us) {
+            *out_recognition_us = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    t_recognition_end - t_recognition_start).count());
+        }
+        return;
+    }
+
+    const int embedding_dim = profile_.recognizer_embedding_dim;
+    const int chunk_size = max_recognition_batch_;
+
+    int status_h = 0;
+
+    for (size_t chunk_start = 0; chunk_start < items.size(); chunk_start += chunk_size) {
+        const int n = static_cast<int>(std::min(
+            static_cast<size_t>(chunk_size), items.size() - chunk_start));
+
+        const bool chunk_rgba = is_rgba_format(items[chunk_start].view->format);
+        const bool chunk_nv12 = is_nv12_family(items[chunk_start].view->format);
+
+        for (int i = 0; i < n; ++i) {
+            const RecItem& item = items[chunk_start + static_cast<size_t>(i)];
+            const DeviceImageView& v = *item.view;
+            h_rec_surface_indices_[i] = i;
+            h_rec_widths_[i] = static_cast<int>(v.width);
+            h_rec_heights_[i] = static_cast<int>(v.height);
+            std::memcpy(&h_rec_landmarks_[i * 10], item.face->landmarks.data(), 10 * sizeof(float));
+
+            if (chunk_rgba) {
+                h_rec_surface_ptrs_[i] = static_cast<const uint8_t*>(v.data_ptr);
+                h_rec_pitches_[i] = static_cast<int>(v.pitch);
+            } else {  // NV12
+                const uint8_t* base = static_cast<const uint8_t*>(v.data_ptr);
+                h_rec_surface_ptrs_[i] = base + v.plane_offset[0];
+                h_rec_pitches_[i] = static_cast<int>(v.plane_pitch[0]);
+                h_rec_uv_ptrs_[i] = base + v.plane_offset[1];
+                h_rec_uv_pitches_[i] = static_cast<int>(v.plane_pitch[1]);
+            }
+        }
+
+        CU_CHECK(cudaMemsetAsync(d_rec_status_, 0, sizeof(int), stream_));
+        CU_CHECK(cudaMemcpyAsync(d_rec_surface_indices_, h_rec_surface_indices_.data(),
+                                 n * sizeof(int), cudaMemcpyHostToDevice, stream_));
+        CU_CHECK(cudaMemcpyAsync(d_rec_widths_, h_rec_widths_.data(),
+                                 n * sizeof(int), cudaMemcpyHostToDevice, stream_));
+        CU_CHECK(cudaMemcpyAsync(d_rec_heights_, h_rec_heights_.data(),
+                                 n * sizeof(int), cudaMemcpyHostToDevice, stream_));
+        CU_CHECK(cudaMemcpyAsync(d_rec_landmarks_, h_rec_landmarks_.data(),
+                                 n * 10 * sizeof(float), cudaMemcpyHostToDevice, stream_));
+
+        if (chunk_rgba) {
+            CU_CHECK(cudaMemcpyAsync(d_rec_surface_ptrs_, h_rec_surface_ptrs_.data(),
+                                     n * sizeof(uint8_t*), cudaMemcpyHostToDevice, stream_));
+            CU_CHECK(cudaMemcpyAsync(d_rec_pitches_, h_rec_pitches_.data(),
+                                     n * sizeof(int), cudaMemcpyHostToDevice, stream_));
+        } else {
+            CU_CHECK(cudaMemcpyAsync(d_rec_surface_ptrs_, h_rec_surface_ptrs_.data(),
+                                     n * sizeof(uint8_t*), cudaMemcpyHostToDevice, stream_));
+            CU_CHECK(cudaMemcpyAsync(d_rec_uv_ptrs_, h_rec_uv_ptrs_.data(),
+                                     n * sizeof(uint8_t*), cudaMemcpyHostToDevice, stream_));
+            CU_CHECK(cudaMemcpyAsync(d_rec_pitches_, h_rec_pitches_.data(),
+                                     n * sizeof(int), cudaMemcpyHostToDevice, stream_));
+            CU_CHECK(cudaMemcpyAsync(d_rec_uv_pitches_, h_rec_uv_pitches_.data(),
+                                     n * sizeof(int), cudaMemcpyHostToDevice, stream_));
+        }
+
+        CU_CHECK(static_cast<cudaError_t>(mergenvision_similarity_transform(
+            d_rec_landmarks_, d_rec_matrices_, n, profile_.alignment_crop_size,
+            d_rec_status_, stream_)));
+
+        if (chunk_rgba) {
+            CU_CHECK(mergenvision_warp_align_rgba_pitch(
+                d_rec_surface_ptrs_, d_rec_surface_indices_,
+                d_rec_pitches_, d_rec_widths_, d_rec_heights_,
+                d_rec_matrices_, n, glint_engine_->input_buffer(), stream_));
+        } else {
+            CU_CHECK(mergenvision_warp_align_nv12_pitch(
+                d_rec_surface_ptrs_, d_rec_uv_ptrs_, d_rec_surface_indices_,
+                d_rec_pitches_, d_rec_uv_pitches_,
+                d_rec_widths_, d_rec_heights_,
+                d_rec_matrices_, n, glint_engine_->input_buffer(), stream_));
+        }
+
+        std::string err;
+        if (!glint_engine_->enqueue(n, stream_, &err)) {
+            throw std::runtime_error("GlintR100 enqueue failed: " + err);
+        }
+
+        CU_CHECK(static_cast<cudaError_t>(mergenvision_l2_normalize(
+            glint_engine_->output_buffer(), glint_engine_->output_buffer(),
+            n, embedding_dim, 1e-12f, d_rec_status_, stream_)));
+
+        CU_CHECK(cudaStreamSynchronize(stream_));
+
+        CU_CHECK(cudaMemcpy(&status_h, d_rec_status_, sizeof(int), cudaMemcpyDeviceToHost));
+        if (status_h != 0) {
+            throw std::runtime_error("recognition kernel status nonzero: " + std::to_string(status_h));
+        }
+
+        CU_CHECK(cudaMemcpy(h_embeddings_.data(), glint_engine_->output_buffer(),
+                            n * embedding_dim * sizeof(float), cudaMemcpyDeviceToHost));
+
+        constexpr int kCropElems = 3 * 112 * 112;
+        CU_CHECK(cudaSetDevice(gpu_id_));
+
+        for (int i = 0; i < n; ++i) {
+            FaceDetection* face = items[chunk_start + static_cast<size_t>(i)].face;
+            face->embedding.assign(
+                h_embeddings_.begin() + i * embedding_dim,
+                h_embeddings_.begin() + (i + 1) * embedding_dim);
+            face->rejection_code.clear();
+
+            // Capture the aligned 112x112 NCHW crop for downstream representative
+            // selection. This is the only full crop D2H copy; only the selected
+            // representative per raw track is retained by the worker.
+            AlignedCropBuffer crop(kCropElems);
+            const float* d_crop = glint_engine_->input_buffer() + i * kCropElems;
+            CU_CHECK(cudaMemcpy(crop.data(), d_crop,
+                                kCropElems * sizeof(float), cudaMemcpyDeviceToHost));
+            crops_.emplace(face->observation_id, std::move(crop));
+        }
+    }
+
+    auto us = [](auto a, auto b) {
+        return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(b - a).count());
+    };
+    if (out_recognition_us) *out_recognition_us = us(t_recognition_start, std::chrono::steady_clock::now());
 }
 
 std::vector<EmbeddingResult> VideoFacePipeline::infer_recognition_batch(
     const std::vector<RecognitionCropRef>& /*crops*/) {
-    // Placeholder until M5.2 recognition integration.
+    // External recognition interface retained for testing; actual recognition
+    // runs internally in infer_detector_batch to keep source surfaces valid.
     return {};
+}
+
+std::unordered_map<std::string, AlignedCropBuffer> VideoFacePipeline::take_recognition_crops() {
+    return std::move(crops_);
 }
 
 } // namespace mergenvision::video

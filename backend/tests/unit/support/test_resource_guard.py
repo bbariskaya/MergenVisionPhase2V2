@@ -30,7 +30,7 @@ def test_accepts_valid_test_environment(valid_test_env: None) -> None:
 
 
 def test_rejects_missing_test_mode(monkeypatch: pytest.MonkeyPatch, valid_test_env: None) -> None:
-    monkeypatch.delenv("MV_TEST_MODE")
+    monkeypatch.delenv("MV_TEST_MODE", raising=False)
     with pytest.raises(UnsafeTestResourceError):
         assert_safe_test_environment()
 
@@ -64,7 +64,7 @@ def test_rejects_remote_database_host(
 def test_rejects_missing_database_url(
     monkeypatch: pytest.MonkeyPatch, valid_test_env: None
 ) -> None:
-    monkeypatch.delenv("DATABASE_URL")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(UnsafeTestResourceError):
         assert_safe_test_environment()
 
@@ -100,7 +100,7 @@ def test_rejects_remote_qdrant_url(monkeypatch: pytest.MonkeyPatch, valid_test_e
 def test_guard_cleanup_decorator_blocks_without_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("MV_TEST_MODE")
+    monkeypatch.delenv("MV_TEST_MODE", raising=False)
     sentinel = []
 
     @guard_cleanup

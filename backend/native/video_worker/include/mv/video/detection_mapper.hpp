@@ -37,6 +37,10 @@ struct FaceDetection {
     std::vector<float> embedding;
     std::string model_version;
     std::string preprocess_version;
+
+    // Populated by the tracker in the native worker so the Python side can
+    // correlate frame detections with the raw-track template/crop artifacts.
+    std::string raw_track_key;
 };
 
 struct FrameDetections {

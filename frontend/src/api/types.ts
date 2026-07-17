@@ -127,3 +127,161 @@ export class ApiError extends Error {
     this.name = 'ApiError'
   }
 }
+
+// --- Video schemas ---
+
+export interface OverlayBoundingBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface OverlayDetection {
+  track_id: UUID
+  face_id: UUID
+  status: RecognitionStatus
+  name: string | null
+  bbox: OverlayBoundingBox
+  confidence: number
+  provenance: string
+}
+
+export interface OverlayFrame {
+  frame_index: number
+  pts_ns: number
+  detections: OverlayDetection[]
+}
+
+export interface VideoRecognizeResponse {
+  request_id: UUID
+  process_id: UUID
+  video_id: UUID
+  job_id: UUID
+  upload_session_id: UUID | null
+  status: string
+  status_url: string
+  result_url: string
+}
+
+export interface VideoResponse {
+  request_id: UUID
+  video_id: UUID
+  upload_session_id: UUID
+  state: string
+  content_sha256: string | null
+  size_bytes: number | null
+  container_format: string | null
+  video_codec: string | null
+  display_width: number | null
+  display_height: number | null
+  rotation_degrees: number
+  duration_ns: number | null
+  total_frames: number | null
+  failure_code: string | null
+}
+
+export type VideoJobState =
+  | 'pending'
+  | 'processing'
+  | 'cancelling'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface VideoJobResponse {
+  request_id: UUID
+  process_id: UUID
+  video_id: UUID
+  job_id: UUID
+  state: VideoJobState
+  stage: string
+  progress_percent: number
+  sampling_mode: string
+  every_n_frames: number | null
+  frames_per_second: number | null
+  processed_frames: number
+  sampled_frames: number
+  detected_observations: number
+  person_count: number
+  cancellation_requested: boolean
+  error_code: string | null
+  created_at: string | null
+  updated_at: string | null
+  status_url: string
+  result_url: string
+}
+
+export interface VideoJobResultResponse {
+  request_id: UUID
+  job_id: UUID
+  state: VideoJobState
+  result_available: boolean
+  manifest_bucket: string | null
+  manifest_key: string | null
+  manifest_sha256: string | null
+}
+
+export interface VideoPersonSummary {
+  track_id: UUID
+  face_id: UUID
+  status: RecognitionStatus
+  name: string | null
+  first_frame_index: number
+  last_frame_index: number
+  first_pts_ns: number
+  last_pts_ns: number
+  total_duration_ns: number
+  detection_count: number
+  appearance_count: number
+  match_confidence: number
+}
+
+export interface VideoPeopleResponse {
+  request_id: UUID
+  job_id: UUID
+  person_count: number
+  people: VideoPersonSummary[]
+}
+
+export interface VideoAppearanceEntry {
+  track_id: UUID
+  face_id: UUID
+  start_frame_index: number
+  end_frame_index: number
+  start_pts_ns: number
+  end_pts_ns: number
+  detection_count: number
+}
+
+export interface VideoAppearancesResponse {
+  request_id: UUID
+  job_id: UUID
+  appearance_count: number
+  appearances: VideoAppearanceEntry[]
+}
+
+export interface VideoTimelineRecord {
+  track_id: UUID
+  face_id: UUID
+  start_frame_index: number
+  end_frame_index: number
+  start_pts_ns: number
+  end_pts_ns: number
+}
+
+export interface VideoTimelineResponse {
+  request_id: UUID
+  job_id: UUID
+  record_count: number
+  records: VideoTimelineRecord[]
+}
+
+export interface VideoTimelineFramesResponse {
+  request_id: UUID
+  job_id: UUID
+  start_pts_ns: number
+  end_pts_ns: number
+  record_count: number
+  frames: OverlayFrame[]
+}

@@ -20,7 +20,7 @@ from app.application.services.image_recognition_service import (
 )
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.errors import IdentityResolutionError
-from app.domain.value_objects import BoundingBox, FaceId, ProcessId, SampleId
+from app.domain.value_objects import BoundingBox, FaceId, ProcessId, ResultId, SampleId
 from app.infrastructure.uuid7 import generate_uuid7
 
 
@@ -109,6 +109,7 @@ class _FakeLifecycle:
             process_id=process_id,
             face_id=FaceId(generate_uuid7()),
             sample_id=SampleId(generate_uuid7()),
+            result_id=ResultId(generate_uuid7()),
             status="new_anonymous",
             bounding_box=bbox,
             match_confidence=0.7,

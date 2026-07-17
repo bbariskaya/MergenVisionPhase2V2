@@ -6,6 +6,7 @@ import DashboardPage from '@/pages/DashboardPage'
 import EnrollPage from '@/pages/EnrollPage'
 import FaceDetailPage from '@/pages/FaceDetailPage'
 import IdentifyPage from '@/pages/IdentifyPage'
+import JobDetailPage from '@/pages/JobDetailPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import PeoplePage from '@/pages/PeoplePage'
 import ProcessDetailPage from '@/pages/ProcessDetailPage'
@@ -25,6 +26,7 @@ function AppContent() {
         <Route path="/faces/:faceId" element={<FaceDetailPage />} />
         <Route path="/processes/:processId" element={<ProcessDetailPage />} />
         <Route path="/videos" element={<VideoPage />} />
+        <Route path="/videos/:videoId/jobs/:jobId" element={<JobDetailPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
       <ToastContainer toasts={toasts} onRemove={removeToast} />

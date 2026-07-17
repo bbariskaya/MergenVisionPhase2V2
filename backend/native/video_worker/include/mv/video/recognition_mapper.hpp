@@ -2,6 +2,7 @@
 
 #include "mv/video/frame_identity.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -23,6 +24,7 @@ struct RecognitionCropRef {
     uint32_t detection_ordinal = 0;
     uint32_t detector_batch_position = 0;
     DeviceAlignedCrop crop;
+    std::array<float, 10> landmarks{};  // five source-space landmarks x0,y0..x4,y4
 };
 
 struct EmbeddingResult {

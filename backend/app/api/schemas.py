@@ -232,3 +232,90 @@ class VideoJobResultResponse(_PublicBaseModel):
     manifest_bucket: str | None = None
     manifest_key: str | None = None
     manifest_sha256: str | None = None
+
+
+class VideoPersonSummary(_PublicBaseModel):
+    track_id: str
+    face_id: str
+    status: str
+    name: str | None = None
+    first_frame_index: int
+    last_frame_index: int
+    first_pts_ns: int
+    last_pts_ns: int
+    total_duration_ns: int
+    detection_count: int
+    appearance_count: int
+    match_confidence: float
+
+
+class VideoPeopleResponse(_PublicBaseModel):
+    request_id: str
+    job_id: str
+    person_count: int
+    people: list[VideoPersonSummary]
+
+
+class VideoAppearanceEntry(_PublicBaseModel):
+    track_id: str
+    face_id: str
+    start_frame_index: int
+    end_frame_index: int
+    start_pts_ns: int
+    end_pts_ns: int
+    detection_count: int
+
+
+class VideoAppearancesResponse(_PublicBaseModel):
+    request_id: str
+    job_id: str
+    appearance_count: int
+    appearances: list[VideoAppearanceEntry]
+
+
+class VideoTimelineRecord(_PublicBaseModel):
+    track_id: str
+    face_id: str
+    start_frame_index: int
+    end_frame_index: int
+    start_pts_ns: int
+    end_pts_ns: int
+
+
+class VideoTimelineResponse(_PublicBaseModel):
+    request_id: str
+    job_id: str
+    record_count: int
+    records: list[VideoTimelineRecord]
+
+
+class OverlayBoundingBox(_PublicBaseModel):
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class OverlayDetection(_PublicBaseModel):
+    track_id: str
+    face_id: str
+    status: str
+    name: str | None
+    bbox: OverlayBoundingBox
+    confidence: float
+    provenance: str
+
+
+class OverlayFrame(_PublicBaseModel):
+    frame_index: int
+    pts_ns: int
+    detections: list[OverlayDetection]
+
+
+class VideoTimelineFramesResponse(_PublicBaseModel):
+    request_id: str
+    job_id: str
+    start_pts_ns: int
+    end_pts_ns: int
+    record_count: int
+    frames: list[OverlayFrame]

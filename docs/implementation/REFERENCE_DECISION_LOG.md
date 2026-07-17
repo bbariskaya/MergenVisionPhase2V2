@@ -595,3 +595,103 @@
 | Failing test/reproducer | Native build on a compute capability 8.6 or 8.9 GPU. |
 | Parity/runtime acceptance command | `make phase2-step0-native` inside the pinned TensorRT container. |
 | Known limitation | User may need to set a narrower architecture list for faster container rebuilds. |
+
+---
+
+## DEC-029 — Native Video Detector Batch Default 16
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-029 |
+| Local feature/symbol | `backend/native/video_worker/tests/real_batching_smoke.cpp`, `backend/config/model_profiles/retinaface_r50_glintr100_v1_deepstream9.json` |
+| Reference URL | `requirements/videorequirements.md` |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `VideoFacePipeline::infer_detector_batch`, `NvBufSurface` batch contract, `nvstreammux` batch-size property |
+| Behavior adopted | Default detector temporal batch size = 16. Friends.mp4 yields 6665 processed frames, 9020 detections, 150 raw tracks invariant across batches 1/2/4/8/16. Batch 16 measured ~529.4 FPS (detector+raw tracking) and chosen as sweet spot. Runtime config still allows 1/2/4/8/16. |
+| Behavior explicitly rejected | Larger batch sizes without measured benefit; claiming full recognition FPS before GlintR100 is included. |
+| Local modifications | Makefile target `phase2-m6-native-full-observation` passes `--detector-batch-size 16`; default profile behavior unchanged. |
+| Failing test/reproducer | `make phase2-m6-native-full-observation` would fail if batch changed the invariant detection/track counts. |
+| Parity/runtime acceptance command | `make phase2-m6-native-full-observation` inside `mergenvision/deepstream-dev:9.0`. |
+| Known limitation | 529.4 FPS is detector+raw-track throughput; full decode→detect→align→GlintR100 throughput is lower (~385.5 FPS on the same run). |
+
+---
+
+## DEC-030 — Native Full Observation Pipeline with GlintR100
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-030 |
+| Local feature/symbol | `backend/native/video_worker/src/video_face_pipeline.cpp`, `backend/native/video_worker/src/kernels/warp_align_nv12_pitch.cu`, `backend/native/video_worker/include/mv/video/recognition_mapper.hpp` |
+| Reference URL | ArcFace five-point alignment template; `requirements/videorequirements.md` |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `mergenvision_similarity_transform`, `mergenvision_warp_align_rgba_pitch`, `mergenvision_warp_align_nv12_pitch`, `mergenvision_l2_normalize`, `GlintR100Engine::enqueue` |
+| Behavior adopted | Every recognition-eligible detection receives a 512-D L2-normalized GlintR100 embedding. Alignment is CUDA five-point similarity transform to 112×112. Dynamic recognizer batching chunks at engine max batch (default 32) with deterministic crop order `(presentation_index, detection_ordinal)`. Embeddings are associated back to exact detections. |
+| Behavior explicitly rejected | CPU decode/inference fallback; OpenCV/PIL alignment; full-frame NVMM map into Python; averaged raw embeddings before tracking; trackId = faceId. |
+| Local modifications | Added NV12 warp-align kernel, wired `run_recognition_for_batch` inside `infer_detector_batch`, removed stale TODO comment. |
+| Failing test/reproducer | `make phase2-m6-native-full-observation` checks `embeddings == detections`, norm 1.0, no CPU fallback, PTS monotonic. |
+| Parity/runtime acceptance command | `make phase2-m6-native-full-observation` inside `mergenvision/deepstream-dev:9.0`. |
+| Known limitation | Full pipeline FPS is measured fresh for this hardware/engine/profile and does not claim annotated-MP4/UI/storage throughput. |
+
+---
+
+## DEC-031 — Canonical Video Identity Resolution Reuses Lifecycle Service and Enforces Temporal Overlap Guard
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-031 |
+| Local feature/symbol | `backend/app/application/services/video_identity_resolution_service.py`, `backend/app/application/services/identity_storage_lifecycle_service.py` |
+| Reference URL | `requirements/ProjectRequirements.md`, `requirements/videorequirements.md` |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `IdentityStorageLifecycleService.query_candidates`, `accept_candidate_for_process`, `create_new_identity_for_process`; `VectorCandidate` |
+| Behavior adopted | `VideoIdentityResolutionService` resolves each `CanonicalTrack` by querying the existing image identity lifecycle service. Known/anonymous matches reuse `faceId`; unmatched tracks create `new_anonymous` through the same MinIO/Qdrant sample flow. Per-video temporal overlap guard prevents assigning the same `faceId` to two overlapping canonical tracks, creating a new identity instead. Margin multiplier rejects ambiguous top-1/top-2 candidates. `recognition_result_id` links every video track back to an immutable result snapshot. |
+| Behavior explicitly rejected | Reusing `trackId` as `faceId`; per-frame identity decisions without track context; allowing overlapping tracks to share the same existing face; bypassing the existing lifecycle for “video-only” identities. |
+| Local modifications | Added `result_id` to `RecognitionOutcome`; added `query_candidates`, `accept_candidate_for_process`, `create_new_identity_for_process` primitives to `IdentityStorageLifecycleService`; implemented `VideoIdentityResolutionService` and `VideoTrackPersistenceService`. |
+| Failing test/reproducer | `make phase2-m7-video-identity` would fail if overlapping tracks incorrectly shared an existing face or if persistence did not write to PostgreSQL. |
+| Parity/runtime acceptance command | `make phase2-m7-video-identity` (6 unit + 1 integration = 8 passed). |
+| Known limitation | Crop bytes for new anonymous samples come from a caller-supplied best-shot provider; canonical track→crop selection is not yet integrated into the native observation writer. |
+
+---
+
+## DEC-032 — Unit of Work Flush for Heterogeneous Video Track Inserts
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-032 |
+| Local feature/symbol | `backend/app/application/services/video_track_persistence_service.py`, `backend/app/application/ports/unit_of_work.py`, `backend/app/infrastructure/persistence/sqlalchemy/unit_of_work.py` |
+| Reference URL | SQLAlchemy 2.0 unit-of-work flush semantics |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `AsyncSession.flush`, `UnitOfWork` |
+| Behavior adopted | `VideoTrackPersistenceService` flushes `video_track` rows before inserting dependent `video_tracklet` / `appearance_interval` rows. The `UnitOfWork` port exposes an explicit `flush()` method implemented by the SQLAlchemy adapter as `session.flush()`. |
+| Behavior explicitly rejected | Relying on SQLAlchemy to infer flush order without relationships (observed to emit interval insert before track insert in the test scenario); using multiple independent commits and losing atomicity. |
+| Local modifications | Added `flush()` to `UnitOfWork` port and `SqlAlchemyUnitOfWork`; made SQLAlchemy video track repositories inherit their abstract ports; removed stale `updated_at` assignment from `SqlAlchemyVideoTrackRepository.update()`. |
+| Failing test/reproducer | `tests/integration/video/test_video_identity_persistence.py::test_persist_video_track_to_postgresql` failed with FK violation before the flush was introduced. |
+| Parity/runtime acceptance command | `make phase2-m7-video-identity` green. |
+| Known limitation | `flush()` is currently used only for deterministic ordering; application-level rollback semantics remain unchanged. |
+
+---
+
+## DEC-033 — Native Aligned-Crop Representative Export (No FFmpeg Second-Pass)
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-033 |
+| Local feature/symbol | `backend/native/video_worker/tests/real_batching_smoke.cpp` (`MV_VIDEO_WORKER` block), `backend/app/infrastructure/serialization/native_bundle_reader.py`, `backend/app/infrastructure/runtime/native_representative_crop_provider.py`, `backend/app/worker/video_worker_main.py` |
+| Reference URL | `requirements/videorequirements.md` §GPU hot path; `docs/superpowers/plans/2026-07-17-gpu-video-worker-plan.md` |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | Existing `glintr100`/`retinaface_r50` native GPU pipeline (`mv/video/video_face_pipeline.hpp`) producing 112×112 aligned crops; `libwebp` encode path in `video_face_pipeline.hpp`/`real_batching_smoke.cpp`. |
+| Behavior adopted | Representative face crops are exported directly from the 112×112 aligned GPU crop that already exists before GlintR100 inference. One representative crop per raw track is selected deterministically (quality, detector score, face area, border margin, earliest PTS, smallest ordinal) and encoded to WebP inside the native worker. Python workers read the resulting artifact bundle (`observations.pb.zst`, `track_templates.pb.zst`, `crops/*.webp`, `manifest.json`) and never decode the video again. |
+| Behavior explicitly rejected | FFmpeg/ffprobe second-pass decode, OpenCV `VideoCapture`, PIL/full-frame CPU crop, per-track video seek, or any production code that re-opens the source video to extract crops. |
+| Local modifications | Added `ArtifactState` to `real_batching_smoke.cpp` with bounded per-track crop selection; wrote `video_track_template_v1.proto`; generated Python/C++ stubs; implemented `NativeBundle`, `video_track_template_reader.py`, `NativeRepresentativeCropProvider`; wired `video_worker_main.py` to run `mv_video_worker` and pass the native crop provider to `VideoProcessingService`. |
+| Failing test/reproducer | `tests/unit/worker/test_forbidden_worker_paths.py` fails if `ffmpeg`, `ffprobe`, `cv2.VideoCapture`, or `PIL.Image.open` appear in `backend/app/worker` or `backend/app/infrastructure/runtime`. |
+| Parity/runtime acceptance command | `make phase2-step0-static`; `pytest tests/unit/infrastructure/serialization/test_video_track_template_reader.py tests/unit/infrastructure/serialization/test_native_bundle_reader.py tests/unit/infrastructure/runtime/test_native_representative_crop_provider.py tests/unit/worker/test_forbidden_worker_paths.py -v`. |
+| Known limitation | Native worker currently emits uncompressed `.pb` files; `video_worker_main.py` post-compresses them to `.pb.zst` before downstream processing. Long-term the compression should move into the native worker so the manifest SHA/size reflect the compressed artifacts at emit time. |

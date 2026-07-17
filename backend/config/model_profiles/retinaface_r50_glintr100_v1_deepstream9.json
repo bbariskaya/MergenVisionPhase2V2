@@ -157,7 +157,7 @@
   "engine_manifest": {
     "retinaface_r50_dynamic": {
       "engine_path": "backend/artifacts/engines/deepstream9/retinaface_r50_dynamic.bs1.opt8.max64.fp16.trt1014.engine",
-      "engine_sha256": "a96127de8751042a9ed42d5d9e9f9740db718ca59cfbc373ae7db3c01f5bec00",
+      "engine_sha256": "51b1a27f3e6005314c46d5bcec640e38e55e4520bf671aea9a68386550056107",
       "profile": {
         "min": [
           1,
@@ -183,7 +183,7 @@
     },
     "glintr100": {
       "engine_path": "backend/artifacts/engines/deepstream9/glintr100.bs1.opt8.max64.fp16.trt1014.engine",
-      "engine_sha256": "11555847da2493694c1bb06eb3a6cb7d0dcfe63ba4c4829ab41df04e9a45eb58",
+      "engine_sha256": "512261ccdaaeb531e7bc2171a7f5eadbea241bdd0fe250103feee3eae4492f04",
       "profile": {
         "min": [
           1,
@@ -208,11 +208,11 @@
       "build_command": "trtexec --onnx=/workspace/backend/artifacts/models/glintr100.onnx --saveEngine=/workspace/backend/artifacts/engines/deepstream9/glintr100.bs1.opt8.max64.fp16.trt1014.engine --fp16 --minShapes=input.1:1x3x112x112 --optShapes=input.1:8x3x112x112 --maxShapes=input.1:64x3x112x112"
     },
     "build_command": "trtexec --onnx=/workspace/backend/artifacts/models/glintr100.onnx --saveEngine=/workspace/backend/artifacts/engines/deepstream9/glintr100.bs1.opt8.max64.fp16.trt1014.engine --fp16 --minShapes=input.1:1x3x112x112 --optShapes=input.1:8x3x112x112 --maxShapes=input.1:64x3x112x112",
-    "tensorrt_version": "--getPlanVersionOnly               Print TensorRT version when loaded plan was created. Works without deserialization of the plan.",
+    "tensorrt_version": "unknown",
     "cuda_version": "13.1",
     "container_digest": "mergenvision/deepstream-dev:9.0@sha256:309dce0982d2643a51c3d17aded6d0ebc890c834f3621b439d93496f0d46b616",
-    "gpu_compute_capability": "7.5\nGPU-c4e86f22-9be2-20fa-e97a-2bf441cb461f, 7.5\nGPU-a2ac89d8-0b46-2703-8fd0-5e74a7f74a00, 7.5",
+    "gpu_compute_capability": "7.5",
     "gpu_uuid": "GPU-22f04c0c-b6c2-9b75-6f9d-7e08fa7d7537",
-    "build_timestamp": "2026-07-17T14:40:17.826589+00:00"
+    "build_timestamp": "2026-07-17T21:02:22.905585+00:00"
   }
 }
