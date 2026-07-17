@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
-import uuid
 from typing import Any
 
 import asyncpg
 import pytest
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import create_async_engine
+
+from app.infrastructure.uuid7 import generate_uuid7
 
 pytestmark = pytest.mark.asyncio(scope="session")
 
@@ -157,16 +158,16 @@ async def _assert_rejected(
 
 
 async def test_phase2_invalid_inserts_rejected() -> None:
-    video_id = uuid.uuid4()
-    process_id = uuid.uuid4()
+    video_id = generate_uuid7()
+    process_id = generate_uuid7()
     conn = await asyncpg.connect(_pg_url())
     try:
         # invalid video_asset state
         await _assert_rejected(
             conn,
             "INSERT INTO video_asset (video_id, upload_session_id, state) VALUES ($1, $2, 'magic')",
-            uuid.uuid4(),
-            uuid.uuid4(),
+            generate_uuid7(),
+            generate_uuid7(),
         )
 
         # pending job cannot hold an active lease
@@ -174,13 +175,13 @@ async def test_phase2_invalid_inserts_rejected() -> None:
             conn,
             "INSERT INTO video_job (job_id, video_id, process_id, state, stage, sampling_mode, available_at, max_attempts, "
             "lease_owner, lease_expires_at) VALUES ($1, $2, $3, 'pending', 'queued', 'every_frame', now(), 3, 'worker-1', now())",
-            uuid.uuid4(),
+            generate_uuid7(),
             video_id,
             process_id,
             setup_sqls=[
                 (
                     "INSERT INTO video_asset (video_id, upload_session_id, state) VALUES ($1, $2, 'uploading')",
-                    (video_id, uuid.uuid4()),
+                    (video_id, generate_uuid7()),
                 ),
                 (
                     "INSERT INTO process_record (process_id, process_type, status) VALUES ($1, 'video_recognize', 'processing')",
@@ -194,13 +195,13 @@ async def test_phase2_invalid_inserts_rejected() -> None:
             conn,
             "INSERT INTO video_job (job_id, video_id, process_id, state, stage, sampling_mode, available_at, max_attempts, "
             "failed_at) VALUES ($1, $2, $3, 'failed', 'finalize', 'every_frame', now(), 3, now())",
-            uuid.uuid4(),
+            generate_uuid7(),
             video_id,
             process_id,
             setup_sqls=[
                 (
                     "INSERT INTO video_asset (video_id, upload_session_id, state) VALUES ($1, $2, 'uploading')",
-                    (video_id, uuid.uuid4()),
+                    (video_id, generate_uuid7()),
                 ),
                 (
                     "INSERT INTO process_record (process_id, process_type, status) VALUES ($1, 'video_recognize', 'processing')",
@@ -214,13 +215,13 @@ async def test_phase2_invalid_inserts_rejected() -> None:
             conn,
             "INSERT INTO video_job (job_id, video_id, process_id, state, stage, sampling_mode, available_at, max_attempts, "
             "every_n_frames, frames_per_second) VALUES ($1, $2, $3, 'pending', 'queued', 'every_n_frames', now(), 3, 5, 1.0)",
-            uuid.uuid4(),
+            generate_uuid7(),
             video_id,
             process_id,
             setup_sqls=[
                 (
                     "INSERT INTO video_asset (video_id, upload_session_id, state) VALUES ($1, $2, 'uploading')",
-                    (video_id, uuid.uuid4()),
+                    (video_id, generate_uuid7()),
                 ),
                 (
                     "INSERT INTO process_record (process_id, process_type, status) VALUES ($1, 'video_recognize', 'processing')",

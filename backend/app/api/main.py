@@ -77,20 +77,11 @@ def _create_face_controller() -> FaceController:
 def _create_video_upload_service() -> VideoUploadService:
     unit_of_work_factory = lambda: SqlAlchemyUnitOfWork(async_session_maker)  # noqa: E731
     object_store = MinIOObjectStore()
-    vector_store = QdrantVectorStore()
     id_generator = Uuid7Generator()
-
-    lifecycle_service = IdentityStorageLifecycleService(
-        unit_of_work_factory=unit_of_work_factory,
-        object_store=object_store,
-        vector_store=vector_store,
-        id_generator=id_generator,
-    )
 
     return VideoUploadService(
         unit_of_work_factory=unit_of_work_factory,
         object_store=object_store,
-        lifecycle_service=lifecycle_service,
         id_generator=id_generator,
         bucket_name=settings.minio_bucket_name,
         ffprobe_command=settings.ffprobe_command,

@@ -191,3 +191,13 @@ class VideoJobResponse(_PublicBaseModel):
 
 class VideoRetryResponse(VideoRecognizeResponse):
     pass
+
+
+class VideoJobResultResponse(_PublicBaseModel):
+    request_id: str
+    job_id: str
+    state: str
+    result_available: bool
+    manifest_bucket: str | None = None
+    manifest_key: str | None = None
+    manifest_sha256: str | None = None

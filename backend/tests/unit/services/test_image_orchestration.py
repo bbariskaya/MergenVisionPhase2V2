@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import uuid4
 
 import pytest
 
@@ -22,6 +21,7 @@ from app.application.services.image_recognition_service import (
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.errors import IdentityResolutionError
 from app.domain.value_objects import BoundingBox, FaceId, ProcessId, SampleId
+from app.infrastructure.uuid7 import generate_uuid7
 
 
 @dataclass
@@ -65,7 +65,7 @@ class _FakeLifecycle:
 
     async def start_process(self, process_type: str, details: dict[str, Any] | None = None) -> ProcessRecord:
         return ProcessRecord(
-            process_id=ProcessId(uuid4()),
+            process_id=ProcessId(generate_uuid7()),
             process_type=process_type,
             status="processing",
             details=details or {},
@@ -107,8 +107,8 @@ class _FakeLifecycle:
             raise IdentityResolutionError("resolution failed")
         outcome = RecognitionOutcome(
             process_id=process_id,
-            face_id=FaceId(uuid4()),
-            sample_id=SampleId(uuid4()),
+            face_id=FaceId(generate_uuid7()),
+            sample_id=SampleId(generate_uuid7()),
             status="new_anonymous",
             bounding_box=bbox,
             match_confidence=0.7,

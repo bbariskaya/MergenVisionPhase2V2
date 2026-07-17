@@ -43,3 +43,7 @@ class JobNotFoundError(DomainError):
 
 class VideoNotFoundError(DomainError):
     """Requested video asset does not exist."""
+
+
+class VideoExecutorNotReadyError(DomainError):
+    """Native video executor / common device pipeline is not available."""

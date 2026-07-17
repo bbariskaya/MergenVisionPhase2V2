@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
-import uuid
 from typing import Any
 
 import asyncpg
 import pytest
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import create_async_engine
+
+from app.infrastructure.uuid7 import generate_uuid7
 
 pytestmark = pytest.mark.asyncio(scope="session")
 
@@ -108,13 +109,13 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
         ):  # known without name
             await conn.execute(
                 "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'known', true, 1)",
-                uuid.uuid4(),
+                generate_uuid7(),
             )
 
         with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError):  # version 0
             await conn.execute(
                 "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 0)",
-                uuid.uuid4(),
+                generate_uuid7(),
             )
 
         with pytest.raises(
@@ -123,7 +124,7 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
             await conn.execute(
                 "INSERT INTO face_identity (face_id, status, is_active, version, deleted_at) "
                 "VALUES ($1, 'anonymous', true, 1, now())",
-                uuid.uuid4(),
+                generate_uuid7(),
             )
 
         with pytest.raises(
@@ -131,7 +132,7 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
         ):  # inactive without deleted_at
             await conn.execute(
                 "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', false, 1)",
-                uuid.uuid4(),
+                generate_uuid7(),
             )
 
         with pytest.raises(
@@ -139,13 +140,13 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
         ):  # pending but active
             await conn.execute(
                 "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 1)",
-                uuid.uuid4(),
+                generate_uuid7(),
             )
             rows = await conn.fetch("SELECT face_id FROM face_identity")
             face_id = rows[0]["face_id"]
             await conn.execute(
                 "INSERT INTO face_sample (sample_id, face_id, state, is_active) VALUES ($1, $2, 'pending', true)",
-                uuid.uuid4(),
+                generate_uuid7(),
                 face_id,
             )
 
@@ -156,14 +157,14 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
         ):  # active sample without bucket
             await conn.execute(
                 "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 1)",
-                uuid.uuid4(),
+                generate_uuid7(),
             )
             rows = await conn.fetch("SELECT face_id FROM face_identity")
             face_id = rows[0]["face_id"]
             await conn.execute(
                 "INSERT INTO face_sample (sample_id, face_id, state, is_active, object_key, activated_at) "
                 "VALUES ($1, $2, 'active', true, 'k', now())",
-                uuid.uuid4(),
+                generate_uuid7(),
                 face_id,
             )
 
@@ -175,13 +176,13 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
         ):  # failed sample without failure_code
             await conn.execute(
                 "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 1)",
-                uuid.uuid4(),
+                generate_uuid7(),
             )
             rows = await conn.fetch("SELECT face_id FROM face_identity")
             face_id = rows[0]["face_id"]
             await conn.execute(
                 "INSERT INTO face_sample (sample_id, face_id, state, is_active) VALUES ($1, $2, 'failed', false)",
-                uuid.uuid4(),
+                generate_uuid7(),
                 face_id,
             )
 
@@ -194,7 +195,7 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
             await conn.execute(
                 "INSERT INTO process_record (process_id, process_type, status, completed_at) "
                 "VALUES ($1, 'image_recognize', 'completed', now())",
-                uuid.uuid4(),
+                generate_uuid7(),
             )
 
         with pytest.raises(
@@ -203,24 +204,24 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
             await conn.execute(
                 "INSERT INTO process_record (process_id, process_type, status, completed_at) "
                 "VALUES ($1, 'image_recognize', 'failed', now())",
-                uuid.uuid4(),
+                generate_uuid7(),
             )
 
         # recognition_result confidence out of range
         await conn.execute(
             "INSERT INTO face_identity (face_id, status, is_active, version) VALUES ($1, 'anonymous', true, 1)",
-            uuid.uuid4(),
+            generate_uuid7(),
         )
         await conn.execute(
             "INSERT INTO process_record (process_id, process_type, status) VALUES ($1, 'image_recognize', 'processing')",
-            uuid.uuid4(),
+            generate_uuid7(),
         )
         rows = await conn.fetch("SELECT face_id FROM face_identity")
         face_id = rows[0]["face_id"]
         await conn.execute(
             "INSERT INTO face_sample (sample_id, face_id, state, is_active, bucket, object_key, activated_at) "
             "VALUES ($1, $2, 'active', true, 'b', 'k', now())",
-            uuid.uuid4(),
+            generate_uuid7(),
             face_id,
         )
         prows = await conn.fetch("SELECT process_id FROM process_record")
@@ -232,7 +233,7 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
             await conn.execute(
                 "INSERT INTO recognition_result (result_id, process_id, face_id, sample_id, status, match_confidence) "
                 "VALUES ($1, $2, $3, $4, 'new_anonymous', -0.1)",
-                uuid.uuid4(),
+                generate_uuid7(),
                 process_id,
                 face_id,
                 sample_id,
@@ -242,7 +243,7 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
             await conn.execute(
                 "INSERT INTO recognition_result (result_id, process_id, face_id, sample_id, status, match_confidence) "
                 "VALUES ($1, $2, $3, $4, 'new_anonymous', 1.1)",
-                uuid.uuid4(),
+                generate_uuid7(),
                 process_id,
                 face_id,
                 sample_id,

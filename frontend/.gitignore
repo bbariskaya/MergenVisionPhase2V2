@@ -1,0 +1,17 @@
+# Build artifacts
+dist/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Test / coverage
+coverage/
+playwright-report/
+test-results/
+e2e/screenshots/
+
+# Environment overrides (keep sample env files tracked if needed)
+.env.local
+.env.override

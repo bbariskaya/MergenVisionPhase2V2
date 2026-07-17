@@ -14,10 +14,19 @@ from app.infrastructure.persistence.sqlalchemy.repositories import (
     SqlAlchemyProcessRepository,
     SqlAlchemyRecognitionResultRepository,
 )
+from app.infrastructure.persistence.sqlalchemy.repositories.outbox_event_repository import (
+    SqlAlchemyOutboxEventRepository,
+)
+from app.infrastructure.persistence.sqlalchemy.repositories.process_event_repository import (
+    SqlAlchemyProcessEventRepository,
+)
 from app.infrastructure.persistence.sqlalchemy.repositories.video_repositories import (
     SqlAlchemyIdempotencyRepository,
     SqlAlchemyVideoAssetRepository,
     SqlAlchemyVideoJobRepository,
+)
+from app.infrastructure.persistence.sqlalchemy.video_job_queue import (
+    SqlAlchemyVideoJobQueue,
 )
 
 
@@ -35,7 +44,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self.recognition_results = SqlAlchemyRecognitionResultRepository(self._session)  # type: ignore[assignment]
         self.video_assets = SqlAlchemyVideoAssetRepository(self._session)
         self.video_jobs = SqlAlchemyVideoJobRepository(self._session)
+        self.video_job_queue = SqlAlchemyVideoJobQueue(self._session)
         self.idempotency = SqlAlchemyIdempotencyRepository(self._session)
+        self.process_events = SqlAlchemyProcessEventRepository(self._session)
+        self.outbox = SqlAlchemyOutboxEventRepository(self._session)
         return self
 
     async def __aexit__(

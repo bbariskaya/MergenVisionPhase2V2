@@ -1,0 +1,1207 @@
+Abi hızlı verdict: M2’de gerçek iş yapılmış, ama temiz PASS veremem. En kritik problem şu: local testleri çalıştıran üç ORM dosyası GitHub’da yok. Root .gitignore içindeki genel models/ kuralı bunları sessizce ignore etmiş; fresh checkout video API’yi import edemez. video_repositories.py
+
+Ayrıca:
+
+Idempotency hash video bytes’ını içermiyor; aynı key + farklı video eski job’ı döndürebilir. video_upload_service.py
+Asset dış storage işlemlerinden sonra DB’ye ekleniyor; failure orphan bırakabiliyor. ingestion flow
+Canonical MinIO SHA/size local hash ile karşılaştırılmıyor.
+phase2-control-plane .PHONY listesinde ama recipe yok; boş target false-green olabilir.
+Commit adı phase3 over? olsa da M3 kodu yok; CURRENT_SPRINT de M3’ü pending gösteriyor.
+Generated Playwright raporları, videolar, screenshotlar, prompt4.txt, notes.md repoya girmiş.
+
+Kod çöpe gitmiyor. Verdict:
+
+PARTIAL — M2 FUNCTIONAL LOCALLY, FRESH-CHECKOUT/IDEMPOTENCY/FAILURE SAFETY GATES OPEN
+
+Düzeltmeleri M3’ün içine gömüp sonra M4/M5’e otomatik geçiyoruz. Bunu aynen agent’a at: # CONTINUE BUILD MODE
+# M2 REPRODUCIBILITY CORRECTION + M3 JOB LEASE/WORKER
+# + M4 COMMON DEVICE PIPELINE + M5 REAL VIDEO OBSERVATION
+
+Aktif repository:
+
+/home/user/Workspace/MergenVisionPhase2v2
+
+Beklenen başlangıç HEAD:
+
+81efa4ab9d842a8493e1f53522e32018d5273583
+
+Artık Plan Mode’da değilsin. Build Mode’da implementation’a devam et.
+
+Bu görev yeni bir “correction sprint” açma talebi değildir. Önce aşağıdaki M2 correction preflight’ını uygula, gate geçince aynı görev içinde otomatik olarak:
+
+1. Milestone 3 job lease/retry/worker control
+2. Milestone 4 common native device FacePipeline
+3. Milestone 5 real NVIDIA video observation extraction
+
+implementasyonuna devam et.
+
+Milestone sonunda insan onayı isteme. Bir gate geçince otomatik sonraki gate’e geç.
+
+Mevcut M0/M1/M2 kodunu silme veya yeniden tasarlama. Çalışan upload, migration, image GPU ve storage kodunu düzeltip ilerlet.
+
+Kullanıcı M2 correction değişikliklerinin M3 içine alınmasını açıkça onaylıyor.
+
+Git commit/push yapma. History rewrite/reset yapma. Docker volume silme. Model indirme. Driver/system CUDA değiştirme.
+
+research/video_reference_lab/** frozen kalacak:
+
+- değiştirme
+- çalıştırma
+- import etme
+- production dependency yapma
+- acceptance’a bağlama
+
+Frontend production source’unu silme fakat bu görev sırasında freeze et. M3/M4/M5 backend/native işine frontend feature ekleme.
+
+======================================================================
+A. ZORUNLU M2 CORRECTION PREFLIGHT
+======================================================================
+
+Bu düzeltmeler ayrı bir sprint değildir. M3 başlamadan önce uygulanıp doğrulanacak.
+
+----------------------------------------------------------------------
+A1. Fresh-checkout reproducibility — P0 blocker
+----------------------------------------------------------------------
+
+Şu dosyalar local ortamda bulunuyor olabilir fakat GitHub snapshot’ında yok:
+
+backend/app/infrastructure/persistence/sqlalchemy/models/video_asset.py
+backend/app/infrastructure/persistence/sqlalchemy/models/video_job.py
+backend/app/infrastructure/persistence/sqlalchemy/models/idempotency_record.py
+
+Önce çalıştır:
+
+git check-ignore -v \
+  backend/app/infrastructure/persistence/sqlalchemy/models/video_asset.py \
+  backend/app/infrastructure/persistence/sqlalchemy/models/video_job.py \
+  backend/app/infrastructure/persistence/sqlalchemy/models/idempotency_record.py
+
+git ls-files backend/app/infrastructure/persistence/sqlalchemy/models
+
+rg --files backend/app/infrastructure/persistence/sqlalchemy/models
+
+Root `.gitignore` içindeki unanchored:
+
+models/
+
+kuralı backend içindeki gerçek Python `models/` package’ını ignore ediyor.
+
+Bunu daralt:
+
+- Yalnız gerçekten ignore edilmesi gereken root model artifact/cache dizinine anchor et:
+  `/models/`
+- veya explicit unignore uygula:
+  `!backend/app/infrastructure/persistence/sqlalchemy/models/`
+  `!backend/app/infrastructure/persistence/sqlalchemy/models/*.py`
+
+Bütün production import’larını tara:
+
+rg 'persistence\.sqlalchemy\.models' backend/app backend/tests
+
+Import edilen her production ORM module gerçekten filesystem’de bulunmalı ve ignore edilmemeli.
+
+En az şunların final source’u mevcut olmalı:
+
+- video_asset.py
+- video_job.py
+- idempotency_record.py
+- process_event.py
+- outbox_event.py
+- video_track.py
+- video_tracklet.py
+- appearance_interval.py
+- video_timeline_chunk.py
+- video_track_sample.py
+
+0004 tabloları henüz application tarafından kullanılmıyorsa bile ORM model ekleme sırasını ve ownership’i açık tut. Import edilen hiçbir dosya GitHub publish sırasında kaybolamaz.
+
+`models/__init__.py` gerekli modelleri Alembic metadata’ya import etmeli.
+
+Fresh-checkout import contract testi ekle:
+
+backend/tests/unit/persistence/test_tracked_model_modules.py
+
+Test:
+
+- required module path’leri assert eder
+- importlib ile hepsini import eder
+- Base.metadata içindeki Phase 2 table isimlerini assert eder
+- `.gitignore` nedeniyle ignored production source bulunduğunda fail eder
+- mümkünse `git check-ignore` sonucu üzerinden fail-closed çalışır
+
+Acceptance sonunda `git status --short` içinde bu dosyalar görünmeli ve final raporda “bunlar bir sonraki Git publish’e mutlaka dahil edilmeli” yazılmalı. Git add/commit yapma.
+
+----------------------------------------------------------------------
+A2. Forward repo hygiene cleanup
+----------------------------------------------------------------------
+
+History rewrite yapmadan normal working-tree cleanup uygula.
+
+Kaldır:
+
+- prompt4.txt
+- notes.md
+- frontend/playwright-report/**
+- frontend/test-results/**
+- frontend/tsconfig.tsbuildinfo
+- generated frontend/e2e/screenshots/**
+
+Unique ve güncel teknik bilgi varsa önce CURRENT_SPRINT.md veya REFERENCE_DECISION_LOG.md’ye taşı. Raw prompt dump’ını product source olarak saklama.
+
+frontend/.gitignore dosyasını geri oluştur ve en az şunları ignore et:
+
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+e2e/screenshots/
+
+Frontend fixture JPEG’leri yalnız:
+
+- rights-cleared
+- deterministic
+- provenance/expected behavior belgelenmiş
+
+ise source’ta kalsın. Değilse local/gitignored fixture yap.
+
+Frontend production source ve testlerini topluca silme. Ancak CURRENT_SPRINT içindeki “dirty tree frontend changes” ifadesini düzelt:
+
+- Bunlar artık committed unrelated Phase 1 UI baseline’dır.
+- M3/M4/M5 evidence değildir.
+- Backend API ile henüz uyumlu değildir.
+- UI contract correction daha sonraki explicit gate’tir.
+
+Şu bilinen UI drift’lerini CURRENT_SPRINT limitation olarak yaz:
+
+- frontend `POST /faces/enroll` çağırıyor; backend path-param enroll kullanıyor
+- frontend/E2E `GET /faces?search=...` çağırıyor; backend list endpoint’i yok
+- E2E harici `../../lfw/...` dataset’ine bağımlı
+- mevcut Playwright artifact’ları fresh-checkout product PASS kanıtı değildir
+
+----------------------------------------------------------------------
+A3. Migrations are already published — use migration 0005
+----------------------------------------------------------------------
+
+0003 ve 0004 uygulanmış/publish edilmiş migration kabul edilecek.
+
+Onları destructive biçimde yeniden yazma.
+
+Yeni forward migration oluştur:
+
+backend/app/infrastructure/persistence/alembic/versions/
+0005_phase2_contract_hardening.py
+
+Bu migration şu contract’ları güçlendirsin:
+
+1. process_record terminal states:
+
+   completed
+   failed
+   cancelled
+
+   terminaldir.
+
+   completed -> failed/cancelled yasak
+   failed -> completed/cancelled yasak
+   cancelled -> completed/failed yasak
+
+   completed yalnız completed_at ile
+   failed yalnız failed_at + error_code ile
+   cancelled yalnız cancelled_at ile
+
+   terminal timestamp/error alanları birbirini çelişkili biçimde taşıyamaz.
+
+2. video_job:
+
+   - attempt_count >= 0
+   - max_attempts > 0
+   - attempt_count <= max_attempts
+
+3. processing/cancelling job mutlaka şunları taşımalı:
+
+   - lease_owner
+   - lease_token
+   - lease_expires_at
+   - heartbeat_at
+
+4. pending/completed/failed/cancelled aktif lease taşıyamaz.
+
+5. video_job’a ekle:
+
+   lease_token UUID NULL
+
+6. completed job mutlaka:
+
+   - progress_percent = 100
+   - completed_at
+   - result_manifest_bucket
+   - result_manifest_key
+   - result_manifest_sha256
+   - result_schema_version
+
+   taşımalı.
+
+M3/M5 sırasında job henüz final product result üretmediyse completed yazma. Observation extraction sonrasında stage `track_reconcile` olarak processing kalabilir.
+
+7. video_track için composite uniqueness ekle:
+
+   UNIQUE(job_id, track_id)
+
+8. video_tracklet ve appearance_interval’ın başka job’a ait track’i referans etmesini engelle:
+
+   - composite FK (job_id, track_id)
+   - veya redundant job_id kolonunu güvenli biçimde kaldır
+   - bir yaklaşım seç ve test et
+
+9. video_timeline_chunk:
+
+   - start_pts_ns <= end_pts_ns
+   - sequence_no >= 0
+   - record_count >= 0
+   - size_bytes >= 0
+
+10. video_track/video_tracklet ordinals ve counts nonnegative.
+
+11. match evidence:
+
+   - finite score
+   - top1/top2/threshold expected cosine range
+   - margin tutarlı
+   - totalDuration/counts nonnegative
+
+Domain state transition’larını da DB contract ile aynı hale getir. Raw string state’i her yerde serbestçe mutate etme.
+
+----------------------------------------------------------------------
+A4. Fix video upload idempotency completely
+----------------------------------------------------------------------
+
+Mevcut `_request_hash()` video bytes’ını içermiyor. Bu yanlış.
+
+Şu davranış bağlayıcı:
+
+same Idempotency-Key
++ same exact video bytes
++ same normalized sampling/model config
+= aynı videoId/jobId/processId replay
+
+same Idempotency-Key
++ different video bytes
+veya different normalized config
+= HTTP 409 IDEMPOTENCY_CONFLICT
+
+Raw key yalnız `key_hash` üretmekte kullanılır. `request_hash` içine raw key koyma.
+
+Yeni normalized request hash:
+
+SHA256(
+  videoContentSha256
+  + canonicalSamplingMode
+  + canonicalEveryNFrames
+  + canonicalFramesPerSecond
+  + modelVersion
+  + preprocessVersion
+)
+
+Doğru sıra:
+
+1. Upload’ı bounded temp spool’a stream et.
+2. Aynı anda byte count + SHA-256 hesapla.
+3. Her exit path’inde temp file finally ile silinebilir durumda olsun.
+4. Normalized config üret.
+5. request_hash hesapla.
+6. PostgreSQL’de atomic idempotency claim yap.
+
+Completed idempotency record bulunduğunda incoming body hash edilmeden cached response döndürme. Farklı bytes conflict’i ancak incoming SHA hesaplandıktan sonra anlaşılabilir.
+
+Atomic claim:
+
+- SELECT-then-INSERT yarışına bırakma
+- PostgreSQL INSERT ... ON CONFLICT veya row lock kullan
+- unique `(scope,key_hash)` contract’ını concurrency-safe kullan
+
+Davranış:
+
+- no existing row:
+  atomik in_progress owner claim
+- completed + same hash:
+  cached IDs
+- completed + different hash:
+  409
+- in_progress + same hash:
+  409 IDEMPOTENCY_IN_PROGRESS, retryable=true
+  veya bounded wait sonrası replay
+- in_progress + different hash:
+  409 IDEMPOTENCY_CONFLICT
+- failed:
+  failed snapshot expires_at’a kadar stable replay
+  manual retry yeni idempotency key kullanır
+
+Retry endpoint’inde de önce request_hash mismatch kontrolü yap, sonra cached completed snapshot döndür.
+
+Aynı retry key’in başka original job için eski job response’u dönmesi yasak.
+
+Concurrent integration testi:
+
+- aynı key/same bytes ile iki eşzamanlı POST
+- duplicate process/video/job oluşmaz
+- integrity 500 oluşmaz
+
+----------------------------------------------------------------------
+A5. Durable upload reservation and cross-store safety
+----------------------------------------------------------------------
+
+Mevcut akış VideoAsset’i MinIO işlemlerinden sonra DB’ye ekliyor. Bunu düzelt.
+
+Doğru akış:
+
+Transaction 1:
+
+- idempotency claim
+- process_record processing
+- video_asset state=uploading
+- staging bucket/key
+- local content SHA/size
+- upload_session_id
+- process_event upload_reserved
+- commit
+
+Sonra transaction dışında:
+
+- ffprobe
+- staging upload
+- staging stat/checksum
+- canonical copy
+- canonical stat/checksum
+
+Her external step idempotent.
+
+Canonical object ready kabul edilmeden exact doğrula:
+
+canonicalStat.size == localStreamedSize
+canonicalStat.sha256 == localStreamedSha256
+stagingStat.size == localStreamedSize
+stagingStat.sha256 == localStreamedSha256
+
+Yalnız SHA metadata var diye ready sayma.
+
+Client’ın gönderdiği content_type’a güvenme. Canonical content type verified container/probe sonucu üzerinden belirlenir.
+
+Final Transaction:
+
+- video_asset ready
+- canonical bucket/key
+- verified metadata
+- video_job pending
+- process details
+- idempotency completed snapshot
+- process_event video_ready/job_created
+- staging cleanup outbox
+- commit
+
+Asset/job/process/idempotency completion aynı PostgreSQL transaction’larda kalmamalı.
+
+Failure Transaction:
+
+- video_asset rejected
+- process failed
+- sanitized failure_code
+- idempotency failed snapshot
+- staging/canonical cleanup outbox
+- process_event failure
+- commit
+
+MinIO/canonical başarı + PostgreSQL failure durumunda en az uploading asset reservation ve deterministic keys DB’de bulunduğu için reconciliation mümkün olmalı.
+
+Temp path cleanup bütün failure/success durumlarında `finally` ile çalışsın.
+
+Temporary filesystem path’i log/client response’a yazma.
+
+----------------------------------------------------------------------
+A6. Implement outbox minimum now
+----------------------------------------------------------------------
+
+outbox_event yalnız migration tablosu olarak kalmasın.
+
+Ekle:
+
+- ORM model
+- repository
+- UoW port
+- atomic claim
+- success/failure/retry
+- bounded attempts
+- dead letter
+
+M3 içinde en az şu event’ler çalışsın:
+
+- delete_video_staging
+- delete_video_canonical
+- cleanup_upload_temp_metadata
+- reconcile_video_upload
+
+Her cleanup step bağımsız olsun. Biri fail olunca diğerleri atlanmasın.
+
+----------------------------------------------------------------------
+A7. ffprobe and safe errors
+----------------------------------------------------------------------
+
+FFprobe timeout:
+
+- terminate
+- bounded wait
+- gerekiyorsa kill
+- process wait/reap
+- zombie child bırakma
+- stdout/stderr drain et
+
+Client’a ffprobe stderr dönme.
+
+Client’a:
+
+"Video could not be probed or is invalid."
+
+gibi safe message dön.
+
+Raw stderr yalnız privacy-safe structured diagnostic olarak debug log’a alınabilir; temp path/filename sanitize edilmeden loglama.
+
+Video route içindeki duplicate `_handle_domain_error` ve global handler drift’ini kaldır. Tek typed error mapper kullan.
+
+Unknown DomainError’ı otomatik 400 yapma.
+
+Dependency/MinIO/PG errors:
+
+503 DEPENDENCY_UNAVAILABLE
+
+Internal failure:
+
+500 INTERNAL_ERROR
+
+Readiness false iken video upload service route’u iş çalıştırmamalı; 503 dönmeli.
+
+Readiness response’unda native raw exception/path yayınlama.
+
+----------------------------------------------------------------------
+A8. Correct API semantics
+----------------------------------------------------------------------
+
+DELETE /api/v1/videos/jobs/{jobId}
+
+HTTP 202 dönmeli.
+
+Pending job:
+
+- immediate cancelled
+- process cancelled
+- no active lease
+
+Processing job:
+
+- state cancelling
+- cancellationRequested=true
+- ancak worker gerçekten durup cleanup yaptıktan sonra cancelled
+
+Terminal job cancel:
+
+- idempotent stable snapshot
+- yeni state mutation yok
+
+GET result:
+
+- önce gerçek job’ı yükle
+- unknown job => 404
+- pending/processing/cancelling => 409 JOB_NOT_COMPLETED
+- failed => 409/appropriate terminal failure envelope
+- cancelled => 409 JOB_CANCELLED
+- completed fakat manifest eksik => internal contract failure
+- completed => M7 result service
+
+Şimdilik completed product result yoksa her job’a körlemesine 409 atan route bırakma; job state-aware hale getir.
+
+----------------------------------------------------------------------
+A9. Makefile false-green correction
+----------------------------------------------------------------------
+
+Mevcut `phase2-control-plane` yalnız `.PHONY` listesinde ve recipe yok. Bu false-green.
+
+Gerçek recipe ekle:
+
+phase2-control-plane: phase2-services
+    run:
+    - test_upload_and_job.py
+    - new idempotency/concurrency tests
+    - upload failure/cleanup tests
+    - canonical checksum tests
+    - ffprobe timeout tests
+    - outbox tests
+
+Ayrıca:
+
+phase2-step0-static:
+- ruff check
+- ruff format --check
+- mypy
+
+phase2-step0-native:
+
+Host’ta `pytest.importorskip` ile bütün native testlerin skip edilmesini PASS sayma.
+
+İki target ayır:
+
+phase2-native-host-contract:
+- host surface/unit tests
+- skip açık raporlanabilir
+
+phase2-native-gpu-acceptance:
+- pinned GPU container
+- image_runtime import mandatory
+- zero unexpected skip
+- real GPU tests
+
+`phase2-step0-closure` full native PASS iddia edecekse GPU container target’ını çağırmalı. Değilse verdict PARTIAL yazmalı.
+
+Dockerfile GPU engine path’lerinde hâlâ stale:
+
+bs1.opt8.max64
+
+isimleri kullanılıyor.
+
+Profile contract:
+
+RetinaFace min/opt/max = 1/4/8
+GlintR100 min/opt/max = 1/8/32
+
+Engine build manifest, actual filename ve runtime env aynı olmalı. Hardcoded stale engine path kullanma. Runtime manifest üzerinden veya exact corrected env’den çözsün.
+
+Correction gate:
+
+make phase2-control-plane
+
+Bu target gerçek recipe ile green olmadan “M2 closed” yazma.
+
+======================================================================
+B. MILESTONE 3 — JOB LEASE, RETRY AND WORKER CONTROL
+======================================================================
+
+Correction gate geçince otomatik M3’e devam et.
+
+----------------------------------------------------------------------
+B1. Exact repository port
+----------------------------------------------------------------------
+
+Generic get→mutate→update ile job claim etme.
+
+VideoJobRepository/VideoJobQueue portuna atomic metotlar ekle:
+
+claim_next(
+    worker_id,
+    lease_token,
+    now,
+    lease_expires_at
+) -> ClaimedVideoJob | None
+
+heartbeat(
+    job_id,
+    worker_id,
+    lease_token,
+    expected_version,
+    now,
+    new_lease_expires_at
+) -> bool
+
+update_stage(
+    job_id,
+    worker_id,
+    lease_token,
+    expected_version,
+    stage,
+    progress,
+    counters
+) -> new_version
+
+request_cancellation(job_id) -> snapshot
+
+mark_cancelled(
+    job_id,
+    worker_id,
+    lease_token
+)
+
+release_for_retry(
+    job_id,
+    worker_id,
+    lease_token,
+    available_at,
+    error_code
+)
+
+mark_failed(
+    job_id,
+    worker_id,
+    lease_token,
+    error_code
+)
+
+recover_expired_leases(now, batch_size)
+
+Claim SQL:
+
+SELECT ...
+FROM video_job
+WHERE state='pending'
+  AND available_at <= now()
+ORDER BY available_at, created_at, job_id
+FOR UPDATE SKIP LOCKED
+LIMIT 1
+
+Aynı kısa transaction’da:
+
+- state=processing
+- stage=download
+- lease_owner
+- lease_token
+- lease_expires_at
+- heartbeat_at
+- attempt_count += 1
+- started_at ilk claim’de
+- version += 1
+
+commit.
+
+GPU/download/external I/O transaction dışında.
+
+Generic repository update() içindeki eksik `available_at` persistence’ını düzelt fakat claim/heartbeat/finalize için generic update kullanma.
+
+----------------------------------------------------------------------
+B2. Fencing
+----------------------------------------------------------------------
+
+`lease_owner` tek başına yeterli değil.
+
+Her claim yeni random UUID `lease_token` üretir.
+
+Heartbeat/stage/finalize/cancel/retry update SQL’i şu predicates’i içermeli:
+
+- job_id
+- expected state
+- lease_owner
+- lease_token
+- expected version
+
+Stale worker lease kaybettikten sonra:
+
+- heartbeat yapamaz
+- progress yazamaz
+- job fail/complete/cancel yapamaz
+- result persist edemez
+
+Affected row count zero ise `LeaseLostError`.
+
+----------------------------------------------------------------------
+B3. Heartbeat and expiry
+----------------------------------------------------------------------
+
+Config:
+
+MV_VIDEO_WORKER_ID
+MV_VIDEO_JOB_LEASE_SECONDS
+MV_VIDEO_JOB_HEARTBEAT_SECONDS
+MV_VIDEO_WORKER_POLL_SECONDS
+MV_VIDEO_WORKER_CONCURRENCY
+MV_VIDEO_RETRY_BASE_SECONDS
+MV_VIDEO_RETRY_MAX_SECONDS
+MV_VIDEO_MAX_ATTEMPTS
+MV_VIDEO_CANCEL_GRACE_SECONDS
+
+Heartbeat interval lease duration’dan anlamlı biçimde kısa olmalı ve config validation bunu kontrol etmeli.
+
+Expired processing job:
+
+- cancellation_requested=true veya state=cancelling:
+  cleanup sonrası cancelled
+- attempt_count < max_attempts:
+  state=pending
+  stage=queued
+  available_at=now+bounded exponential backoff
+  lease fields clear
+  safe transient error code
+- attempt_count >= max_attempts:
+  failed
+  process failed
+  lease fields clear
+
+Backoff:
+
+min(baseSeconds * 2^(attemptCount-1), maxSeconds)
+
+Transaction içinde sleep yapma.
+
+----------------------------------------------------------------------
+B4. Worker execution boundary
+----------------------------------------------------------------------
+
+Ekle:
+
+backend/app/application/ports/video_job_executor.py
+backend/app/application/services/video_job_control_service.py
+backend/app/infrastructure/persistence/sqlalchemy/video_job_queue.py
+backend/app/workers/video_worker.py
+backend/app/workers/lease_reaper.py
+
+VideoJobExecutor production port:
+
+execute(claimed_job, cancellation_token, progress_reporter)
+
+M3 testinde fake executor kullanılabilir.
+
+Production service’i fake/noop executor ile completed yapma.
+
+M4/M5 tamamlanana kadar production video worker readiness:
+
+VIDEO_EXECUTOR_NOT_READY
+
+olabilir; fakat bu task M4/M5’e otomatik devam edeceği için finalde real executor bağlanmalı.
+
+Worker:
+
+- bounded concurrency
+- one task per claimed job
+- signal handling
+- cancellation propagation
+- heartbeat independent task
+- heartbeat failure => execution cancel
+- no unbounded in-memory queue
+- no zombie subprocess
+- exception -> typed transient/permanent classification
+- raw exception DB/client’a yazılmaz
+
+ProcessRecord ve VideoJob state aynı transaction’da senkron tutulur.
+
+----------------------------------------------------------------------
+B5. Cancellation
+----------------------------------------------------------------------
+
+Pending cancel:
+
+pending -> cancelled
+
+Processing cancel:
+
+processing -> cancelling
+cancellation_requested=true
+
+Worker:
+
+1. flag görür
+2. current native stage’e stop sinyali verir
+3. graceful timeout bekler
+4. gerekirse force terminate
+5. subprocess/GPU resources released doğrular
+6. temp artifact cleanup/outbox enqueue
+7. state cancelled
+8. process cancelled
+9. lease clear
+
+Native worker çalışırken API doğrudan process kill yapmaz. Worker cooperative cancellation sahibidir.
+
+----------------------------------------------------------------------
+B6. M3 tests
+----------------------------------------------------------------------
+
+Gerçek PostgreSQL ile ekle:
+
+- two workers claim one job: exactly one winner
+- multiple jobs SKIP LOCKED
+- claim order deterministic
+- transaction released before executor
+- heartbeat extends lease
+- wrong worker heartbeat rejected
+- wrong lease token rejected
+- stale version rejected
+- expired lease requeues
+- attempt_count/max attempts
+- expired max attempt -> failed
+- pending cancel -> cancelled
+- processing cancel -> cancelling
+- worker acknowledgement -> cancelled
+- stale worker cannot finalize
+- process state synchronized
+- retry backoff persisted via available_at
+- worker restart recovers job
+- retry creates no duplicate job/process
+- outbox claim concurrency
+- no raw exception persisted
+
+Make targets:
+
+phase2-m3-unit
+phase2-m3-integration
+phase2-m3-failure
+phase2-m3-worker-control
+
+Gate:
+
+make phase2-m3-worker-control
+
+Green olunca otomatik M4’e devam et.
+
+======================================================================
+C. MILESTONE 4 — COMMON DEVICE-RESIDENT FACE PIPELINE
+======================================================================
+
+Mevcut image pipeline hâlâ yalnız JPEG-oriented surface sunuyor. Video worker için reusable device API oluştur.
+
+Yeni repo açma. Mevcut corrected TensorRT/CUDA source’u ortak library’ye taşı/refactor et; kopyalama.
+
+Hedef:
+
+backend/native/face_pipeline/
+backend/native/image_runtime/
+backend/native/video_worker/
+
+Common API:
+
+DeviceImageView:
+- external device pointer/surface
+- width
+- height
+- pitch
+- pixelFormat
+- deviceId
+- sourceBatchIndex
+- frameIndex
+- ptsNs
+- rotation/display mapping
+- ownership flag/contract
+
+FacePipeline:
+
+inferDeviceBatch(
+    span<DeviceImageView>,
+    stream/context
+) -> batched observations
+
+Kurallar:
+
+- FacePipeline external NVMM surface’ı free etmez
+- device ownership explicit
+- external CUDA stream/lifetime explicit
+- frame association korunur
+- partial final batch korunur
+- EOS yüz/frame düşürmez
+- detector batch 1/4/8
+- recognizer batch 1/8/32
+- >32 face deterministic chunk
+- detection/embedding association korunur
+- original-resolution bbox
+- exact five landmarks
+- recognition-eligible embedding 512 finite L2 norm≈1
+
+Image path:
+
+JPEG
+-> nvJPEG
+-> DeviceImageView
+-> same FacePipeline
+
+Video path:
+
+NVDEC/NVMM
+-> GPU surface
+-> DeviceImageView batch
+-> same FacePipeline
+
+Yasak:
+
+- frame JPEG round-trip
+- image HTTP API per frame
+- OpenCV/Pillow decode
+- CPU model fallback
+- Python’a full frame/NVMM
+- native tracker/identity logic
+
+Existing image regression:
+
+- no-face
+- single face
+- multi-face
+- enrollment lifecycle
+- GIL release
+- RAII slot recovery
+- alignment failure rejection
+- batch parity
+
+M4 gate:
+
+make phase2-m4-device-pipeline
+
+Green olunca otomatik M5’e devam et.
+
+======================================================================
+D. MILESTONE 5 — REAL NVIDIA VIDEO OBSERVATION STREAM
+======================================================================
+
+Local video fixture:
+
+/home/user/Workspace/MergenVisionPhase2v2/test_videos/Friends.mp4
+
+Bu dosya structural real-video smoke içindir.
+
+Friends için:
+
+- general accuracy ground truth iddiası yapma
+- Rachel/Joey tracking accuracy PASS deme
+- labı çalıştırma
+- threshold overfit etme
+
+----------------------------------------------------------------------
+D1. Runtime compatibility gate
+----------------------------------------------------------------------
+
+DeepStream/GStreamer worker container için exact doğrula:
+
+- full container digest
+- DeepStream version
+- GStreamer version
+- CUDA version
+- TensorRT version
+- host driver compatibility
+- GPU UUID/compute capability
+
+Mevcut TensorRT image engine’ini farklı runtime’a kopyalama.
+
+Aynı ONNX modellerinden exact worker container içinde engine üret.
+
+Manifest:
+
+- model SHA
+- engine SHA
+- container digest
+- CUDA/TRT
+- GPU UUID/CC
+- min/opt/max profiles
+- exact build command
+- preprocess/model profile version
+
+Uyumsuzlukta:
+
+BLOCKED_VIDEO_RUNTIME_COMPATIBILITY
+
+CPU fallback/host Frankenstein libraries yok.
+
+----------------------------------------------------------------------
+D2. Native worker
+----------------------------------------------------------------------
+
+C++ GStreamer/DeepStream executable:
+
+verified MinIO/local asset
+-> demux
+-> NVIDIA decoder
+-> NVMM
+-> GPU color conversion if required
+-> DeviceImageView
+-> common FacePipeline
+-> compact observation writer
+-> fakesink/EOS
+
+Product graph’ta:
+
+- render
+- OSD
+- NVENC
+- annotated MP4
+
+zorunlu değil.
+
+Python DeepStream binding kullanma. C++ worker kullan.
+
+----------------------------------------------------------------------
+D3. Observation protobuf
+----------------------------------------------------------------------
+
+Ekle:
+
+backend/contracts/video_observation_v1.proto
+
+Her sampled frame, no-face olsa bile record üretir.
+
+Frame:
+
+- jobId
+- videoId
+- streamIndex
+- display-order frameIndex
+- sourcePts
+- timeBaseNum/Den
+- ptsNs integer
+- display width/height
+- rotation
+- detections
+
+Timestamp yalnız frame/fps ile türetilmez.
+
+Detection:
+
+- deterministic detectionId
+- ordinal
+- original bbox
+- landmarks
+- detectorScore
+- qualityScore
+- trackingEligible
+- recognitionEligible
+- rejectionCode
+- 512-D embedding only when eligible
+- model/preprocess version
+
+Length-delimited protobuf + zstd chunks:
+
+videos/{videoId}/jobs/{jobId}/observations/{sequence}.pb.zst
+
+Her chunk:
+
+- bounded frames/bytes
+- deterministic sequence
+- checksum/stat
+- DB video_timeline_chunk kind=private_observation
+- manifest
+- retry-safe
+- backpressure
+- no embeddings public API’de
+
+----------------------------------------------------------------------
+D4. Worker integration
+----------------------------------------------------------------------
+
+Job flow:
+
+pending
+-> claim processing/download
+-> checksum-verified local source
+-> probe
+-> decode_infer
+-> observation chunks + manifest
+-> stage track_reconcile
+
+Milestone 5 sonunda full tracking/result henüz yoksa job completed yazma.
+
+Worker:
+
+- heartbeat
+- progress
+- lease fencing
+- cancellation at batch boundaries
+- graceful native process stop
+- force timeout
+- temp cleanup
+- retryable/fatal typed errors
+
+----------------------------------------------------------------------
+D5. Real-video acceptance
+----------------------------------------------------------------------
+
+Önce short bounded smoke:
+
+- Friends.mp4
+- configured sampling
+- first 64–128 sampled frames
+- real NVIDIA decoder
+- real RetinaFace
+- real GlintR100
+- valid observation chunks
+- PTS monotonic/nondecreasing in display order
+- zero-face frames preserved
+- bbox original coordinate range
+- embeddings finite/normalized
+- no CPU decode
+- no lab import
+
+Sonra same path ile longer/full configured sampling smoke.
+
+Rapor:
+
+- decodedFrames
+- sampledFrames
+- processedFrames
+- observations
+- validEmbeddings
+- rejection counts
+- real providers/runtime
+- p50/p95 informational
+- queue/backpressure
+- no accuracy/600 FPS claim
+
+Gate:
+
+make phase2-m5-video-observation
+
+M5 geçince kullanıcıdan yeni prompt isteme.
+
+Aynı mevcut master plan/CURRENT_SPRINT’e göre otomatik:
+
+- M6 Python tracking/reconciliation
+- M7 result/timeline/appearance API
+- M8 retention/outbox/reconciliation
+- M9 full compose/security/acceptance
+
+işlerine devam et.
+
+======================================================================
+E. FINAL REPORT
+======================================================================
+
+Bu görev sonunda yalnız “green” deme.
+
+Verdict:
+
+PASS
+PARTIAL
+BLOCKED
+NOT_TESTED
+
+Raporla:
+
+1. baseline HEAD
+2. git status --short
+3. missing/ignored ORM correction evidence
+4. `.gitignore` correction
+5. removed generated/scratch files
+6. migration 0005 full contract
+7. real phase2-control-plane target
+8. exact idempotency behavior
+9. same-key different-bytes test
+10. concurrency test
+11. MinIO exact SHA/size evidence
+12. rejected asset + cleanup/outbox evidence
+13. ffprobe timeout/reaping test
+14. job claim SQL
+15. lease token/fencing
+16. heartbeat/expiry/retry
+17. cancellation proof
+18. M3 real PostgreSQL test results
+19. common DeviceImageView API
+20. image regression
+21. DeepStream container digest/runtime
+22. model/engine SHA and profiles
+23. real Friends observation smoke
+24. PTS/bbox/embedding evidence
+25. CPU fallback absence
+26. lab diff
+27. exact commands/exit codes
+28. skipped/not-run tests
+29. known limitations
+30. next automatically active milestone
+31. MCP accountability
+32. skill accountability
+
+CURRENT_SPRINT ledger’ını gerçek son duruma göre güncelle.
+
+Final review package:
+
+docs/implementation/review_packages/SPRINT-003-CODE-REVIEW-PACKAGE.md
+
+Eski SPRINT-002 package’ını değiştirme.
+
+Şimdi correction preflight’tan başlayıp implementation’a devam et. Plan onayı isteme.

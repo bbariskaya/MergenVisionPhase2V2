@@ -13,10 +13,20 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.infrastructure.persistence.sqlalchemy.base import Base
 from app.infrastructure.persistence.sqlalchemy.models import (  # noqa: F401
+    appearance_interval,
     face_identity,
     face_sample,
+    idempotency_record,
+    outbox_event,
+    process_event,
     process_record,
     recognition_result,
+    video_asset,
+    video_job,
+    video_timeline_chunk,
+    video_track,
+    video_track_sample,
+    video_tracklet,
 )
 
 config = context.config

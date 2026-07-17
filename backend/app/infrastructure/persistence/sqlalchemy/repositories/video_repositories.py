@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities.video_asset import VideoAsset
@@ -71,6 +71,7 @@ def _job_to_domain(orm: VideoJobOrm) -> VideoJob:
         person_count=orm.person_count,
         available_at=orm.available_at,
         lease_owner=orm.lease_owner,
+        lease_token=orm.lease_token,
         lease_expires_at=orm.lease_expires_at,
         heartbeat_at=orm.heartbeat_at,
         attempt_count=orm.attempt_count,
@@ -204,6 +205,7 @@ class SqlAlchemyVideoJobRepository:
             person_count=job.person_count,
             available_at=job.available_at,
             lease_owner=job.lease_owner,
+            lease_token=job.lease_token,
             lease_expires_at=job.lease_expires_at,
             heartbeat_at=job.heartbeat_at,
             attempt_count=job.attempt_count,
@@ -253,6 +255,7 @@ class SqlAlchemyVideoJobRepository:
         orm.detected_observations = job.detected_observations
         orm.person_count = job.person_count
         orm.lease_owner = job.lease_owner
+        orm.lease_token = job.lease_token
         orm.lease_expires_at = job.lease_expires_at
         orm.heartbeat_at = job.heartbeat_at
         orm.attempt_count = job.attempt_count
@@ -297,6 +300,64 @@ class SqlAlchemyIdempotencyRepository:
         }
 
     async def upsert_in_progress(
+        self,
+        scope: str,
+        key_hash: str,
+        request_hash: str,
+        expires_at: datetime,
+    ) -> None:
+        result = await self._session.execute(
+            select(IdempotencyRecordOrm).where(
+                IdempotencyRecordOrm.scope == scope,
+                IdempotencyRecordOrm.key_hash == key_hash,
+            )
+        )
+        orm = result.scalar_one_or_none()
+        if orm is None:
+            self._session.add(
+                IdempotencyRecordOrm(
+                    scope=scope,
+                    key_hash=key_hash,
+                    request_hash=request_hash,
+                    state="in_progress",
+                    expires_at=expires_at,
+                )
+            )
+        else:
+            orm.state = "in_progress"
+            orm.request_hash = request_hash
+            orm.expires_at = expires_at
+            orm.updated_at = datetime.now(UTC)
+
+    async def claim(
+        self,
+        scope: str,
+        key_hash: str,
+        request_hash: str,
+        expires_at: datetime,
+    ) -> dict[str, Any] | None:
+        result = await self._session.execute(
+            text(
+                """
+                INSERT INTO idempotency_record
+                    (scope, key_hash, request_hash, state, expires_at)
+                VALUES
+                    (:scope, :key_hash, :request_hash, 'in_progress', :expires_at)
+                ON CONFLICT (scope, key_hash) DO NOTHING
+                """
+            ),
+            {
+                "scope": scope,
+                "key_hash": key_hash,
+                "request_hash": request_hash,
+                "expires_at": expires_at,
+            },
+        )
+        if getattr(result, "rowcount", 0) == 1:
+            return None
+        return await self.get(scope, key_hash)
+
+    async def set_in_progress(
         self,
         scope: str,
         key_hash: str,

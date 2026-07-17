@@ -26,18 +26,27 @@ class ProcessRecordOrm(Base):
             name="ck_process_record_status",
         ),
         CheckConstraint(
-            """
-            (status = 'processing' AND completed_at IS NULL AND face_count IS NULL AND error_code IS NULL)
-            OR
-            (status = 'completed' AND completed_at IS NOT NULL AND face_count IS NOT NULL
-             AND face_count >= 0 AND error_code IS NULL)
-            OR
-            (status = 'failed' AND completed_at IS NOT NULL AND error_code IS NOT NULL
-             AND btrim(error_code) != '')
-            OR
-            (status = 'cancelled' AND cancelled_at IS NOT NULL)
-            """,
-            name="ck_process_record_lifecycle",
+            "status != 'completed' OR ("
+            "completed_at IS NOT NULL AND failed_at IS NULL AND cancelled_at IS NULL "
+            "AND error_code IS NULL AND face_count IS NOT NULL AND face_count >= 0)",
+            name="ck_process_record_terminal_completed",
+        ),
+        CheckConstraint(
+            "status != 'failed' OR ("
+            "failed_at IS NOT NULL AND error_code IS NOT NULL AND btrim(error_code) != '' "
+            "AND completed_at IS NULL AND cancelled_at IS NULL AND face_count IS NULL)",
+            name="ck_process_record_terminal_failed",
+        ),
+        CheckConstraint(
+            "status != 'cancelled' OR ("
+            "cancelled_at IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL AND error_code IS NULL)",
+            name="ck_process_record_terminal_cancelled",
+        ),
+        CheckConstraint(
+            "(completed_at IS NULL OR failed_at IS NULL) "
+            "AND (completed_at IS NULL OR cancelled_at IS NULL) "
+            "AND (failed_at IS NULL OR cancelled_at IS NULL)",
+            name="ck_process_record_terminal_timestamps_disjoint",
         ),
     )
 
@@ -53,4 +62,5 @@ class ProcessRecordOrm(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

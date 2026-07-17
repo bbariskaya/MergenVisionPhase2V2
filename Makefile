@@ -302,7 +302,8 @@ PHASE2_COMPOSE := docker compose -p $(PHASE2_PROJECT) -f $(COMPOSE_FILE)
 .PHONY: phase2-services \
         phase2-step0-static phase2-step0-api-contract phase2-step0-storage \
         phase2-step0-failure phase2-step0-native phase2-step0-closure \
-        phase2-migrations phase2-control-plane
+        phase2-migrations phase2-control-plane phase2-m3-worker-control \
+        phase2-m4-device-pipeline phase2-m5-video-observation
 
 phase2-services:
 	$(PHASE2_COMPOSE) up -d $(TEST_SERVICES) --wait
@@ -342,3 +343,30 @@ phase2-migrations: phase2-services
 	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
 	    tests/integration/persistence/test_migrations.py \
 	    tests/integration/persistence/test_phase2_migrations.py -v
+
+phase2-control-plane: phase2-services
+	@echo "==> phase2-control-plane: upload/idempotency/failure/route safety"
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/unit/persistence/test_tracked_model_modules.py \
+	    tests/integration/video/test_upload_and_job.py -v
+	@echo "==> phase2-control-plane passed"
+
+phase2-m3-worker-control: phase2-services
+	@echo "==> phase2-m3-worker-control: atomic claim/lease/heartbeat/retry/recovery"
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/integration/video/test_job_queue.py -v
+	@echo "==> phase2-m3-worker-control passed"
+
+phase2-m4-device-pipeline: phase2-services
+	@echo "==> phase2-m4-device-pipeline: common device-resident FacePipeline contract"
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/unit/ports/test_face_pipeline_port.py \
+	    tests/native/test_image_runtime_surface.py \
+	    tests/native/test_image_runtime_safety.py -v
+	@echo "==> phase2-m4-device-pipeline passed (host contract only; native GPU impl pending)"
+
+phase2-m5-video-observation:
+	@echo "==> phase2-m5-video-observation: contract only; real NVIDIA worker is blocked on native implementation"
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/unit/contracts/test_video_observation_proto.py -v
+	@echo "==> phase2-m5-video-observation contract present; real GPU smoke NOT_RUN"

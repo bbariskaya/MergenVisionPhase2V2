@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import io
 import subprocess
-import uuid
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
+from app.infrastructure.uuid7 import generate_uuid7
 
 
 def _generate_video(
@@ -73,7 +73,7 @@ def client() -> TestClient:
 
 @pytest.fixture
 def idempotency_key() -> str:
-    return f"test-key-{uuid.uuid4()}"
+    return f"test-key-{generate_uuid7()}"
 
 
 def _upload(
@@ -205,7 +205,7 @@ def test_cancel_pending_job(
     job_id = submit.json()["jobId"]
 
     cancel = client.delete(f"/api/v1/videos/jobs/{job_id}")
-    assert cancel.status_code == 200, cancel.text
+    assert cancel.status_code == 202, cancel.text
     cancel_body = cancel.json()
     assert cancel_body["state"] == "cancelled"
 
@@ -220,9 +220,9 @@ def test_retry_cancelled_job(
     original_job_id = submit.json()["jobId"]
 
     cancel = client.delete(f"/api/v1/videos/jobs/{original_job_id}")
-    assert cancel.status_code == 200
+    assert cancel.status_code == 202
 
-    retry_key = f"retry-key-{uuid.uuid4()}"
+    retry_key = f"retry-key-{generate_uuid7()}"
     retry = client.post(
         f"/api/v1/videos/jobs/{original_job_id}/retry",
         headers={"Idempotency-Key": retry_key},

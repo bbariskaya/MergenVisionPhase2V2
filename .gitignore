@@ -120,8 +120,8 @@ research/video_reference_lab/**/REPORT.md
 test-reports/video-reference/*
 !test-reports/video-reference/.gitignore
 
-# InsightFace local model cache (may be created by official download)
-models/
+# InsightFace local model cache (must be anchored to root so backend SQLAlchemy models package is not ignored)
+/models/
 .insightface/
 ~/.insightface/
 

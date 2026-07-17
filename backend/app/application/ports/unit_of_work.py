@@ -21,7 +21,10 @@ class UnitOfWork(ABC):
     recognition_results: RecognitionResultRepository
     video_assets: Any
     video_jobs: Any
+    video_job_queue: Any
     idempotency: Any
+    process_events: Any
+    outbox: Any
 
     @abstractmethod
     async def __aenter__(self) -> Self: ...

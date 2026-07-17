@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from dataclasses import dataclass
@@ -102,18 +103,21 @@ async def probe_video(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(),
-            timeout=timeout_seconds,
-        )
-    except TimeoutError as exc:
-        raise PayloadTooLargeError("Video probe timed out") from exc
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError as exc:
+            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                await proc.wait()
+            raise InvalidMediaError("Video probe timed out") from exc
     except FileNotFoundError as exc:
         raise InvalidMediaError("ffprobe not available") from exc
 
     if proc.returncode != 0:
-        message = (stderr.decode("utf-8", errors="replace") or "ffprobe failed").strip()
-        raise InvalidMediaError(f"Video probe failed: {message}")
+        raise InvalidMediaError("Video probe failed")
 
     try:
         data = json.loads(stdout.decode("utf-8"))

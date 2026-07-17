@@ -20,6 +20,7 @@ class ProcessRecord:
     details: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
+    failed_at: datetime | None = None
     cancelled_at: datetime | None = None
 
     def set_details(self, details: dict[str, Any]) -> None:
@@ -30,6 +31,9 @@ class ProcessRecord:
             raise InvalidTransitionError(f"Cannot complete process with status {self.status}")
         self.status = "completed"
         self.face_count = face_count
+        self.error_code = None
+        self.failed_at = None
+        self.cancelled_at = None
         self.details = details or {}
         self.completed_at = datetime.now(UTC)
 
@@ -38,13 +42,20 @@ class ProcessRecord:
             raise InvalidTransitionError(f"Cannot fail process with status {self.status}")
         self.status = "failed"
         self.error_code = error_code
+        self.face_count = None
+        self.completed_at = None
+        self.cancelled_at = None
         self.details = details or {}
-        self.completed_at = datetime.now(UTC)
+        self.failed_at = datetime.now(UTC)
 
     def cancel(self, details: dict[str, Any] | None = None) -> None:
-        if self.status not in ("processing", "failed"):
+        if self.status != "processing":
             raise InvalidTransitionError(f"Cannot cancel process with status {self.status}")
         self.status = "cancelled"
+        self.error_code = None
+        self.face_count = None
+        self.completed_at = None
+        self.failed_at = None
         self.cancelled_at = datetime.now(UTC)
         if details:
             self.details = details

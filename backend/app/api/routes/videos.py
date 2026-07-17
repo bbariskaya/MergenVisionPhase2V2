@@ -17,10 +17,12 @@ from fastapi import (
 from app.api.routes.dependencies import get_video_upload_service
 from app.api.schemas import (
     VideoJobResponse,
+    VideoJobResultResponse,
     VideoRecognizeResponse,
     VideoResponse,
 )
 from app.application.services.video_upload_service import (
+    JobResultSnapshot,
     JobSnapshot,
     SubmitResult,
     VideoSnapshot,
@@ -92,13 +94,19 @@ def _handle_domain_error(request: Request, exc: DomainError) -> HTTPException:
         status_code = status.HTTP_400_BAD_REQUEST
         code = "INVALID_REQUEST"
 
+    message = str(exc)
+    if code == "INVALID_MEDIA" and ("probe timed out" in message.lower() or "probe timeout" in message.lower()):
+        code = "VIDEO_PROBE_TIMEOUT"
+    elif code == "INVALID_MEDIA" and "ffprobe" in message.lower():
+        code = "VIDEO_PROBE_FAILED"
+
     return HTTPException(
         status_code=status_code,
         detail={
             "requestId": request_id,
             "error": {
                 "code": code,
-                "message": str(exc),
+                "message": message,
                 "retryable": False,
                 "details": {},
             },
@@ -160,6 +168,20 @@ def _to_video_response(request_id: str, snapshot: VideoSnapshot) -> VideoRespons
         duration_ns=snapshot.duration_ns,
         total_frames=snapshot.total_frames,
         failure_code=snapshot.failure_code,
+    )
+
+
+def _to_result_response(
+    request_id: str, snapshot: JobResultSnapshot
+) -> VideoJobResultResponse:
+    return VideoJobResultResponse(
+        request_id=request_id,
+        job_id=snapshot.job_id,
+        state=snapshot.state,
+        result_available=snapshot.result_available,
+        manifest_bucket=snapshot.manifest_bucket,
+        manifest_key=snapshot.manifest_key,
+        manifest_sha256=snapshot.manifest_sha256,
     )
 
 
@@ -225,7 +247,7 @@ async def get_job(
     return _to_job_response(request_id, snapshot)
 
 
-@router.delete("/jobs/{job_id}", response_model=VideoJobResponse)
+@router.delete("/jobs/{job_id}", response_model=VideoJobResponse, status_code=202)
 async def cancel_job(
     request: Request,
     job_id: str,
@@ -263,15 +285,24 @@ async def retry_job(
     return _to_recognize_response(request_id, result)
 
 
-@router.get("/jobs/{job_id}/result")
+@router.get("/jobs/{job_id}/result", response_model=VideoJobResultResponse)
 async def get_job_result(
     request: Request,
     job_id: str,
     service: VideoUploadService = Depends(get_video_upload_service),
-) -> None:
-    raise _error_response(
-        request,
-        code="JOB_NOT_COMPLETED",
-        message="Job result is not available until the job is completed.",
-        status_code=status.HTTP_409_CONFLICT,
-    )
+) -> VideoJobResultResponse:
+    request_id = str(request.state.request_id)
+    try:
+        snapshot = await service.get_job_result(job_id, request_id)
+    except DomainError as exc:
+        raise _handle_domain_error(request, exc) from exc
+
+    if not snapshot.result_available:
+        raise _error_response(
+            request,
+            code="JOB_NOT_COMPLETED",
+            message="Job result is not available until the job is completed.",
+            status_code=status.HTTP_409_CONFLICT,
+        )
+
+    return _to_result_response(request_id, snapshot)

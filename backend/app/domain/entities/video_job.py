@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import UUID
 
 from app.domain.value_objects import JobId, ProcessId, VideoId
 
@@ -27,6 +28,7 @@ class VideoJob:
     person_count: int = 0
     available_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     lease_owner: str | None = None
+    lease_token: UUID | None = None
     lease_expires_at: datetime | None = None
     heartbeat_at: datetime | None = None
     attempt_count: int = 0

@@ -1,16 +1,15 @@
 """Unit tests for FaceIdentity state transitions."""
 
-import uuid
-
 import pytest
 
 from app.domain.entities.face_identity import FaceIdentity
 from app.domain.errors import InvalidTransitionError, ValidationError
 from app.domain.value_objects import FaceId
+from app.infrastructure.uuid7 import generate_uuid7
 
 
 def _face_id() -> FaceId:
-    return FaceId(uuid.uuid4())
+    return FaceId(generate_uuid7())
 
 
 def test_new_identity_defaults_to_anonymous() -> None:
