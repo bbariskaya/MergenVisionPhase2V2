@@ -31,3 +31,15 @@ class IdentityResolutionError(DomainError):
 
 class ConcurrentUpdateError(DomainError):
     """Optimistic version check failed."""
+
+
+class IdempotencyConflictError(DomainError):
+    """Idempotency key reused with a different request."""
+
+
+class JobNotFoundError(DomainError):
+    """Requested video job does not exist."""
+
+
+class VideoNotFoundError(DomainError):
+    """Requested video asset does not exist."""

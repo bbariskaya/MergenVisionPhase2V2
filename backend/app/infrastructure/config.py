@@ -45,5 +45,20 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Video upload configuration
+    max_video_bytes: int = 2 * 1024 * 1024 * 1024
+    max_video_duration_ns: int = 600 * 1_000_000_000
+    max_video_display_width: int = 7680
+    max_video_display_height: int = 4320
+    allowed_video_containers: list[str] = ["mp4", "mov", "mkv"]
+    allowed_video_codecs: list[str] = ["h264", "hevc"]
+    video_retention_seconds: int = 7 * 24 * 3600
+    ffprobe_command: list[str] = ["ffprobe"]
+    video_staging_prefix: str = "staging/videos/"
+    video_source_prefix: str = "videos/"
+    video_temp_dir: str | None = None
+    video_probe_timeout_seconds: float = 60.0
+    video_max_attempts: int = 3
+
 
 settings = Settings()  # type: ignore[call-arg]

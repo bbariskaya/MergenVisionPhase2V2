@@ -7,6 +7,7 @@ forms during tests and service code.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -129,3 +130,64 @@ class ProcessResponse(_PublicBaseModel):
 
 class EmptyResponse(_PublicBaseModel):
     request_id: str
+
+
+class VideoRecognizeRequest(_PublicBaseModel):
+    sampling_mode: str = "every_frame"
+    every_n_frames: int | None = None
+    frames_per_second: Decimal | None = None
+
+
+class VideoRecognizeResponse(_PublicBaseModel):
+    request_id: str
+    process_id: str
+    video_id: str
+    job_id: str
+    upload_session_id: str | None = None
+    status: str
+    status_url: str
+    result_url: str
+
+
+class VideoResponse(_PublicBaseModel):
+    request_id: str
+    video_id: str
+    upload_session_id: str
+    state: str
+    content_sha256: str | None = None
+    size_bytes: int | None = None
+    container_format: str | None = None
+    video_codec: str | None = None
+    display_width: int | None = None
+    display_height: int | None = None
+    rotation_degrees: int = 0
+    duration_ns: int | None = None
+    total_frames: int | None = None
+    failure_code: str | None = None
+
+
+class VideoJobResponse(_PublicBaseModel):
+    request_id: str
+    process_id: str
+    video_id: str
+    job_id: str
+    state: str
+    stage: str
+    progress_percent: int
+    sampling_mode: str
+    every_n_frames: int | None = None
+    frames_per_second: Decimal | None = None
+    processed_frames: int
+    sampled_frames: int
+    detected_observations: int
+    person_count: int
+    cancellation_requested: bool = False
+    error_code: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    status_url: str
+    result_url: str
+
+
+class VideoRetryResponse(VideoRecognizeResponse):
+    pass

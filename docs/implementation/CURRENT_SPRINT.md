@@ -41,9 +41,11 @@ implementation.
 | 0 | Image closure & native safety | 0.6 Qdrant `model_version` filter + collection contract validation | ✅ code + integration test |
 | 0 | Image closure & native safety | 0.7 Native safety fixes (GIL, RAII slot, abort removal, alignment status, model profile, exact profiles, Dockerfile digest, engine build script) | ✅ code; GPU verification pending container |
 | 0 | Image closure & native safety | 0.8 Step 0 automated acceptance Makefile targets | ✅ Makefile targets added; native tests skipped on host |
-| 0 | Image closure & native safety | `make phase2-step0-closure` | pending real GPU container |
-| 1 | PostgreSQL video control plane | Migrations `0003_video_control_plane`, `0004_video_results` | pending |
-| 2 | Video upload/finalization/async job API | `POST /api/v1/videos/recognize` + idempotency | pending |
+| 0 | Image closure & native safety | `make phase2-step0-closure` | ✅ verified in pinned TensorRT container (31 passed) |
+| 1 | PostgreSQL video control plane | Migrations `0003_video_control_plane`, `0004_video_results` | ✅ upgraded + schema tests green |
+| 1 | PostgreSQL video control plane | `make phase2-migrations` target + regression pass | ✅ 9 passed |
+| 2 | Video upload/finalization/async job API | `POST /api/v1/videos/recognize` + idempotency | ✅ 9 passed (PG+MinIO) |
+| 2 | Video upload/finalization/async job API | `GET /api/v1/videos/{videoId}` + job status + cancel + retry + result 409 | ✅ 9 passed |
 | 3 | Job lease/retry/worker control | PG lease queue + claim/cancel/retry | pending |
 | 4 | Common native device face pipeline | `DeviceImageView` + shared `FacePipeline` | pending |
 | 5 | DeepStream/GStreamer GPU observation worker | pinned container + NVDEC observation writer | pending |
@@ -90,15 +92,29 @@ further work in the affected area only.
 
 ## Status
 
-IN PROGRESS — Milestones 0.1–0.6 implemented with unit/integration tests.
-M0.7 native safety code is complete: `ExecutionSlot` state enum, model profile
-`crop_size` list parsing and dynamic profile validation, `ImageRuntime` dict
-contract alignment, `backend/scripts/build_engines.py`, configurable CUDA
-architectures, and `phase2-step0-*` Makefile targets. Static/type checks and
-all non-native test suites pass; native GPU tests must run inside the pinned
-TensorRT container because the host has no CUDA/TensorRT build environment.
-M0.8 closure is pending that container run. Video control-plane work (M1–M9)
-will follow after `make phase2-step0-closure` passes.
+IN PROGRESS — Milestone 0 fully closed inside the pinned TensorRT container
+(31 passed). Milestone 1 migrations `0003_video_control_plane` and
+`0004_video_results` are upgraded and green (`make phase2-migrations`: 9 passed,
+including the updated legacy migration regression test). Milestone 2
+upload/finalization/async job API is now complete:
+
+- New/changed files: `app/application/services/video_{probe,upload}_service.py`,
+  `app/api/routes/videos.py`, `app/api/main.py`, `app/api/routes/dependencies.py`,
+  `app/domain/entities/video_{asset,job}.py`,
+  `app/infrastructure/persistence/sqlalchemy/repositories/video_repositories.py`,
+  `app/infrastructure/storage/minio_adapter.py`,
+  `app/infrastructure/persistence/sqlalchemy/unit_of_work.py`,
+  `app/infrastructure/config.py`, `app/api/schemas.py`,
+  `tests/integration/video/test_upload_and_job.py`.
+- Endpoints: `POST /api/v1/videos/recognize`, `GET /api/v1/videos/{videoId}`,
+  `GET /api/v1/videos/jobs/{jobId}`, `DELETE /api/v1/videos/jobs/{jobId}`,
+  `POST /api/v1/videos/jobs/{jobId}/retry`, `GET /api/v1/videos/jobs/{jobId}/result` (409).
+- Verified with real PostgreSQL + MinIO via `make phase2-step0-static`,
+  `make phase2-migrations`, and direct pytest of
+  `tests/integration/video/test_upload_and_job.py` (**9 passed**).
+- Static analysis clean; `research/video_reference_lab/**` unchanged.
+
+Next: Milestone 3 — job lease, retry and worker control.
 
 ## Review Package
 

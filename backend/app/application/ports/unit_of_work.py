@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from types import TracebackType
-from typing import Protocol, Self
+from typing import Any, Protocol, Self
 
 from app.application.ports.repositories import (
     FaceIdentityRepository,
@@ -19,6 +19,9 @@ class UnitOfWork(ABC):
     face_samples: FaceSampleRepository
     processes: ProcessRepository
     recognition_results: RecognitionResultRepository
+    video_assets: Any
+    video_jobs: Any
+    idempotency: Any
 
     @abstractmethod
     async def __aenter__(self) -> Self: ...

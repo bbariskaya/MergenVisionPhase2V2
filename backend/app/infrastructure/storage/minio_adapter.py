@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from minio import Minio
+from minio.commonconfig import CopySource
 from minio.error import S3Error
 
 from app.application.ports.object_store import ObjectStore
@@ -99,6 +101,65 @@ class MinIOObjectStore(ObjectStore):
         if stat.size != len(data):
             raise RuntimeError(f"Uploaded size mismatch for {key}")
         return stat
+
+    async def upload_from_file(
+        self,
+        key: str,
+        file_path: Path,
+        content_type: str,
+    ) -> ObjectStat:
+        await self._ensure_bucket()
+
+        path = Path(file_path)
+        size = path.stat().st_size
+        if size <= 0:
+            raise ValidationError("upload file must be non-empty")
+
+        sha256 = await asyncio.to_thread(self._compute_file_sha256, path)
+
+        existing = await self.stat(key)
+        if existing is not None:
+            if existing.size != size:
+                raise ValidationError(f"Object key {key} already exists with different size")
+            if existing.sha256 is not None and existing.sha256 != sha256:
+                raise ValidationError(f"Object key {key} already exists with different content")
+            return existing
+
+        def _put() -> None:
+            self._client.fput_object(
+                self._bucket_name,
+                key,
+                str(path),
+                content_type=content_type,
+                metadata={_SHA256_META_KEY: sha256},
+            )
+
+        await asyncio.to_thread(_put)
+        stat = await self.stat(key)
+        if stat is None:
+            raise RuntimeError(f"Upload succeeded but stat returned None for {key}")
+        if stat.size != size:
+            raise RuntimeError(f"Uploaded size mismatch for {key}")
+        return stat
+
+    def _compute_file_sha256(self, path: Path) -> str:
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            while chunk := f.read(65536):
+                h.update(chunk)
+        return h.hexdigest()
+
+    async def copy(self, source_key: str, dest_key: str) -> None:
+        await self._ensure_bucket()
+
+        def _copy() -> None:
+            self._client.copy_object(
+                self._bucket_name,
+                dest_key,
+                CopySource(self._bucket_name, source_key),
+            )
+
+        await asyncio.to_thread(_copy)
 
     async def stat(self, key: str) -> ObjectStat | None:
         await self._ensure_bucket()

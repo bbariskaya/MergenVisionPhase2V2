@@ -14,6 +14,11 @@ from app.infrastructure.persistence.sqlalchemy.repositories import (
     SqlAlchemyProcessRepository,
     SqlAlchemyRecognitionResultRepository,
 )
+from app.infrastructure.persistence.sqlalchemy.repositories.video_repositories import (
+    SqlAlchemyIdempotencyRepository,
+    SqlAlchemyVideoAssetRepository,
+    SqlAlchemyVideoJobRepository,
+)
 
 
 class SqlAlchemyUnitOfWork(UnitOfWork):
@@ -28,6 +33,9 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self.face_samples = SqlAlchemyFaceSampleRepository(self._session)  # type: ignore[assignment]
         self.processes = SqlAlchemyProcessRepository(self._session)  # type: ignore[assignment]
         self.recognition_results = SqlAlchemyRecognitionResultRepository(self._session)  # type: ignore[assignment]
+        self.video_assets = SqlAlchemyVideoAssetRepository(self._session)
+        self.video_jobs = SqlAlchemyVideoJobRepository(self._session)
+        self.idempotency = SqlAlchemyIdempotencyRepository(self._session)
         return self
 
     async def __aexit__(

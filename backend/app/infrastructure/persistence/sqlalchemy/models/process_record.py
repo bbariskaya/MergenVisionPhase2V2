@@ -18,11 +18,11 @@ class ProcessRecordOrm(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "process_type IN ('image_recognize', 'face_enroll', 'face_delete')",
+            "process_type IN ('image_recognize', 'face_enroll', 'face_delete', 'video_recognize')",
             name="ck_process_record_type",
         ),
         CheckConstraint(
-            "status IN ('processing', 'completed', 'failed')",
+            "status IN ('processing', 'completed', 'failed', 'cancelled')",
             name="ck_process_record_status",
         ),
         CheckConstraint(
@@ -34,6 +34,8 @@ class ProcessRecordOrm(Base):
             OR
             (status = 'failed' AND completed_at IS NOT NULL AND error_code IS NOT NULL
              AND btrim(error_code) != '')
+            OR
+            (status = 'cancelled' AND cancelled_at IS NOT NULL)
             """,
             name="ck_process_record_lifecycle",
         ),
@@ -51,3 +53,4 @@ class ProcessRecordOrm(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

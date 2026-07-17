@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -12,11 +13,12 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse, Response
 
 from app.api.controllers.face_controller import FaceController
-from app.api.routes import faces, processes
+from app.api.routes import faces, processes, videos
 from app.application.services.identity_storage_lifecycle_service import (
     IdentityStorageLifecycleService,
 )
 from app.application.services.image_recognition_service import ImageRecognitionService
+from app.application.services.video_upload_service import VideoUploadService
 from app.domain.errors import (
     DomainError,
     InvalidMediaError,
@@ -72,6 +74,41 @@ def _create_face_controller() -> FaceController:
     return FaceController(service)
 
 
+def _create_video_upload_service() -> VideoUploadService:
+    unit_of_work_factory = lambda: SqlAlchemyUnitOfWork(async_session_maker)  # noqa: E731
+    object_store = MinIOObjectStore()
+    vector_store = QdrantVectorStore()
+    id_generator = Uuid7Generator()
+
+    lifecycle_service = IdentityStorageLifecycleService(
+        unit_of_work_factory=unit_of_work_factory,
+        object_store=object_store,
+        vector_store=vector_store,
+        id_generator=id_generator,
+    )
+
+    return VideoUploadService(
+        unit_of_work_factory=unit_of_work_factory,
+        object_store=object_store,
+        lifecycle_service=lifecycle_service,
+        id_generator=id_generator,
+        bucket_name=settings.minio_bucket_name,
+        ffprobe_command=settings.ffprobe_command,
+        max_video_bytes=settings.max_video_bytes,
+        max_duration_ns=settings.max_video_duration_ns,
+        max_display_width=settings.max_video_display_width,
+        max_display_height=settings.max_video_display_height,
+        allowed_containers=set(settings.allowed_video_containers),
+        allowed_codecs=set(settings.allowed_video_codecs),
+        retention_seconds=settings.video_retention_seconds,
+        staging_prefix=settings.video_staging_prefix,
+        source_prefix=settings.video_source_prefix,
+        temp_dir=settings.video_temp_dir,
+        probe_timeout_seconds=settings.video_probe_timeout_seconds,
+        max_attempts=settings.video_max_attempts,
+    )
+
+
 def _safe_error_body(request_id: str, code: str, message: str, retryable: bool = False) -> dict[str, Any]:
     return {
         "requestId": request_id,
@@ -98,6 +135,13 @@ def create_app(readiness_probe: ReadinessProbe | None = None) -> FastAPI:
         report = await readiness_probe.check()
         app.state.readiness_report = report
 
+        try:
+            app.state.video_upload_service = _create_video_upload_service()
+        except Exception as exc:
+            logger = logging.getLogger(__name__)
+            logger.exception("video_upload_service initialization failed: %s", exc)
+            app.state.video_upload_service = None
+
         if report.ready:
             try:
                 app.state.face_controller = _create_face_controller()
@@ -123,6 +167,7 @@ def create_app(readiness_probe: ReadinessProbe | None = None) -> FastAPI:
         yield
 
         app.state.face_controller = None
+        app.state.video_upload_service = None
 
     app = FastAPI(
         title="MergenVision",
@@ -198,7 +243,7 @@ def create_app(readiness_probe: ReadinessProbe | None = None) -> FastAPI:
     async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         request_id = str(getattr(request.state, "request_id", "unknown"))
         return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             headers={"X-Request-ID": request_id},
             content=_safe_error_body(
                 request_id,
@@ -248,4 +293,5 @@ def create_app(readiness_probe: ReadinessProbe | None = None) -> FastAPI:
 
     app.include_router(faces.router, prefix="/api/v1")
     app.include_router(processes.router, prefix="/api/v1")
+    app.include_router(videos.router, prefix="/api/v1")
     return app

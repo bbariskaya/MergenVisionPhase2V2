@@ -10,6 +10,9 @@ FaceId = NewType("FaceId", uuid.UUID)
 SampleId = NewType("SampleId", uuid.UUID)
 ProcessId = NewType("ProcessId", uuid.UUID)
 ResultId = NewType("ResultId", uuid.UUID)
+VideoId = NewType("VideoId", uuid.UUID)
+JobId = NewType("JobId", uuid.UUID)
+UploadSessionId = NewType("UploadSessionId", uuid.UUID)
 
 
 @dataclass(frozen=True)

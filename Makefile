@@ -336,3 +336,9 @@ phase2-step0-closure: phase2-services \
         phase2-step0-static phase2-step0-api-contract \
         phase2-step0-storage phase2-step0-failure phase2-step0-native
 	git diff --check
+
+phase2-migrations: phase2-services
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(ALEMBIC) upgrade head
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/integration/persistence/test_migrations.py \
+	    tests/integration/persistence/test_phase2_migrations.py -v

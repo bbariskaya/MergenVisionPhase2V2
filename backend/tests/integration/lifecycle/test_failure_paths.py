@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 
@@ -37,6 +38,14 @@ def id_generator() -> IdGenerator:
 class FailingObjectStore(ObjectStore):
     async def upload(self, key: str, data: bytes, content_type: str) -> ObjectStat:
         raise RuntimeError("MinIO upload failure")
+
+    async def upload_from_file(
+        self, key: str, file_path: Path, content_type: str
+    ) -> ObjectStat:
+        raise RuntimeError("MinIO upload failure")
+
+    async def copy(self, source_key: str, dest_key: str) -> None:
+        raise RuntimeError("MinIO copy failure")
 
     async def stat(self, key: str) -> ObjectStat | None:
         return None

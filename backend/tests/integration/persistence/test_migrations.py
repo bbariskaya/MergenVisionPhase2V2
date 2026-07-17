@@ -99,6 +99,7 @@ async def test_invalid_inserts_are_rejected_by_constraints() -> None:
     try:
         await conn.execute("DELETE FROM recognition_result")
         await conn.execute("DELETE FROM face_sample")
+        await conn.execute("DELETE FROM video_job")
         await conn.execute("DELETE FROM process_record")
         await conn.execute("DELETE FROM face_identity")
 

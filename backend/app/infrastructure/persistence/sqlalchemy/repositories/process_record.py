@@ -20,6 +20,7 @@ def _to_domain(orm: ProcessRecordOrm) -> ProcessRecord:
         details=dict(orm.details or {}),
         created_at=orm.created_at,
         completed_at=orm.completed_at,
+        cancelled_at=orm.cancelled_at,
     )
 
 
@@ -37,6 +38,7 @@ class SqlAlchemyProcessRepository:
             details=process.details,
             created_at=process.created_at,
             completed_at=process.completed_at,
+            cancelled_at=process.cancelled_at,
         )
         self._session.add(orm)
 
@@ -59,6 +61,7 @@ class SqlAlchemyProcessRepository:
         orm.error_code = process.error_code
         orm.details = process.details
         orm.completed_at = process.completed_at
+        orm.cancelled_at = process.cancelled_at
 
     async def list_by_status(self, status: str) -> list[ProcessRecord]:
         result = await self._session.execute(
