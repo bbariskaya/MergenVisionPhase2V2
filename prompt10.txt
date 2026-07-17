@@ -1,0 +1,1184 @@
+Evet abi, native decode + RetinaFace + tracking çekirdeğinin sonuna yaklaştık. Bu matrix çok sağlam:
+
+6,665 frame her koşulda aynı.
+9,020 detection her batch’te aynı.
+150 raw track her batch’te aynı.
+Batch 16 ortalama yaklaşık 529.4 FPS.
+İki run arasındaki fark çok küçük.
+Batch 8’den 16’ya kazanç yalnız %3 civarı; 16 mantıklı sweet spot.
+Video yaklaşık 278 saniye fakat 12.6 saniyede işlendi: yaklaşık 22× realtime.
+
+Ama ürün henüz bitmedi. Bu sonuç “video decode/detect/track” kanıtı. Şimdi büyük iş: GlintR100 track template → track reconciliation → persistent faceId → PostgreSQL/MinIO/Qdrant → job result/timeline API → UI overlay. Bundan sonra bir ana dikey sprint ve bir hardening/acceptance kalır.
+
+Aşağıdaki prompt eski “Sprint 02’de video yapma” bağlamını açıkça supersede ediyor:
+
+QWEN — BUILD MODE’A DEVAM ET
+PHASE 2 FULL VIDEO IDENTITY VERTICAL SLICE
+
+Bu prompt önceki “Sprint 02 image-only, video yapma” non-goal’ını supersede eder.
+
+Phase 1 image identity vertical slice korunacak ve regression baseline olarak kalacaktır. Artık aktif görev Phase 2 video ürününü end-to-end tamamlamaktır.
+
+Aktif repository:
+
+  /home/user/Workspace/MergenVisionPhase2v2
+
+Kullanıcıdan yeniden plan/model/runtime kararı isteme. Source discovery’den sonra doğrudan implementation’a devam et.
+
+======================================================================
+1. PROJENİN GÜNCEL DURUMUNU DOĞRU ANLA
+======================================================================
+
+MergenVision yalnız yüz bounding box üreten bir demo değildir.
+
+Ürünün video tarafındaki kullanıcı sorusu:
+
+  “Bu videoda kimler göründü, hangi zaman aralıklarında göründüler,
+   sistem onları daha önce tanıyor mu ve aynı kalıcı faceId’yi koruyor mu?”
+
+Phase 1 image tarafında çalışan lifecycle:
+
+  first observation
+    → new_anonymous
+    → faceId=A
+
+  same identity later
+    → anonymous
+    → faceId=A
+
+  enrollment
+    → known
+    → faceId=A preserved
+
+Video tarafı aynı global persistent identity sistemini yeniden kullanmalıdır.
+
+Fark:
+
+- `trackId`: yalnız bir video/job içindeki hareket zinciri
+- `faceId`: videolar ve fotoğraflar arasında kalıcı global identity
+
+Track ID hiçbir zaman face ID yerine kullanılmaz.
+
+Native runtime:
+
+- known/anonymous kararı vermez
+- faceId oluşturmaz
+- name/metadata bilmez
+
+Native runtime yalnız compact visual evidence üretir.
+
+Application layer:
+
+- raw track’leri reconcile eder
+- template oluşturur
+- Qdrant arar
+- PostgreSQL lifecycle doğrular
+- faceId/identity kararı verir
+- sonucu persist eder
+
+Bağlayıcı requirements:
+
+- `requirements/ProjectRequirements.md`
+- `requirements/videorequirements.md`
+
+İkisini tamamen oku. Mevcut migration/API/domain ile karşılaştır. Bu prompt requirement field/path isimlerini keyfi değiştirme yetkisi vermez.
+
+======================================================================
+2. MEVCUT NATIVE BASELINE — BUNU KORU
+======================================================================
+
+Gerçek Friends.mp4 matrix sonucu:
+
+Video:
+
+  processed frames: 6665
+
+Batch 1:
+
+  detections: 9020
+  raw tracks: 150
+  FPS: 277.30 / 277.31
+
+Batch 2:
+
+  detections: 9020
+  raw tracks: 150
+  FPS: 385.24 / 384.64
+
+Batch 4:
+
+  detections: 9020
+  raw tracks: 150
+  FPS: 460.27 / 462.06
+
+Batch 8:
+
+  detections: 9020
+  raw tracks: 150
+  FPS: 513.63 / 513.17
+
+Batch 16:
+
+  detections: 9020
+  raw tracks: 150
+  FPS: 528.94 / 529.91
+
+Bağlayıcı runtime kararı:
+
+  default detector temporal batch size = 16
+
+Gerekçe:
+
+- En yüksek measured throughput.
+- İki run tutarlı.
+- Detection ve track sonuçları bütün batch boyutlarında invariant.
+- Batch 8 → 16 artışı sınırlı olduğu için bundan daha büyük batch peşinde plansız koşulmayacak.
+- Offline video job throughput’u için batch 16 uygun.
+- Partial final batch dynamic olarak çalışacak.
+- Runtime config ile 1/2/4/8/16 seçilebilir kalabilir.
+- Production default 16 olacaktır.
+
+Bu matrix’i:
+
+  docs/implementation/IMPLEMENTATION_DETAILS.md
+  docs/implementation/REFERENCE_DECISION_LOG.md
+  current sprint review package
+
+içinde gerçek command/output ile kaydet.
+
+`DEC-VIDEO-DETECTOR-BATCH-16` benzeri decision record ekle.
+
+Engine profile batch 16’yı gerçekten kapsamalı. Manifest/profile farklıysa:
+
+- existing working engine contract’ını inspect et
+- batch 16 runtime shape’in profile içinde olduğunu doğrula
+- engine SHA/profile/runtime fingerprint kaydet
+
+Model değiştirme veya yeniden indirme yok.
+
+======================================================================
+3. BU SPRINTİN BİTİŞ SONUCU
+======================================================================
+
+Bu prompt sonunda aşağıdaki gerçek zincir çalışmalıdır:
+
+  POST video upload
+    → PostgreSQL video_asset/video_job
+    → MinIO original video
+    → worker lease/claim
+    → native GPU worker
+    → GStreamer/NVDEC
+    → sequential frame batch=16
+    → RetinaFace R50
+    → landmarks
+    → GPU five-point alignment
+    → GlintR100
+    → GPU L2-normalized 512-D embeddings
+    → quality-aware raw tracks
+    → per-track templates
+    → conservative track reconciliation
+    → canonical video identities
+    → Qdrant identity search
+    → PostgreSQL lifecycle validation
+    → known / anonymous / new_anonymous decision
+    → PostgreSQL video track/appearance persistence
+    → MinIO observation artifact
+    → result/timeline API
+    → original video + metadata-based React canvas overlay
+
+Annotated MP4 oluşturulmayacak.
+
+NVENC kullanılmayacak.
+
+UI orijinal videonun üzerinde metadata ile overlay gösterecek.
+
+======================================================================
+4. ÖNCE MEVCUT IMPLEMENTATION GERÇEĞİNİ ÇIKAR
+======================================================================
+
+Kod yazmadan önce:
+
+1. `git status --short`
+2. HEAD/base commit
+3. `CURRENT_SPRINT.md`
+4. requirements
+5. video migrations
+6. video domain/ORM/repositories
+7. worker lease/retry/cancel
+8. native observation protobuf
+9. current native pipeline
+10. frontend video source
+
+tamamen incelensin.
+
+`codebase-memory-mcp` ile şu graph çıkarılsın:
+
+  upload API
+    → VideoUploadService
+    → VideoJobRepository
+    → worker claim/lease
+    → native executor
+    → observation artifact
+    → track persistence
+    → result service
+    → result API
+    → frontend
+
+Aşağıdaki sorular source üzerinden cevaplanmadan duplicate abstraction yazma:
+
+- GlintR100 video pipeline’da gerçekten çalışıyor mu?
+- Embedding count ölçülüyor mu?
+- Aligned crop üretilebiliyor mu?
+- Observation protobuf embedding taşıyor mu?
+- video_track/video_tracklet/appearance_interval ORM mapping mevcut mu?
+- Result manifest alanı var mı?
+- Job stage state machine hangi state’leri destekliyor?
+- Existing identity lifecycle service video tarafından yeniden kullanılabilir mi?
+- Qdrant adapter top-K/margin/model_version filtering destekliyor mu?
+- Frontend’de video player/route var mı?
+
+Fresh-checkout source check:
+
+- import edilen bütün ORM/native source Git tarafından tracked olmalı
+- `.gitignore` yanlışlıkla production source ignore etmemeli
+- local-only generated engine/model/fixture source diye raporlanmamalı
+
+======================================================================
+5. TOOL / MCP DİSİPLİNİ
+======================================================================
+
+- `codebase-memory-mcp`: sprint başlangıcı, call graph, caller/test discovery
+- mem0: doğrulanmış karar, blocker ve completion context
+- `context7`: FastAPI, SQLAlchemy, Alembic, MinIO, Qdrant, React, GStreamer, TensorRT version-sensitive APIs
+- `deepwiki`: NVIDIA/ByteTrack/upstream architecture
+- gerçek upstream/container source ile doğrulama
+- `exa`: official/upstream source eksikse
+- `postman`: gerçek video API acceptance
+- `playwright`: gerçek backend ile UI overlay acceptance
+- `21st`: FORBIDDEN_NOT_USED
+- Ruflo: FORBIDDEN_NOT_USED
+
+Reference-first çalış. Hafızadan API/property uydurma.
+
+======================================================================
+6. NATIVE PIPELINE’I FULL OBSERVATION’A TAMAMLA
+======================================================================
+
+Mevcut 529 FPS sonucu şu zincirin hangisini kapsadığını açıkça belirle:
+
+A:
+
+  decode
+    → RetinaFace
+    → tracker
+
+veya B:
+
+  decode
+    → RetinaFace
+    → alignment
+    → GlintR100
+    → L2
+    → tracker
+
+Eğer GlintR100/embedding henüz dahil değilse, matrix’i:
+
+  detector + raw tracking throughput
+
+olarak adlandır. “Full recognition throughput” deme.
+
+Şimdi native pipeline’a zorunlu olarak ekle/doğrula:
+
+1. Her detection için 5 landmark.
+2. Exact landmark order.
+3. CUDA similarity transform.
+4. Canonical 112×112 ArcFace crop.
+5. GlintR100 preprocessing.
+6. Dynamic recognizer batching.
+7. GPU L2 normalization.
+8. 512 finite embedding.
+9. Embedding ↔ frame ↔ detection ↔ raw track association.
+10. Model/preprocess version.
+
+Recognizer batching:
+
+- eligible crops deterministic order:
+  `(presentation_index, detection_ordinal)`
+- default/max batch 32
+- >32 deterministic chunks
+- yüz sessizce atılmaz
+- output exact CropRef’e geri bağlanır
+
+Her detection embedding almak zorunda değildir.
+
+Alanlar:
+
+- tracking_eligible
+- recognition_eligible
+- rejection reasons
+- optional embedding
+
+ayrı tutulmalıdır.
+
+======================================================================
+7. QUALITY-AWARE TRACK TEMPLATE
+======================================================================
+
+Her raw track için bütün embedding’leri körlemesine ortalama.
+
+Her observation için quality feature çıkar:
+
+- detector score
+- bbox width/height/area
+- face crop resolution
+- blur/sharpness
+- brightness/dark clipping
+- alignment residual
+- pose proxy veya landmark geometry validity
+- border clipping
+- embedding finite/norm
+- temporal position
+
+Quality gate’ler config/profile’dan gelsin.
+
+Track template algoritması:
+
+1. Recognition-eligible observations’ı al.
+2. Aynı track içindeki embedding’leri zaman sırasıyla tut.
+3. Temporal diversity uygula:
+   - aynı birkaç ardışık frame’in birbirinin kopyası gibi template’i domine etmesine izin verme.
+4. Quality score’a göre candidate seç.
+5. Top-K tut.
+6. Embedding outlier rejection uygula.
+7. Quality-weighted centroid hesapla.
+8. Final centroid’i tekrar L2 normalize et.
+9. En iyi aligned crop’u representative sample olarak seç.
+10. Template evidence count ve quality summary kaydet.
+
+Config örneği:
+
+- minimum eligible observation count
+- max template samples
+- minimum temporal separation
+- outlier cosine threshold
+- minimum track duration
+- minimum quality
+
+Bu threshold’ları production calibrated diye sunma.
+
+Template üretemeyen track:
+
+- tracking sonucu olarak korunur
+- identity decision `insufficient_quality`/unknown-safe olur
+- zorla başka kişiye eşleştirilmez
+
+======================================================================
+8. RAW TRACK RECONCILIATION
+======================================================================
+
+150 raw track, videoda 150 farklı insan olduğu anlamına gelmez.
+
+Scene cut, occlusion, detector miss veya uzun kayıp aynı kişiyi birden fazla raw track’e bölebilir.
+
+Ancak yanlış merge, ayrı insanları tek kişi yapar. Bu yüzden reconciliation conservative olmalıdır.
+
+Her raw track node için:
+
+- track template
+- first/last PTS
+- appearance intervals
+- scene segment
+- representative observation
+- quality/evidence count
+
+Pair comparison:
+
+- template cosine
+- time overlap
+- same-frame co-occurrence
+- scene boundary
+- temporal gap
+- spatial continuity where meaningful
+- quality/evidence sufficiency
+
+Hard cannot-link:
+
+- Aynı frame/PTS civarında birlikte görünen iki raw track aynı canonical person olamaz.
+- Overlapping appearance intervals cannot-link üretir.
+- Transitive merge cannot-link’i ihlal edemez.
+
+Örnek:
+
+  A similar B
+  B similar C
+  fakat A ile C aynı frame’de birlikte
+
+Bu durumda transitive A-B-C merge yasaktır.
+
+Conservative merge:
+
+- strong cosine evidence
+- sufficient quality
+- no cannot-link
+- compatible temporal relationship
+
+olduğunda yapılır.
+
+Uncertain pair merge edilmez. Ayrı canonical track olarak kalır.
+
+Persist et:
+
+- raw track
+- canonical video track
+- raw→canonical mapping
+- cannot-link/rejection reason
+- merge score/evidence
+- reconciliation config version
+
+Ground truth olmadığı için “doğru kişi sayısı” iddiası yapma. Structural/safety invariants kanıtlanır.
+
+======================================================================
+9. VIDEO IDENTITY RESOLUTION
+======================================================================
+
+Reconciliation’dan sonra her canonical video identity için bir kez identity resolution yap.
+
+Akış:
+
+1. Canonical track template hazırla.
+2. Qdrant collection:
+   `face_samples_retinaface_r50_glintr100_v1`
+3. Query filter:
+   - active=true
+   - model_version exact match
+4. Top-K candidate al.
+5. PostgreSQL’den:
+   - face identity exists
+   - active
+   - sample active
+   durumunu doğrula.
+6. Top-1 threshold kontrolü.
+7. Top-1 / top-2 margin kontrolü.
+8. Cannot-link conflict kontrolü.
+9. Identity decision üret.
+
+Qdrant sonucu doğrudan final truth değildir. PostgreSQL final lifecycle gate’idir.
+
+Aynı videoda aynı existing faceId’ye iki canonical track atanacaksa:
+
+- appearance intervals overlap ediyor mu kontrol et
+- overlap ediyorsa ikisi aynı fiziksel kişi olamaz
+- en güçlü evidence korunur
+- diğeri next candidate veya unknown-safe decision’a gider
+
+Video identity status semantiği Phase 1 ile aynı olmalı:
+
+Known match:
+
+  status=known
+  same persistent faceId
+  name/metadata snapshot
+
+Existing anonymous match:
+
+  status=anonymous
+  same persistent faceId
+
+No match:
+
+  existing Phase 1 lifecycle contract izin veriyorsa:
+    canonical cluster başına yalnız bir yeni anonymous identity/sample oluştur
+    first snapshot=new_anonymous
+    persistent identity state=anonymous
+
+Aynı canonical cluster’ın her raw track’i için yeni faceId oluşturma.
+
+Enrollment sonrası geçmiş video result snapshot’larını rewrite etme.
+
+======================================================================
+10. VIDEO SAMPLE PERSISTENCE
+======================================================================
+
+Yeni anonymous canonical identity oluşturuluyorsa:
+
+PostgreSQL:
+
+- face_identity
+- face_sample
+- immutable result/snapshot veya approved video identity link
+
+MinIO:
+
+- representative aligned crop
+- technical UUID key:
+  `faces/{faceId}/{sampleId}/aligned.webp`
+
+Qdrant:
+
+- point ID = sample_id
+- vector = normalized canonical track template
+- payload yalnız:
+  - sample_id
+  - face_id
+  - active
+  - model_version
+
+PostgreSQL’e embedding yazma.
+
+Qdrant’a:
+
+- name
+- metadata
+- MinIO key
+- raw track details
+
+yazma.
+
+Cross-store lifecycle existing image flow ile aynı consistency kurallarına uymalı:
+
+- deterministic/reserved IDs
+- pending sample state
+- MinIO upload
+- Qdrant upsert
+- PG activation/finalization
+- retry idempotency
+- partial failure compensation/reconciliation
+
+Video için ikinci ve çelişen identity persistence service yazma. Existing Phase 1 lifecycle service’i process/job-scoped biçimde reuse/refactor et.
+
+======================================================================
+11. OBSERVATION ARTIFACT
+======================================================================
+
+Dense frame/detection metadata PostgreSQL’e yazılmayacak.
+
+MinIO artifact:
+
+  videos/{videoAssetId}/jobs/{jobId}/observations/v1/observations.pb.zst
+
+içinde:
+
+Header:
+
+- schema version
+- video/job IDs
+- video SHA
+- dimensions/rotation
+- time base
+- model/engine/config versions
+- GPU/runtime fingerprint
+- detector batch default=16
+- recognizer batch=32
+
+Frame records:
+
+- presentation index
+- PTS ns
+- duration
+- detection ordinal
+- original-coordinate bbox
+- landmarks
+- detector score
+- raw track key
+- canonical track key
+- quality flags
+- recognition eligibility
+
+Embedding’leri long-term artifact’e koymak requirement/privacy açısından zorunlu değilse final artifact’ten çıkar veya internal restricted intermediate artifact olarak ayır.
+
+Final UI artifact’te full 512-D embedding göndermek yasak.
+
+Footer:
+
+- frame/detection counts
+- raw/canonical track counts
+- eligible/template counts
+- merge/rejection/cannot-link counts
+- timing
+- semantic hash
+- artifact SHA/size
+
+Artifact:
+
+- streamed
+- bounded memory
+- zstd
+- temp→validate→MinIO staging→canonical
+- checksum/stat verified
+- retry idempotent
+
+olmalı.
+
+======================================================================
+12. POSTGRESQL VIDEO DOMAIN/PERSISTENCE
+======================================================================
+
+Mevcut published migration’ları rewrite etme.
+
+Existing tables contract’ını tamamla:
+
+- video_asset
+- video_job
+- video_track
+- video_tracklet
+- appearance_interval
+- requirement’taki diğer approved video tables
+
+ORM/domain/repository mapping’leri eksiksiz olmalı.
+
+Invariants:
+
+- track başka job’a bağlanamaz
+- tracklet başka job’ın track’ine bağlanamaz
+- appearance start <= end
+- first PTS <= last PTS
+- job+native track key unique
+- retry duplicate track üretmez
+- stale lease/fencing token final state yazamaz
+- completed job gerekli result manifest olmadan completed olamaz
+- version predicate olmadan stale update olmaz
+
+DB’de tut:
+
+- track/canonical identity summary
+- faceId decision
+- status snapshot
+- first/last PTS
+- appearance interval
+- representative artifact reference
+- confidence/evidence summary
+- config/model version
+
+DB’de tutma:
+
+- every-frame embedding
+- every-frame image
+- unnecessary dense bbox rows
+
+======================================================================
+13. WORKER JOB FLOW
+======================================================================
+
+Gerçek worker akışı:
+
+1. PostgreSQL’den job claim.
+2. Lease token/fencing/version al.
+3. Input object MinIO’dan bounded local staging’e stream et.
+4. Native worker process başlat.
+5. Heartbeat sürdür.
+6. Progress güncelle:
+   - decoded frames
+   - processed frames
+   - current PTS
+   - detections
+   - raw tracks
+   - templates
+   - stage
+7. Cancel request kontrol et.
+8. Native artifact’i validate et.
+9. Template/reconciliation çalıştır.
+10. Identity resolution yap.
+11. Cross-store sample persistence yap.
+12. Track/appearance summary persist et.
+13. Result manifest finalize et.
+14. Job completed yap.
+15. Temp files temizle.
+
+Job stages:
+
+- queued/pending
+- downloading/preparing
+- decoding_inference_tracking
+- template_build
+- track_reconcile
+- identity_resolve
+- persistence
+- completed
+
+Approved existing names farklıysa mevcut contract’ı kullan; duplicate state machine oluşturma.
+
+Failure:
+
+- lease loss
+- worker crash
+- native nonzero exit
+- corrupt artifact
+- MinIO failure
+- Qdrant failure
+- PG finalization failure
+
+sahte completed üretemez.
+
+Retry:
+
+- aynı job
+- aynı artifact technical key
+- aynı native track keys
+- duplicate face/sample/track üretmez
+
+Cancel:
+
+- bounded
+- native process sonlandırılır
+- canonical partial artifact publish edilmez
+- state cancelled olur
+
+======================================================================
+14. RESULT/TIMELINE API
+======================================================================
+
+`videorequirements.md` içindeki frozen endpoint/path/field isimlerini kullan. Mevcut route varsa duplicate endpoint oluşturma.
+
+Kullanıcının ihtiyacı:
+
+1. Video upload.
+2. jobId.
+3. status/progress.
+4. result ready.
+5. original video playback.
+6. timestamp’li track/identity metadata.
+
+Result summary en az:
+
+- videoId
+- jobId
+- status
+- duration
+- source/display dimensions
+- rotation
+- raw track count
+- canonical track count
+- known/anonymous/new counts
+- processing timings
+- model/config version
+
+Track result:
+
+- trackId
+- faceId nullable/required per contract
+- snapshot status
+- display name only if allowed/known
+- firstSeenMs
+- lastSeenMs
+- appearance intervals
+- representative confidence/quality
+- timeline retrieval reference
+
+Dense bbox timeline için full videoyu tek dev JSON response’a zorla doldurma.
+
+Time-window query veya chunk/pagination:
+
+  fromMs
+  toMs
+
+ile UI yalnız oynatılan pencerenin metadata’sını çekebilmeli.
+
+Her keyframe:
+
+- ptsMs
+- bbox original coordinates
+- detector/track confidence
+- visibility/interpolation eligibility
+
+Original video playback:
+
+- private MinIO
+- bounded presigned URL veya authenticated range proxy
+- browser seek için HTTP Range çalışmalı
+- long-lived public URL yok
+
+Raw storage path/client secret response’a dönmez.
+
+======================================================================
+15. CLIENT-SIDE VIDEO OVERLAY
+======================================================================
+
+Backend annotated MP4 üretmeyecek.
+
+React UI:
+
+  original <video>
+    + absolute positioned <canvas>
+    + timestamp result metadata
+
+kullanacak.
+
+Synchronization:
+
+- `requestVideoFrameCallback()` tercih et
+- callback `mediaTime` üzerinden current PTS window seç
+- `timeupdate` tek başına frame-accurate kabul edilmez
+- seek/pause/play/rate-change durumlarını yönet
+
+Coordinate transform:
+
+Source:
+
+  sourceWidth
+  sourceHeight
+
+Displayed video content rect:
+
+  scale = min(
+      containerWidth / rotatedSourceWidth,
+      containerHeight / rotatedSourceHeight
+  )
+
+  renderedWidth = rotatedSourceWidth * scale
+  renderedHeight = rotatedSourceHeight * scale
+
+  offsetX = (containerWidth - renderedWidth) / 2
+  offsetY = (containerHeight - renderedHeight) / 2
+
+BBox source coordinates:
+
+  canvasX = offsetX + sourceX * scale
+  canvasY = offsetY + sourceY * scale
+
+Rotation 90/180/270 ise coordinate transform ayrıca uygulanmalı.
+
+Canvas:
+
+- CSS size ile backing-store size ayrılmalı
+- `devicePixelRatio` hesaba katılmalı
+- resize observer
+- fullscreen
+- responsive layout
+- pointer-events none
+
+Overlay:
+
+- bbox
+- known name veya Anonymous
+- track identifier yalnız debug mode’da
+- confidence optional
+- selected track highlight
+- overlay toggle
+- known/anonymous filter
+- seek-to-first-appearance
+- appearance interval list
+
+Interpolation:
+
+- yalnız aynı track interval içindeki iki yakın keyframe arasında
+- büyük gap/scene cut boyunca bbox interpolate etme
+- gap varsa box gizle
+- next keyframe’i başka track’ten kullanma
+
+No annotated video generation.
+
+======================================================================
+16. TEST PLANI
+======================================================================
+
+A. Native full observation
+
+Real Friends:
+
+- 6665 processed frames
+- original PTS monotonic
+- detections consistent with baseline
+- raw track count consistent
+- alignment count > 0
+- embedding count > 0
+- embeddings 512-D finite L2
+- detector batch default 16
+- recognizer batching > 1
+- no CPU fallback
+
+Target:
+
+  make phase2-m6-native-full-observation
+
+B. Template unit tests
+
+Synthetic embeddings:
+
+- top-K selection
+- temporal diversity
+- outlier rejection
+- quality weighted centroid
+- final L2
+- insufficient quality
+
+Target:
+
+  make phase2-m6-track-template
+
+C. Reconciliation tests
+
+- same identity split across non-overlapping tracks merges
+- co-occurring tracks never merge
+- transitive cannot-link rejection
+- uncertain pair remains separate
+- deterministic repeated run
+- config version recorded
+
+Target:
+
+  make phase2-m6-track-reconcile
+
+D. Identity resolution tests
+
+Real PostgreSQL/Qdrant/MinIO:
+
+- known match
+- existing anonymous match
+- unmatched canonical identity → one new faceId
+- multiple raw tracks in same canonical cluster → one faceId
+- overlapping tracks cannot receive same faceId
+- inactive Qdrant candidate rejected by PostgreSQL
+- model_version mismatch ignored
+- top1/top2 margin ambiguity → safe unknown
+- retry duplicate sample/identity/vector üretmez
+
+Target:
+
+  make phase2-m7-video-identity
+
+E. Worker E2E
+
+- API upload Friends
+- job claim/heartbeat
+- native execution
+- artifact MinIO
+- tracks PG
+- identity result
+- completed status
+- process/job query
+- restart persistence
+- retry
+- cancel
+- lease expiry/fencing
+- no partial false success
+
+Target:
+
+  make phase2-m7-video-worker-e2e
+
+F. API contract
+
+- upload
+- idempotency
+- job status
+- cancel
+- result summary
+- timeline time window
+- playback URL/range
+- structured errors
+
+Postman/curl real service evidence.
+
+Target:
+
+  make phase2-m7-video-api
+
+G. UI overlay
+
+Playwright real backend:
+
+- upload video
+- job progress
+- video playback
+- canvas appears
+- overlay toggle
+- boxes update with playback
+- seek updates overlay
+- resize/fullscreen coordinates
+- known label shown
+- anonymous label shown
+- no fatal console errors
+- loading/error/empty states
+
+Target:
+
+  make phase2-m8-video-ui-overlay
+
+H. Full acceptance
+
+  make phase2-video-e2e-acceptance
+
+======================================================================
+17. PERFORMANCE KARARI
+======================================================================
+
+Measured detector/raw tracking matrix korunacak.
+
+Production default:
+
+  detector batch = 16
+
+Measured baseline:
+
+  approximately 529 FPS
+  6665 frames
+  9020 detections
+  150 raw tracks
+
+Bu sayı:
+
+- RetinaFace/raw tracking throughput ise öyle adlandır
+- GlintR100 dahil değilse full recognition FPS deme
+- storage/UI E2E FPS deme
+- 600 FPS PASS deme
+
+Full GlintR100/template pipeline eklendikten sonra tekrar benchmark yap:
+
+- detector/raw track FPS
+- full native observation FPS
+- end-to-end worker FPS
+
+Performance için:
+
+- frame sampling açma
+- resolution düşürme
+- detection threshold artırma
+- yüzleri truncate etme
+
+Batch 32 yalnız ayrıca ölçülmüş, memory/latency/correctness olarak güvenliyse değerlendirilebilir. Mevcut kararı sebepsiz yeniden açma.
+
+======================================================================
+18. SECURITY/PRIVACY
+======================================================================
+
+- MinIO key’lerinde yalnız UUID/technical segments.
+- Qdrant payload’ta PII/name yok.
+- Dense embedding UI/API’ye dönmez.
+- Raw exception/client response’a dönmez.
+- Local filesystem path response’a dönmez.
+- Presigned video URL bounded expiry.
+- Dataset/folder/character name log/object key’e girmez.
+- Secrets tracked env’e girmez.
+
+======================================================================
+19. HARD STOPS
+======================================================================
+
+Yapma:
+
+- Native pipeline’ı yeniden sıfırdan yazma.
+- Batch 16 matrix correctness’ini bozma.
+- Model değiştirme.
+- CPU decode/inference fallback.
+- OpenCV/PIL production video decode.
+- Labı değiştirme/import etme.
+- Annotated MP4/NVENC.
+- TrackId=faceId yapma.
+- Her raw track için ayrı anonymous identity oluşturma.
+- Co-occurring kişileri cosine yüksek diye merge etme.
+- Qdrant sonucunu PG doğrulaması olmadan final kabul etme.
+- PostgreSQL’e embedding yazma.
+- Dense per-frame timeline’ı DB’ye doldurma.
+- Job’ı result manifestten önce completed yapma.
+- Retry duplicate identity/sample/track üretmesine izin verme.
+- Ground truth olmadan accuracy PASS deme.
+- UI mock resultunu gerçek E2E sayma.
+- Native test skip’i PASS sayma.
+- git add/commit/push.
+- destructive Docker/volume işlemi.
+
+======================================================================
+20. IMPLEMENTATION SIRASI
+======================================================================
+
+Bu sırayla ilerle:
+
+1. Current source/call graph/schema discovery.
+2. Batch 16 matrix decision ve baseline documentation.
+3. GlintR100’un native video path’te gerçekten çalışıp çalışmadığını doğrula.
+4. Full observation pipeline’ı tamamla.
+5. Track quality/template builder.
+6. Conservative raw-track reconciliation.
+7. Canonical video identity resolution.
+8. Existing Phase 1 lifecycle/storage reuse.
+9. Video track/appearance persistence.
+10. Worker/job integration.
+11. Result/timeline API.
+12. Real Friends API E2E.
+13. React client-side overlay.
+14. Playwright real-backend acceptance.
+15. Restart/retry/cancel/failure acceptance.
+16. Final review package.
+
+Bir aşama green olduğunda mikro-onay istemeden sonraki aşamaya devam et.
+
+Yalnız gerçek external blocker’da dur.
+
+======================================================================
+21. FINAL COMPLETION RAPORU
+======================================================================
+
+Final verdict:
+
+- PASS
+- PARTIAL
+- BLOCKED
+- NOT_TESTED
+
+Final rapor:
+
+1. Kullanıcı açısından çalışan video akışı.
+2. Native runtime stages.
+3. Batch 16 matrix.
+4. GlintR100/embedding evidence.
+5. Raw→canonical track reconciliation evidence.
+6. Known/anonymous/new identity lifecycle.
+7. PostgreSQL/MinIO/Qdrant counts/rows/keys.
+8. Observation artifact SHA/size/key.
+9. Result/timeline API examples.
+10. UI overlay screenshots/Playwright results.
+11. Restart/retry/cancel/failure results.
+12. Exact commands/raw summaries.
+13. Performance categories.
+14. Accuracy limitations.
+15. Changed-file map.
+16. Review package path.
+17. MCP/skill accountability.
+
+Zorunlu review package:
+
+  docs/implementation/review_packages/
+    SPRINT-PHASE2-VIDEO-E2E-CODE-REVIEW-PACKAGE.md
+
+Final acceptance:
+
+  make phase2-video-e2e-acceptance
+
+PASS demek için:
+
+- gerçek Friends upload
+- gerçek async job
+- gerçek NVIDIA GPU pipeline
+- RetinaFace
+- GlintR100
+- tracking
+- reconciliation
+- persistent identity
+- PostgreSQL
+- MinIO
+- Qdrant
+- result API
+- original video playback
+- client-side UI overlay
+- restart/retry/cancel
+- no false success
+
+aynı ürün zincirinde doğrulanmalıdır.
+
+Şimdi Build Mode’da başla. Tekrar plan onayı isteme. İlk somut gate:
+
+  make phase2-m6-native-full-observation
+
+Ardından durmadan:
+
+  make phase2-m6-track-template
+  make phase2-m6-track-reconcile
+  make phase2-m7-video-identity
+  make phase2-m7-video-worker-e2e
+  make phase2-m7-video-api
+  make phase2-m8-video-ui-overlay
+  make phase2-video-e2e-acceptance
+
+çalıştır.
+
+Net cevap: native CV tarafının yaklaşık son çeyreğindeyiz; tüm video ürününün ise kabaca üçte ikisi tamamlanmış durumda. Bu prompt biterse kullanıcı gözüyle gerçek video ürünü çıkar. Sonrasında kalan iş yeni feature değil; correctness/security/performance hardening ve senior review olur.
