@@ -401,6 +401,9 @@ def make_overlay_jsonl(
                 "display_label": label,
                 "detector_score": obs.detector_score,
                 "quality_score": obs.quality.composite_quality_score,
+                "tracking_eligible": obs.tracking_eligible,
+                "recognition_eligible": obs.recognition_eligible,
+                "rejection_reasons": obs.rejection_reasons.copy(),
             }
         )
 

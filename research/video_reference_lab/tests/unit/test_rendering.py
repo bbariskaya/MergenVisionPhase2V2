@@ -83,6 +83,26 @@ def test_overlay_jsonl_writes_per_frame_records(tmp_path: Path) -> None:
     assert frame0_unknown["display_label"] is None
 
 
+def test_overlay_jsonl_includes_quality_and_eligibility(tmp_path: Path) -> None:
+    """Overlay records expose observation_id, eligibility and rejection reasons."""
+    obs = _obs("a", 0)
+    obs.rejection_reasons = ["blur"]
+    obs.recognition_eligible = False
+    assignments = [{"observation_id": "a", "raw_tracklet_id": "RT000001"}]
+    output = tmp_path / "overlay.jsonl"
+
+    make_overlay_jsonl([obs], assignments, {}, {}, output)
+
+    with open(output, encoding="utf-8") as f:
+        record = json.loads(f.readline())
+
+    face = record["faces"][0]
+    assert face["observation_id"] == "a"
+    assert face["recognition_eligible"] is False
+    assert "blur" in face["rejection_reasons"]
+    assert face["tracking_eligible"] is True
+
+
 def test_quality_histograms_runs_with_no_observations(tmp_path: Path) -> None:
     """Quality histograms handle empty observation list gracefully."""
     output = tmp_path / "quality.jpg"

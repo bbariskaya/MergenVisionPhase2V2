@@ -1,0 +1,1782 @@
+
+
+CLAUDE CODE AGENT — BUILD MODE
+PHASE 1 SPRINT 01 FORENSIC CORRECTION PASS
+
+Bu bir plan yazıp kullanıcıdan tekrar onay isteme görevi değildir. Bu, mevcut Sprint 01 implementation’ındaki doğrulanmış correctness, test safety, concurrency, cross-store failure ve reproducibility problemlerini TDD ile düzeltme görevidir.
+
+Sonraki sprinti başlatma. Bu correction tamamlandıktan sonra dur ve senior review için rapor üret.
+
+==================================================
+0. REPOSITORY IDENTITY VE BASELINE
+==================================================
+
+Expected GitHub origin:
+
+https://github.com/bbariskaya/MergenVisionPhase2V2.git
+
+Expected reviewed HEAD:
+
+675549670ab65daec9ffedae3e62ddb4f4478dc3
+
+Muhtemel local root:
+
+/home/user/Workspace/MergenVisionPhase2v2
+
+Önce exact gerçek root’u Git üzerinden belirle. Folder isminde büyük/küçük harf farkı varsa mevcut clone’u kullan; yeni repo oluşturma.
+
+Kod değiştirmeden önce çalıştır ve rapora kaydet:
+
+pwd
+git rev-parse --show-toplevel
+git remote -v
+git branch --show-current
+git rev-parse HEAD
+git status --short
+git log --oneline -10
+
+Hard stop:
+
+- Origin yukarıdaki repository değilse dur:
+  BLOCKED_WRONG_REPOSITORY
+- HEAD, 6755496 commit’ini içermiyorsa dur:
+  BLOCKED_WRONG_BASE
+- Unrelated user changes varsa onları koru; overwrite etme.
+- Dirty dosyayla correction çakışıyorsa exact dosyayı raporla ve dur.
+- git add, commit, push, merge, reset, checkout discard veya history rewrite yapma.
+- Docker volume silme.
+- `docker compose down -v`, `docker volume rm`, `docker system prune` çalıştırma.
+- Başka Docker project/container’larını durdurma veya restart etme.
+
+==================================================
+1. ZORUNLU OKUMA VE DISCOVERY
+==================================================
+
+Şu dosyaları tamamen oku:
+
+1. AGENTS.md
+2. docs/implementation/CURRENT_SPRINT.md
+3. requirements/ProjectRequirements.md
+4. requirements/videorequirements.md
+5. architectureplan.md
+6. opensourcereferences/references.md
+7. whatwentwrong.md
+8. PLAN.md
+9. Makefile
+10. docker-compose.yml
+11. backend/pyproject.toml
+12. Bütün domain entity/value-object/error dosyaları
+13. Bütün application ports
+14. IdentityStorageLifecycleService’in tamamı
+15. SQLAlchemy session/UoW/models/repositories
+16. Bütün Alembic migration’ları
+17. MinIO ve Qdrant adapter’larının tamamı
+18. backend/tests altındaki bütün test, fixture ve conftest dosyaları
+19. CURRENT_SPRINT, IMPLEMENTATION_DETAILS, REFERENCE_DECISION_LOG
+20. SPRINT-001-CODE-REVIEW-PACKAGE.md
+
+Multi-file correction olduğu için `codebase-memory-mcp` kullan:
+
+- Service caller/callee yolları.
+- UoW construction path’leri.
+- Config import-time behavior.
+- Repository update call’ları.
+- Test fixture/cleanup yolları.
+- Make target/test coverage ilişkisi.
+- Migration/model eşleşmesi.
+
+Knowledge graph sonucunu source yerine kanıt sayma; filesystem’den doğrula.
+
+Version-sensitive kararlar için Context7 official docs kullan:
+
+- SQLAlchemy 2.0 async session/UoW.
+- SQLAlchemy conditional update + rowcount optimistic concurrency.
+- Alembic forward migration/check constraint/index.
+- MinIO Python SDK metadata/stat/remove behavior.
+- Qdrant async `query_points`, collection info, payload index, upsert/delete/set_payload.
+
+DeepWiki/Exa yalnız official docs yetersizse kullan.
+
+Şunları kullanma:
+
+- 21st: FORBIDDEN_NOT_USED
+- Ruflo: FORBIDDEN_NOT_USED
+- Postman: SKIPPED_NOT_RELEVANT
+- Playwright: SKIPPED_NOT_RELEVANT
+
+==================================================
+2. GÖREVİN KESİN SINIRI
+==================================================
+
+Bu görev:
+
+Phase 1 Sprint 01 storage-foundation correction’dır.
+
+Bu görevde yapılmayacaklar:
+
+- Sprint 02’ye geçmek.
+- FastAPI endpoint eklemek.
+- React/UI yazmak.
+- Gerçek detector/recognizer eklemek.
+- GPU, video, tracker, GStreamer veya DeepStream kodu eklemek.
+- National ID, Oracle veya 10M-person sistemi eklemek.
+- Requirement dosyalarını implementation’a uydurmak.
+- Yeni business tablosu eklemek.
+- Applied `0001` migration’ını rewrite etmek.
+- Generic repository framework yazmak.
+- Distributed saga/outbox/reconciliation platformu eklemek.
+- Fake adapter testini gerçek integration kanıtı gibi sunmak.
+- Test silmek, xfail/skip eklemek veya assertion gevşetmek.
+- Broad `except Exception: pass` kullanmak.
+- Raw exception’ı domain error/client-facing mesaja koymak.
+- “Phase 1 complete”, “production ready” veya “real recognition works” demek.
+
+Mevcut dört tablo korunacak:
+
+- face_identity
+- process_record
+- face_sample
+- recognition_result
+
+Yeni tablo ekleme.
+
+Bu correction için yakalanabilen failure’larda synchronous compensation zorunludur. Process crash/power-loss penceresini tamamen çözen persistent outbox bu scope’ta eklenmeyecek; final raporda residual limitation olarak dürüstçe yazılacak. Bununla birlikte yakalanan hiçbir hata sahte completed/result veya kullanılabilir orphan vector bırakamaz.
+
+==================================================
+3. BAŞLANGIÇTA DURUMU DÜRÜSTLEŞTİR
+==================================================
+
+Implementation başlamadan:
+
+docs/implementation/CURRENT_SPRINT.md içinde:
+
+- Status: CORRECTION_IN_PROGRESS
+- Base reviewed commit: 675549670ab65daec9ffedae3e62ddb4f4478dc3
+- “Completed/PASS” iddiasını geçici olarak kaldır.
+- Correction deliverable ve acceptance gate’lerini yaz.
+
+Şimdilik review package’a PASS yazma.
+
+AGENTS.md:
+
+- Dosyada anayasa içeriği exact olarak iki kere art arda bulunuyor.
+- İki yarının exact duplicate olduğunu doğrula.
+- Yalnız ikinci duplicate kopyayı kaldır.
+- İlk anayasa içeriğini yeniden yazma veya semantiğini değiştirme.
+- Exact duplicate değilse kendin merge etme; blocker raporla.
+
+Root `Plan` dosyası:
+
+- Dosyanın gerçekten 0-byte ve hiçbir source/docs tarafından referans edilmediğini doğrula.
+- Doğruysa bu prompt, yalnız bu accidental empty `Plan` dosyasını silmek için açık yetkidir.
+- `PLAN.md` dosyasını silme.
+
+`.mcp.json`:
+
+- `/home/user/.local/bin/...` machine-specific absolute command içeriyor.
+- Portable command discovery kullan:
+  `"command": "codebase-memory-mcp"`
+- Eğer MCP yalnız absolute path ile çalışıyorsa `.mcp.json` içinde kişisel home path commit etme; setup’ı README’de belgeleyip portable config bırak.
+
+==================================================
+4. ÖNCE TEST DATA-LOSS RİSKİNİ KAPAT
+==================================================
+
+MEVCUT ESKİ ACCEPTANCE’I BU ADIM BİTMEDEN ÇALIŞTIRMA.
+
+Neden:
+
+backend/tests/integration/lifecycle/conftest.py şu anda configured PostgreSQL’de dört tabloyu temizliyor, configured MinIO bucket’ındaki bütün `faces/` objelerini siliyor ve configured Qdrant collection’ını drop ediyor.
+
+backend/tests/integration/vectors/conftest.py configured Qdrant collection’ını drop ediyor ve exception’ı sessizce yutuyor.
+
+Bu P0 data-loss riskidir.
+
+--------------------------------------------------
+4.1 Dedicated test Compose
+--------------------------------------------------
+
+Oluştur:
+
+docker-compose.test.yml
+backend/.env.test.example
+
+Exact resources:
+
+Compose project:
+  mergenvision-s01-test
+
+PostgreSQL:
+  service: postgres-test
+  database: mergenvision_s01_test
+  user: mergenvision_test
+  host port: 55432
+  container port: 5432
+
+MinIO:
+  service: minio-test
+  bucket: mergenvision-s01-test-face-samples
+  API host port: 59000
+  console host port: 59001
+  container ports: 9000/9001
+
+Qdrant:
+  service: qdrant-test
+  collection: mergenvision_s01_test_face_samples_v1
+  HTTP host port: 56333
+  gRPC host port: 56334
+  container ports: 6333/6334
+
+Kurallar:
+
+- Exact pinned image tags kullan.
+- `latest` kullanma.
+- `container_name` kullanma.
+- Compose project isolation kullan.
+- Named test volumes yalnız bu project’e ait olsun.
+- External volume kullanma.
+- Host ports `127.0.0.1` üzerine bind edilsin.
+- Port çakışırsa başka container durdurma:
+  BLOCKED_TEST_PORT_CONFLICT
+- Test credentials açıkça dummy/test değerler olsun.
+- Main docker-compose.yml veya development volume’ları acceptance sırasında kullanılmasın.
+- `down -v` hiçbir script/target/workflow içinde bulunmasın.
+
+--------------------------------------------------
+4.2 Fail-closed resource guard
+--------------------------------------------------
+
+Oluştur:
+
+backend/tests/support/resource_guard.py
+backend/tests/unit/support/test_resource_guard.py
+backend/tests/integration/conftest.py
+
+Cleanup başlamadan önce exact olarak doğrula:
+
+MV_TEST_MODE == "1"
+MV_TEST_RESOURCE_NAMESPACE == "mergenvision-s01-test"
+database name == "mergenvision_s01_test"
+MinIO bucket == "mergenvision-s01-test-face-samples"
+Qdrant collection == "mergenvision_s01_test_face_samples_v1"
+PostgreSQL/MinIO/Qdrant endpoint host == localhost veya 127.0.0.1
+
+Bir koşul bile yanlışsa:
+
+- `UnsafeTestResourceError` fırlat.
+- PostgreSQL bağlantısı kurma.
+- DELETE/TRUNCATE çalıştırma.
+- MinIO list/delete çağırma.
+- Qdrant collection delete çağırma.
+
+En az şu failing-first testleri yaz:
+
+1. MV_TEST_MODE yoksa reject.
+2. Namespace yanlışsa reject.
+3. DB adı yanlışsa reject.
+4. Bucket yanlışsa reject.
+5. Collection yanlışsa reject.
+6. Remote endpoint reject.
+7. Exact dedicated config accept.
+8. Guard failure sırasında cleanup adapter’larının hiç çağrılmadığını spy ile doğrula.
+
+Cleanup yalnız dedicated resources üzerinde çalışabilir:
+
+- PostgreSQL: yalnız dedicated test DB.
+- MinIO: yalnız exact dedicated bucket.
+- Qdrant: yalnız exact dedicated collection.
+- Tercihen yalnız testin oluşturduğu UUID/key/point’leri sil.
+- Collection reset gerekiyorsa yalnız exact test collection ve guard sonrasında.
+- `except Exception: pass` kaldır; cleanup failure testi fail ettirsin.
+
+--------------------------------------------------
+4.3 Import-time config hatası
+--------------------------------------------------
+
+Mevcut backend/tests/conftest.py app/session import’unu environment set edilmeden önce yapıyor. Bu nedenle sonradan set edilen DATABASE_URL etkisiz kalabilir.
+
+Düzelt:
+
+- Test environment Python process başlamadan Make target üzerinden export edilsin.
+- Test conftest app infrastructure import etmeden önce fail-closed validation yapsın.
+- Config bir kere import edildikten sonra env değiştirerek test resource seçmeye çalışma.
+- Acceptance normal `backend/.env` dosyasını okumamalı.
+- Test config explicit `backend/.env.test.example` veya generated local test env üzerinden gelsin.
+
+==================================================
+5. CONFIG VE DEVELOPMENT COMPOSE GÜVENLİĞİ
+==================================================
+
+Son commit inline Compose credentials’ı env_file’a taşıdı fakat fresh clone’da backend/.env bulunmuyor.
+
+Düzelt:
+
+- backend/.env gerçek secret dosyası olarak Git-ignored kalmalı.
+- backend/.env.example yalnız local-development placeholder içermeli.
+- README exact olarak:
+  `cp backend/.env.example backend/.env`
+  adımını açıklamalı.
+- Acceptance development `.env` istememeli.
+- `Settings` içindeki database password, MinIO access key ve MinIO secret key için çalışan hardcoded default kaldır.
+- Secret gerektiren config yoksa startup/config creation fail-fast etsin.
+- Test process bütün required değerleri explicit test env’den alsın.
+- Main Compose portlarını mümkünse `127.0.0.1` üzerine bind et.
+- Qdrant auth/TLS production konusu final limitation olarak yazılsın; local dev portu public `0.0.0.0` üzerinde bırakılmasın.
+- Healthcheck’leri real image üzerinde doğrula.
+- Compose config gate:
+  `docker compose config`
+  `docker compose -p mergenvision-s01-test -f docker-compose.test.yml config`
+
+==================================================
+6. APPLICATION LAYER DEPENDENCY İHLALİNİ DÜZELT
+==================================================
+
+Mevcut IdentityStorageLifecycleService doğrudan:
+
+from app.infrastructure.uuid7 import generate_uuid7
+
+import ediyor.
+
+Application concrete infrastructure import etmemeli.
+
+Port ekle:
+
+backend/app/application/ports/id_generator.py
+
+Örnek contract:
+
+class IdGenerator(Protocol):
+    def new_uuid7(self) -> uuid.UUID: ...
+
+Infrastructure implementation:
+
+backend/app/infrastructure/uuid7.py
+
+Service constructor’a IdGenerator inject et.
+
+Bütün process_id, face_id, sample_id ve result_id üretimi injected generator üzerinden yapılmalı.
+
+ORM modellerindeki:
+
+default=uuid.uuid4
+
+fallback’larını kaldır. Business ID ORM tarafından rastgele üretilmemeli; application açıkça UUIDv7 vermeli.
+
+Testlerde persistent business IDs için uuid.uuid4 kullanma. UUIDv7 generator veya deterministic typed fixture kullan.
+
+Dependency-boundary testini genişlet:
+
+- domain outer layer import edemez.
+- application infrastructure/api import edemez.
+- ports infrastructure/application/api import edemez.
+
+==================================================
+7. UNIT OF WORK INSTANCE DEĞİL FACTORY OLMALI
+==================================================
+
+Mevcut service tek mutable UnitOfWork instance’ını `self._uow` içinde saklıyor. SqlAlchemyUnitOfWork da mutable `_session` saklıyor. Aynı service concurrent çağrılarda session overwrite edebilir.
+
+Port:
+
+backend/app/application/ports/unit_of_work.py
+
+içine strict typing uyumlu factory ekle:
+
+class UnitOfWorkFactory(Protocol):
+    def __call__(self) -> UnitOfWork: ...
+
+Service constructor:
+
+def __init__(
+    self,
+    unit_of_work_factory: UnitOfWorkFactory,
+    object_store: ObjectStore,
+    vector_store: VectorStore,
+    id_generator: IdGenerator,
+    candidate_limit: int = 10,
+) -> None:
+
+Her bağımsız PG transaction:
+
+async with self._unit_of_work_factory() as uow:
+    ...
+
+kullanmalı.
+
+Service üzerinde canlı session/UoW saklama.
+
+Infrastructure tarafında minimal factory oluştur veya typed callable kullan.
+
+Failing-first integration test:
+
+backend/tests/integration/lifecycle/test_concurrent_uow_isolation.py
+
+- Aynı service instance üzerinde iki orthogonal `resolve_or_create` çağrısını `asyncio.gather` ile başlat.
+- İkisi tamamlanmalı.
+- İki process terminal state’te olmalı.
+- İki farklı identity oluşmalı.
+- Closed session, overwritten session veya transaction error olmamalı.
+- `processing` process kalmamalı.
+
+==================================================
+8. CANDIDATE SELECTION ALGORİTMASINI EXACT UYGULA
+==================================================
+
+Mevcut problemler:
+
+- Qdrant yalnız `top_k=1` sorgulanıyor.
+- Stale ilk candidate sonrası ikinci candidate denenemiyor.
+- Threshold üstünde ama PostgreSQL-invalid candidate varsa:
+  `max(c.score for c in candidates if c.score < threshold)`
+  boş generator ile ValueError oluşturabiliyor.
+- Malformed payload/UUID adapter’ı crash ettirebilir.
+- NaN/Inf candidate açıkça ele alınmıyor.
+
+Exact algoritma:
+
+1. `match_threshold` finite ve `[0.0, 1.0]` olmalı.
+2. `candidate_limit` integer ve `1..100` arasında olmalı.
+3. Qdrant `top_k=candidate_limit` ile sorgulanmalı; default 10.
+4. Candidate’ları raw score descending sırala.
+5. Non-finite score candidate’ı skip et.
+6. Malformed point ID/payload UUID candidate’ı skip et; bütün request’i crash ettirme.
+7. Raw score threshold altındaysa match kabul etme.
+8. Threshold üstündeki her candidate için PostgreSQL’den doğrula:
+   - identity var.
+   - sample var.
+   - identity active.
+   - sample state == active.
+   - sample is_active == true.
+   - sample.face_id == identity.face_id.
+   - candidate.face_id == identity.face_id.
+   - candidate.sample_id == sample.sample_id.
+9. İlk valid candidate kabul edilir.
+10. İlk candidate stale, ikinci valid ise ikinci candidate kullanılmalı.
+11. Hiç valid candidate yoksa new identity akışına gir.
+12. Stale threshold-high score, new identity confidence’ını yükseltmemeli.
+13. Empty `max()` kullanma:
+    `max(values, default=0.0)` veya explicit list.
+14. Production control flow’da `assert process is not None` kullanma.
+15. Missing process/sample/identity typed consistency error üretmeli ve process mümkünse failed yapılmalı.
+
+Zorunlu failing-first test dosyası:
+
+backend/tests/integration/lifecycle/test_candidate_validation.py
+
+Testler:
+
+- first stale 0.99, second valid 0.98 -> existing face accepted.
+- all stale -> new_anonymous, crash yok.
+- missing sample -> skip.
+- missing identity -> skip.
+- inactive identity -> skip.
+- pending/failed/inactive sample -> skip.
+- sample.face_id mismatch -> skip.
+- malformed payload UUID -> skip.
+- exact threshold boundary -> accepted.
+- NaN/Inf score -> skip.
+- stale high score only -> new identity confidence 0.0.
+- hiçbir process processing kalmıyor.
+
+Service algorithm testlerinde scripted fake VectorStore kullanılabilir; gerçek Qdrant adapter integration testleri ayrıca korunmalı.
+
+==================================================
+9. COSINE SCORE VE CONFIDENCE SEMANTİĞİ
+==================================================
+
+Qdrant cosine raw score teorik olarak `[-1,1]`.
+
+RecognitionResult.match_confidence mevcut contract gereği `[0,1]`.
+
+Tek helper yaz:
+
+def _to_match_confidence(raw_score: float) -> float:
+    if not math.isfinite(raw_score):
+        return 0.0
+    return min(1.0, max(0.0, raw_score))
+
+Kurallar:
+
+- Threshold karşılaştırması raw finite cosine score ile yapılır.
+- Threshold kararından önce score’u clamp etme.
+- Persist edilen confidence `[0,1]` bounded olur.
+- Negatif raw score match sayılmaz.
+- Negatif rejected score ile new identity sonucu confidence 0.0 olur.
+- NaN/Inf candidate reddedilir.
+
+Gerçek Qdrant integration testi:
+
+- vector_a upsert.
+- `-vector_a` query/resolve.
+- Sonuç new_anonymous.
+- match_confidence == 0.0.
+- sample active.
+- process completed.
+- orphan/stuck processing yok.
+
+==================================================
+10. VECTOR QUERY FAILURE DUPLICATE IDENTITY ÜRETMEMELİ
+==================================================
+
+Qdrant query bağlantı hatası “hiç match yok” değildir.
+
+Exact behavior:
+
+- İlk process record oluşturulduktan sonra VectorStore.query hata verirse:
+  - yeni identity yaratma.
+  - process failed.
+  - sanitized `error_code="vector_query_failed"`.
+  - recognition_result oluşturma.
+  - raw exception domain error string’ine koyma.
+  - typed `IdentityResolutionError("identity resolution failed")` gibi sanitized mesaj dön.
+- Vector store unavailable olduğunda new_anonymous üretmek yasaktır; bu duplicate identity yaratabilir.
+
+Failing-first test:
+
+- QueryingVectorStore exception fırlatır.
+- process failed.
+- zero identities.
+- zero samples.
+- zero results.
+- zero completed processes.
+- raw fake exception text persisted/user-facing değildir.
+
+==================================================
+11. CROSS-STORE FAILURE VE COMPENSATION
+==================================================
+
+Caught failures için exact ordering ve reverse compensation uygula.
+
+--------------------------------------------------
+11.1 New identity flow
+--------------------------------------------------
+
+Normal order:
+
+1. PG process + pending identity/sample reserve.
+2. MinIO deterministic upload + stat/checksum verify.
+3. Qdrant idempotent upsert wait=True.
+4. Final PG sample active + result + process completed.
+
+MinIO upload failure:
+
+- sample failed.
+- process failed.
+- bu operation’da yeni yaratılan identity inactive/deleted.
+- recognition_result yok.
+- Qdrant upsert çağrılmamış.
+- error message sanitized.
+
+Qdrant upsert failure:
+
+- MinIO object reverse-order delete denenir.
+- sample failed.
+- process failed.
+- yeni identity inactive.
+- result yok.
+- Qdrant usable active point yok.
+
+Qdrant success, final PG transaction failure:
+
+- Qdrant point delete/deactivate compensation.
+- MinIO object delete compensation.
+- yeni bağımsız UoW ile mümkünse:
+  - sample failed.
+  - process failed.
+  - new identity inactive.
+- completed/result kalmamalı.
+- Compensation failure sessizce yutulmaz.
+- Typed partial-failure error ve sanitized failure details üret.
+- PASS/completed sonucu dönme.
+
+--------------------------------------------------
+11.2 Existing candidate flow
+--------------------------------------------------
+
+Recognition result/final process commit başarısızsa:
+
+- Sahte RecognitionOutcome dönme.
+- Process mümkünse ayrı UoW ile failed yapılmalı.
+- External sample/vector silinmez; bunlar önceden mevcut identity’ye aittir.
+- Raw exception client/domain error mesajına sızmaz.
+
+--------------------------------------------------
+11.3 add_sample
+--------------------------------------------------
+
+Mevcut add_sample external I/O exception’larını yönetmiyor.
+
+Exact behavior:
+
+MinIO failure:
+
+- yeni sample failed.
+- mevcut identity active kalır.
+- Qdrant upsert çağrılmaz.
+
+Qdrant failure:
+
+- MinIO object delete compensation.
+- yeni sample failed.
+- mevcut identity active kalır.
+- active Qdrant point kalmaz.
+
+Final PG activation failure:
+
+- Qdrant point delete/deactivate.
+- MinIO object delete.
+- sample failed yapılmaya çalışılır.
+- existing identity deactivate edilmez.
+
+Zorunlu tests:
+
+- new identity MinIO fail.
+- new identity Qdrant fail.
+- new identity final PG fail.
+- compensation delete fail.
+- add_sample MinIO fail.
+- add_sample Qdrant fail.
+- add_sample final PG fail.
+- failure sonrası no completed result.
+- failure sonrası no active candidate.
+- existing identity failure yüzünden inactive olmuyor.
+- errors sanitized.
+
+Fault injection için fakes kullanılabilir; normal MinIO/Qdrant integration testleri gerçek services üzerinde kalmalı.
+
+==================================================
+12. FACE SAMPLE STATE MACHINE
+==================================================
+
+Mevcut hata:
+
+Pending FaceSample default `is_active=True`.
+
+Düzelt:
+
+Domain initial state:
+
+state = "pending"
+is_active = False
+
+Transitions:
+
+pending -> active
+pending -> failed
+active -> inactive
+
+Exact invariants:
+
+pending:
+  is_active = false
+  bucket = null
+  object_key = null
+  activated_at = null
+  failure_code = null
+  deactivated_at = null
+
+active:
+  is_active = true
+  bucket nonblank
+  object_key nonblank
+  activated_at nonnull
+  failure_code = null
+  deactivated_at = null
+
+failed:
+  is_active = false
+  failure_code nonblank
+  deactivated_at optional
+
+inactive:
+  is_active = false
+  bucket/object_key nonblank
+  activated_at nonnull
+  deactivated_at nonnull
+
+mark_active:
+
+- Yalnız pending’den.
+- bucket/key trim sonrası nonblank.
+- is_active=True yapmalı.
+
+mark_failed:
+
+- Pending veya gerekli compensation durumunda active’den.
+- is_active=False.
+- failure_code nonblank.
+
+mark_inactive:
+
+- Yalnız active’den.
+- is_active=False.
+- deactivated_at set.
+
+Repository `list_active_by_face_id`:
+
+- `is_active IS TRUE`
+- `state == "active"`
+
+koşullarının ikisini de kullanmalı.
+
+deactivate_identity:
+
+- Yalnız gerçekten active sample’lara mark_inactive uygula.
+- Pending/failed sample yüzünden bütün operation crash etmemeli.
+
+==================================================
+13. GERÇEK OPTIMISTIC LOCKING
+==================================================
+
+Mevcut durum optimistic locking değildir:
+
+- Domain version artırıyor.
+- Repository row’u select edip unconditional overwrite ediyor.
+- Concurrent stale writer engellenmiyor.
+- Deactivate version artırmıyor.
+
+Exact implementation:
+
+Repository port:
+
+async def update_with_expected_version(
+    identity: FaceIdentity,
+    expected_version: int,
+) -> FaceIdentity: ...
+
+SQL tek atomic conditional statement kullanmalı:
+
+UPDATE face_identity
+SET
+  status = ...,
+  is_active = ...,
+  display_name = ...,
+  identity_metadata = ...,
+  version = version + 1,
+  updated_at = ...,
+  deleted_at = ...
+WHERE face_id = :face_id
+  AND version = :expected_version
+RETURNING ...
+
+`rowcount != 1` veya RETURNING row yoksa:
+
+ConcurrentUpdateError
+
+Kurallar:
+
+- Python object version’ını update öncesi keyfi artırıp unconditional persist etme.
+- Domain desired state’i üretirken expected_version korunmalı.
+- Successful DB update returned version source-of-truth olmalı.
+- Enrollment ve deactivation bu repository metodunu kullanmalı.
+- Deactivation da version artırmalı.
+- İki session aynı version’ı okursa:
+  - İlk update success.
+  - İkinci deterministic ConcurrentUpdateError.
+  - İlk writer’ın data’sı korunur.
+
+Failing-first gerçek PostgreSQL test:
+
+backend/tests/integration/persistence/test_optimistic_locking.py
+
+Ek test:
+
+- concurrent enroll/delete.
+- stale expected_version.
+- exact returned version.
+- retry caller’a bırakılır; silent overwrite yok.
+
+==================================================
+14. MINIO BUCKET VE CHECKSUM CONTRACT
+==================================================
+
+Mevcut service:
+
+BUCKET_NAME = "mergenvision-face-samples"
+
+hardcode ediyor. Adapter farklı configured bucket kullansa bile PG yanlış bucket kaydedebilir.
+
+ObjectStat’ı genişlet:
+
+- bucket
+- key
+- size
+- content_type
+- sha256 veya verified checksum metadata
+
+ObjectStore.upload gerçek kullanılan bucket’ı döndürmeli.
+
+Service:
+
+- FaceSample.mark_active(stat.bucket, stat.key) kullanmalı.
+- Hardcoded BUCKET_NAME kaldırılmalı.
+
+Deterministic object key:
+
+faces/{face_id}/{sample_id}/aligned.webp
+
+Idempotency:
+
+- Aynı key ve aynı SHA/size tekrar upload edilirse success.
+- Aynı key farklı content/checksum ise typed conflict.
+- Upload sonrasında stat size/checksum verify.
+- Custom MinIO metadata ile SHA-256 saklanabilir.
+- ETag’i content SHA-256 sanma.
+
+Tests:
+
+- custom bucket injection -> PG exact custom bucket.
+- same key/same bytes idempotent.
+- same key/different bytes conflict.
+- stat bucket/key/size/checksum doğru.
+- object key’de display name/metadata yok.
+
+==================================================
+15. QDRANT ADAPTER HARDENING
+==================================================
+
+Mevcut olumlu değişikliği koru:
+
+payload:
+- sample_id
+- face_id
+- active
+- model_version
+
+Fakat statik:
+
+MODEL_VERSION = "phase1-sprint-01"
+
+production constant’ı kullanma. Config/injected technical profile value kullan.
+
+Kurallar:
+
+- point ID exact sample_id.
+- payload sample_id point ID ile aynı.
+- payload face_id valid UUID.
+- payload yalnız teknik alanlar.
+- 512 finite non-zero vector.
+- Gerekli contract unit-normalization ise tolerance ile doğrula; yalnız non-zero kontrol edip “unit normalized” deme.
+- Existing collection varsa vector size/distance contract’ını doğrula.
+- Yanlış size/distance varsa hard error; sessizce kullanma.
+- Collection creation race’i idempotent ele al.
+- `query_points` malformed point/payload yüzünden bütün request’i crash ettirmemeli.
+- payload indexes:
+  - face_id
+  - active
+  - model_version
+  official Qdrant API ile oluşturulmalı.
+- `delete()` kullanılan qdrant-client version’ın official selector contract’ına uygun olmalı.
+- Collection development/test config ile ayrılmalı.
+
+Tests:
+
+- point ID == sample_id.
+- payload sample_id matches.
+- no name/metadata/object key.
+- malformed payload skip.
+- wrong collection dimension detected.
+- concurrent ensure_collection safe.
+- active=false filter.
+- model version isolation davranışı açık.
+
+==================================================
+16. FORWARD-ONLY ALEMBIC 0002
+==================================================
+
+Applied `0001_identity_storage_foundation.py` dosyasını rewrite etme.
+
+Yeni migration:
+
+backend/app/infrastructure/persistence/alembic/versions/0002_sprint01_correctness.py
+
+down_revision = "0001"
+
+Mevcut dört tablo ve kolonlar korunacak.
+
+--------------------------------------------------
+16.1 face_identity
+--------------------------------------------------
+
+Existing columns korunur:
+
+face_id
+status
+is_active
+display_name
+identity_metadata
+version
+created_at
+updated_at
+deleted_at
+
+Add constraints:
+
+ck_face_identity_version_positive:
+  version >= 1
+
+ck_face_identity_known_name:
+  status != 'known'
+  OR display_name IS NOT NULL AND btrim(display_name) != ''
+
+ck_face_identity_active_deleted:
+  (is_active = true AND deleted_at IS NULL)
+  OR
+  (is_active = false AND deleted_at IS NOT NULL)
+
+Keep allowed status:
+
+anonymous
+known
+
+--------------------------------------------------
+16.2 process_record
+--------------------------------------------------
+
+Existing columns korunur:
+
+process_id
+process_type
+status
+face_count
+error_code
+details
+created_at
+completed_at
+
+Add constraint:
+
+ck_process_record_type:
+  process_type IN (
+    'image_recognize',
+    'face_enroll',
+    'face_delete'
+  )
+
+ck_process_record_lifecycle:
+
+processing:
+  completed_at IS NULL
+  face_count IS NULL
+  error_code IS NULL
+
+completed:
+  completed_at IS NOT NULL
+  face_count IS NOT NULL
+  face_count >= 0
+  error_code IS NULL
+
+failed:
+  completed_at IS NOT NULL
+  error_code IS NOT NULL
+  btrim(error_code) != ''
+
+--------------------------------------------------
+16.3 face_sample
+--------------------------------------------------
+
+Existing columns korunur:
+
+sample_id
+face_id
+state
+bucket
+object_key
+failure_code
+is_active
+created_at
+activated_at
+deactivated_at
+
+Before constraint:
+
+UPDATE face_sample
+SET is_active = (state = 'active');
+
+Change server default:
+
+is_active DEFAULT false
+
+Add lifecycle constraint:
+
+ck_face_sample_lifecycle
+
+pending:
+  state='pending'
+  is_active=false
+  bucket IS NULL
+  object_key IS NULL
+  activated_at IS NULL
+  failure_code IS NULL
+  deactivated_at IS NULL
+
+active:
+  state='active'
+  is_active=true
+  bucket IS NOT NULL AND btrim(bucket) != ''
+  object_key IS NOT NULL AND btrim(object_key) != ''
+  activated_at IS NOT NULL
+  failure_code IS NULL
+  deactivated_at IS NULL
+
+failed:
+  state='failed'
+  is_active=false
+  failure_code IS NOT NULL
+  btrim(failure_code) != ''
+
+inactive:
+  state='inactive'
+  is_active=false
+  bucket/object_key nonblank
+  activated_at IS NOT NULL
+  deactivated_at IS NOT NULL
+
+Mevcut face_id FK index’i korunur.
+
+--------------------------------------------------
+16.4 recognition_result
+--------------------------------------------------
+
+Existing columns korunur:
+
+result_id
+process_id
+face_id
+sample_id
+status
+bounding_box
+match_confidence
+created_at
+result_metadata
+
+Add:
+
+ck_recognition_result_confidence:
+  match_confidence >= 0
+  AND match_confidence <= 1
+
+Add missing FK-side indexes:
+
+recognition_result_face_id_idx
+recognition_result_sample_id_idx
+
+Existing process index korunur.
+
+--------------------------------------------------
+16.5 ORM parity
+--------------------------------------------------
+
+ORM `__table_args__`, defaults ve indexes migration head ile aynı contract’ı yansıtmalı.
+
+ORM models:
+
+- uuid.uuid4 defaults kaldır.
+- FaceSample.is_active default false.
+- Constraints mirror edilmeli.
+- Repository/service bütün IDs’i UUIDv7 olarak vermeli.
+
+--------------------------------------------------
+16.6 Migration tests
+--------------------------------------------------
+
+Gerçek dedicated PostgreSQL üzerinde:
+
+1. Fresh DB -> alembic upgrade head.
+2. Fresh DB -> upgrade 0001 -> upgrade head.
+3. Head schema introspection.
+4. Invalid direct inserts IntegrityError:
+   - known identity without name.
+   - version 0.
+   - active identity with deleted_at.
+   - inactive identity without deleted_at.
+   - pending active sample.
+   - active sample without bucket/key/activated_at.
+   - failed sample without failure_code.
+   - completed process without completed_at/face_count.
+   - failed process without error_code.
+   - confidence <0.
+   - confidence >1.
+5. Required indexes exist.
+6. `0002` downgrade yalnız kendi constraints/index/default değişikliğini geri almalı; dört tabloyu drop etmemeli.
+
+Development DB üzerinde destructive downgrade çalıştırma. Migration round-trip yalnız dedicated test DB’de.
+
+==================================================
+17. BOUNDING BOX VE INPUT VALIDATION
+==================================================
+
+Mevcut BoundingBox:
+
+- width=0 veya height=0 kabul ediyor.
+- x/y negatif olabilir.
+
+Exact validation:
+
+x >= 0
+y >= 0
+width > 0
+height > 0
+
+match_threshold:
+
+finite
+0 <= threshold <= 1
+
+crop_bytes:
+
+- Empty bytes reject.
+- Sprint 01 adapter gerçek image decode yapmıyorsa en az empty input ve declared MIME contract’ını açıkça validate et.
+- Synthetic fixture’ı production image validation kanıtı gibi sunma.
+
+Embedding:
+
+- Exact dimension 512.
+- Bütün values finite.
+- Norm nonzero.
+- Eğer adapter normalized vector contract’ı istiyorsa norm `1.0 ± tolerance`.
+- Validation logic application ve adapter arasında anlamsız duplicate/drift yaratmamalı; shared pure helper veya açık boundary seç.
+
+==================================================
+18. DEACTIVATION DAVRANIŞI VE DOKÜMAN YALANI
+==================================================
+
+Mevcut kod deactivate_identity içinde MinIO object delete etmiyor.
+
+Review package ise:
+
+“MinIO crop deletion during deactivation is best-effort”
+
+diyor. Bu doğru değil.
+
+Bu correction’da:
+
+- Deactivation identity’yi inactive yapmalı.
+- Active samples inactive olmalı.
+- Qdrant points best-effort active=false yapılabilir.
+- PG authoritative validation inactive identity/sample’ı kesin reddetmeli.
+- MinIO objects silinmeyecek.
+- Dokümanda açıkça:
+  “Biometric crop retention/deletion policy deferred; Sprint 01 deactivation does not delete MinIO objects.”
+  yaz.
+- Kod yapmıyorsa delete yapıyor gibi raporlama.
+
+Qdrant set_active failure:
+
+- PG deactivation rollback edilmemeli.
+- PG authoritative rejection nedeniyle recognition candidate kabul edilmemeli.
+- Failure sanitized warning/limitation olarak görünür olmalı; sessiz `contextlib.suppress` kullanma.
+- Public method caller’a cleanup warning/result döndürmeyi veya structured diagnostic üretmeyi seç; exception swallowing yasak.
+
+==================================================
+19. ACCEPTANCE BÜTÜN TESTLERİ ÇALIŞTIRMALI
+==================================================
+
+Mevcut Makefile şunları acceptance dışında bırakıyor:
+
+backend/tests/integration/persistence/test_repositories.py
+backend/tests/unit/infrastructure/test_uuid7.py
+
+Yeni dosyaların unutulmasını önlemek için final acceptance mutlaka tüm test tree’yi çalıştırmalı.
+
+Root Makefile targets:
+
+phase1-sprint-01-bootstrap
+phase1-sprint-01-preflight
+phase1-sprint-01-static
+phase1-sprint-01-unit
+phase1-sprint-01-services
+phase1-sprint-01-postgres
+phase1-sprint-01-minio
+phase1-sprint-01-qdrant
+phase1-sprint-01-lifecycle
+phase1-sprint-01-failure
+phase1-sprint-01-restart
+phase1-sprint-01-image-build
+phase1-sprint-01-full-test
+phase1-sprint-01-acceptance
+
+Central variable:
+
+TEST_COMPOSE := docker compose \
+  -p mergenvision-s01-test \
+  -f docker-compose.test.yml
+
+Test env explicitly loaded.
+
+Preflight:
+
+1. Test resource guard unit tests.
+2. Compose config validation.
+3. Exact resolved test DB/bucket/collection names.
+4. Docker availability.
+5. Port availability.
+6. Guard geçmeden test services start etme.
+
+Services:
+
+$(TEST_COMPOSE) up -d --wait \
+  postgres-test minio-test qdrant-test
+
+Port conflict’te unrelated container stop etme.
+
+Full test:
+
+cd backend && .venv/bin/python -m pytest tests -q \
+  --junitxml=test-reports/sprint01.xml
+
+Kurallar:
+
+- Zero tests success sayılmaz.
+- Required tests skip/xfail/deselect edilemez.
+- `tail`, `|| true`, broad `-k` exclusion kullanma.
+- Non-zero exit aynen propagate edilmeli.
+- Targeted targets debug kolaylığı için kalabilir.
+- Final full suite hepsini yeniden toplamalı.
+- pytest summary:
+  collected/passed/failed/skipped/xfail/deselected
+  rapora konmalı.
+- Acceptance iki ardışık çalıştırmada idempotent geçmeli.
+- Test services çalışır bırakılabilir; volume silinmez.
+
+==================================================
+20. RESTART GATE ÜÇ STORE’U AYRI AYRI DOĞRULAMALI
+==================================================
+
+Mevcut restart testi:
+
+- Main Compose services’i restart ediyor.
+- Yalnız second recognition same faceId assertion’ı yapıyor.
+- MinIO object persistence’ını doğrulamıyor.
+
+Yeni iki aşamalı probe:
+
+backend/scripts/restart_persistence_probe.py
+
+Arayüz:
+
+python scripts/restart_persistence_probe.py seed \
+  --state-file test-reports/restart-probe.json
+
+python scripts/restart_persistence_probe.py verify \
+  --state-file test-reports/restart-probe.json
+
+Seed:
+
+IdentityStorageLifecycleService normal public flow’u üzerinden oluştur:
+
+- anonymous identity.
+- active sample.
+- completed process.
+- immutable result.
+- MinIO crop.
+- Qdrant point.
+
+State file’a yalnız teknik ID/key yaz:
+
+- process_id
+- face_id
+- sample_id
+- result_id
+- bucket
+- object_key
+- byte_size
+
+Secret/vector/name yazma.
+
+Restart:
+
+$(TEST_COMPOSE) restart \
+  postgres-test minio-test qdrant-test
+
+Ardından:
+
+$(TEST_COMPOSE) up -d --wait \
+  postgres-test minio-test qdrant-test
+
+Verify:
+
+PostgreSQL:
+- Exact identity var/active.
+- Exact sample var/active.
+- Exact process completed.
+- Exact result immutable.
+
+MinIO:
+- Exact bucket/key stat başarılı.
+- Size fixture bytes ile aynı.
+- Checksum aynı.
+
+Qdrant:
+- Exact point ID == sample_id.
+- Payload face_id/sample_id/model_version doğru.
+- Same vector query aynı sample’ı döndürüyor.
+
+Üçü de geçmeden restart PASS deme.
+
+==================================================
+21. FRESH-CLONE REPRODUCIBILITY
+==================================================
+
+Mevcut Makefile önceden hazırlanmış:
+
+backend/.venv
+
+varsayıyor.
+
+Oluştur:
+
+backend/requirements.lock
+backend/Dockerfile
+backend/.dockerignore
+README.md
+.github/workflows/phase1-sprint-01.yml
+
+--------------------------------------------------
+21.1 Dependency lock
+--------------------------------------------------
+
+- Runtime + test + ruff + mypy exact resolved versions.
+- `latest`, range veya unresolved transitive dependency bırakma.
+- pyproject source declaration olarak kalsın.
+- Bootstrap lock’tan install etsin.
+- Lock/model/requirement SHA gate’i ekleme.
+
+--------------------------------------------------
+21.2 Bootstrap
+--------------------------------------------------
+
+make phase1-sprint-01-bootstrap:
+
+1. python3.12 varlığını doğrula.
+2. Yoksa system install/sudo yapma; blocker.
+3. backend/.venv yoksa oluştur.
+4. Exact lock’tan install.
+5. pip check.
+6. İkinci çağrı idempotent.
+
+--------------------------------------------------
+21.3 Dockerfile
+--------------------------------------------------
+
+- Exact Python 3.12 slim image tag.
+- requirements.lock üzerinden install.
+- Source copy.
+- Non-root user.
+- API yokken uvicorn/fake server entrypoint ekleme.
+- Foundation tooling image olduğu açık.
+- Image build/import smoke:
+
+docker build --no-cache \
+  -f backend/Dockerfile \
+  -t mergenvision-backend:sprint01-check \
+  backend
+
+docker run --rm \
+  mergenvision-backend:sprint01-check \
+  python -c "import app; print('backend-import-ok')"
+
+--------------------------------------------------
+21.4 README
+--------------------------------------------------
+
+Temiz checkout akışı:
+
+cp backend/.env.example backend/.env
+make phase1-sprint-01-bootstrap
+make phase1-sprint-01-services
+make phase1-sprint-01-acceptance
+
+Development ve test resources kesin ayrılmış olarak belgelenmeli.
+
+==================================================
+22. GITHUB ACTIONS
+==================================================
+
+Oluştur:
+
+.github/workflows/phase1-sprint-01.yml
+
+Workflow:
+
+- push
+- pull_request
+- Python 3.12
+- Lock-file-keyed cache
+- Dedicated test credentials
+- PostgreSQL/MinIO/Qdrant test Compose
+- `make phase1-sprint-01-acceptance`
+- Timeout
+- concurrency + cancel-in-progress
+- Failure durumunda Compose logs artifact
+- JUnit artifact
+- `down -v` yok
+- Production secret gerektirmez
+
+Agent commit/push yapmayacak.
+
+Bu nedenle final status:
+
+GitHub workflow source: CREATED
+Remote GitHub run: NOT_RUN_PENDING_USER_PUSH
+
+Remote run olmadan CI PASS deme.
+
+==================================================
+23. DOKÜMANTASYON DÜZELTMELERİ
+==================================================
+
+Güncelle:
+
+docs/implementation/CURRENT_SPRINT.md
+docs/implementation/IMPLEMENTATION_DETAILS.md
+docs/implementation/REFERENCE_DECISION_LOG.md
+docs/implementation/review_packages/SPRINT-001-CODE-REVIEW-PACKAGE.md
+README.md
+
+Düzeltilecek yanlış iddialar:
+
+- Selected tests pass != all tests pass.
+- Repository tests acceptance dışında olduğu halde pass claim’i yapılamaz.
+- UUID testleri acceptance dışında olduğu halde UUID gate pass denemez.
+- MinIO deactivation deletion kodda yok.
+- Restart testi MinIO’yu doğrulamıyordu.
+- “context7 used indirectly” geçerli tool accountability değildir.
+- Synthetic 512-D vectors gerçek recognition doğruluğu değildir.
+- Sprint 01 bütün Phase 1 değildir.
+- Remote CI yoksa CI PASS değildir.
+- Applied user commit varken review package’taki “no commit/push” cümlesi agent action ile repository history durumunu ayırmalı.
+- PLAN.md implementation öncesi plan snapshot’ıysa stale olduğu açıkça işaretlenmeli; source-of-current-status olarak kullanılmamalı.
+- CURRENT_SPRINT yalnız bütün mandatory local gate’ler geçince `COMPLETED_PENDING_SENIOR_REVIEW` olabilir.
+
+==================================================
+24. REVIEW PACKAGE EXACT CONTRACT
+==================================================
+
+Aynı dosyayı correction snapshot olarak yeniden üret:
+
+docs/implementation/review_packages/SPRINT-001-CODE-REVIEW-PACKAGE.md
+
+Yeni üçüncü report dosyası oluşturma.
+
+Review package sections:
+
+1. Sprint identity
+   - Sprint name/date.
+   - Reviewed base commit:
+     675549670ab65daec9ffedae3e62ddb4f4478dc3
+   - Current HEAD/worktree.
+   - Origin/branch.
+   - git status --short.
+   - git diff --stat.
+   - git diff --name-status.
+
+2. Executive verdict
+   - PASS/PARTIAL/BLOCKED.
+   - Yalnız Sprint 01 correction.
+   - Tüm Phase 1 değil.
+
+3. Original finding closure matrix
+   Her finding için:
+   - Finding ID.
+   - Severity.
+   - Root cause.
+   - Changed path/symbol.
+   - Regression test.
+   - Exact command.
+   - Actual result.
+   - CLOSED/OPEN.
+
+Finding list:
+
+F-001 Unsafe cross-store test cleanup
+F-002 Acceptance missing tests
+F-003 Shared mutable UoW
+F-004 Stale candidate/empty max crash
+F-005 Negative/non-finite score semantics
+F-006 Vector query stuck-process failure
+F-007 New identity cross-store compensation
+F-008 add_sample failure handling
+F-009 Pending sample incorrectly active
+F-010 Fake optimistic locking
+F-011 Hardcoded MinIO bucket
+F-012 Missing migration invariants/indexes
+F-013 UUIDv4 ORM defaults
+F-014 Incomplete restart persistence proof
+F-015 Missing lock/bootstrap/Docker/CI
+F-016 Documentation false claims
+F-017 Duplicated AGENTS/empty Plan
+F-018 Portable MCP config
+F-019 Fresh-clone env/Compose failure
+F-020 Qdrant malformed/stale candidate handling
+
+4. Final schema evidence
+   - 0001 unchanged.
+   - Full 0002 source.
+   - Fresh and 0001->head results.
+   - Constraint/index introspection.
+
+5. Runtime/data flow
+   - resolve existing.
+   - create new.
+   - add sample.
+   - enrollment.
+   - deactivation.
+   - failure compensation.
+
+6. Test safety evidence
+   - exact test DB.
+   - exact bucket.
+   - exact collection.
+   - loopback endpoints.
+   - guard negative test summary.
+   - no destructive main-resource operation.
+
+7. Raw validation
+   - Exact commands.
+   - Exit codes.
+   - Raw concise summaries.
+   - Pytest counts.
+   - Acceptance run 1.
+   - Acceptance run 2.
+   - Docker build/import.
+   - Compose config.
+   - git diff --check.
+
+8. Restart proof
+   - PG.
+   - MinIO.
+   - Qdrant.
+
+9. Security/privacy
+   - No name/metadata in object key/Qdrant payload.
+   - No raw exception/secret.
+   - No committed .env.
+   - Test credentials isolated.
+
+10. Real vs synthetic
+   - Synthetic vector only storage/lifecycle evidence.
+   - No detector/recognizer/GPU/API/UI/video claim.
+
+11. Known limitations
+   - No persistent outbox/crash recovery.
+   - No production threshold calibration.
+   - No real ML.
+   - MinIO retention deletion deferred.
+   - Remote CI pending push.
+
+12. MCP/skill accountability
+   - Yalnız gerçekten kullanılan tools `USED`.
+   - Diğerleri honest SKIPPED.
+   - 21st/Ruflo forbidden.
+
+13. Senior reviewer questions
+   - Correction source correctness.
+   - Schema invariant adequacy.
+   - Synchronous compensation limitations.
+   - Next sprint authorization.
+
+Review package’a secrets veya raw `.env` koyma.
+
+==================================================
+25. REQUIRED TDD ORDER
+==================================================
+
+Bu sırayı uygula:
+
+1. Repository/baseline ledger.
+2. CURRENT_SPRINT correction state.
+3. Resource guard failing tests.
+4. Dedicated test Compose/config.
+5. Safe cleanup pass.
+6. Dependency-boundary failing tests.
+7. IdGenerator injection.
+8. UoW factory + concurrent test.
+9. Candidate validation failing tests.
+10. Score semantics failing tests.
+11. Query failure test.
+12. New identity failure/compensation tests.
+13. add_sample failure tests.
+14. FaceSample lifecycle tests.
+15. Optimistic locking concurrency test.
+16. MinIO bucket/checksum tests.
+17. Qdrant malformed/config/race tests.
+18. 0002 migration.
+19. Schema invalid-insert tests.
+20. Full repository tests.
+21. Restart three-store probe.
+22. Lock/bootstrap.
+23. Docker build/import.
+24. GitHub workflow source.
+25. Docs/review package.
+26. Full acceptance first run.
+27. Full acceptance second run.
+28. ruff check.
+29. ruff format --check.
+30. mypy strict.
+31. docker compose config checks.
+32. git diff --check.
+33. Final report.
+34. DUR — next sprint başlatma.
+
+Bir test fail olursa:
+
+- systematic-debugging uygula.
+- Root cause belirle.
+- Random sleep/timeout/config değişikliği yapma.
+- Testi silme/skip/xfail yapma.
+- Assertion gevşetme.
+- Failure’ı `|| true` ile gizleme.
+
+==================================================
+26. COMPLETION GATE
+==================================================
+
+Yalnız hepsi gerçek olarak geçerse:
+
+PASS — READY_FOR_SENIOR_REVIEW
+
+- Dedicated test resources.
+- Fail-closed cleanup guard.
+- Main/dev resources’a acceptance dokunmuyor.
+- Tüm pytest tree acceptance içinde.
+- Repository ve UUID tests dahil.
+- UoW factory ve concurrent isolation.
+- Stale-first/valid-second behavior.
+- All-stale behavior.
+- Malformed payload behavior.
+- Negative cosine behavior.
+- Query failure process cleanup.
+- New identity compensation.
+- add_sample compensation.
+- Pending sample inactive.
+- Real optimistic locking.
+- Dynamic actual MinIO bucket persistence.
+- Checksum/stat verification.
+- 0002 constraints/indexes.
+- Fresh and 0001->head migration.
+- Three-store restart proof.
+- Fresh bootstrap.
+- Dependency lock.
+- Docker build/import.
+- GitHub workflow source.
+- Full acceptance run 1 exit 0.
+- Full acceptance run 2 exit 0.
+- No required test skipped/xfail/deselected.
+- Ruff/format/mypy pass.
+- Compose config pass.
+- git diff --check pass.
+- Review package final source/results ile uyumlu.
+- No git add/commit/push.
+- No destructive volume operation.
+
+Herhangi biri eksikse:
+
+PARTIAL
+
+Authority, port, unavailable required runtime veya conflicting dirty user change varsa:
+
+BLOCKED
+
+Mandatory gate eksikken Sprint 02 önerme.
+
+==================================================
+27. FINAL RESPONSE FORMAT
+==================================================
+
+Final cevabını exact olarak şu sırayla ver:
+
+Verdict:
+PASS | PARTIAL | BLOCKED
+
+Scope:
+Phase 1 Sprint 01 storage-foundation correction only.
+This is not full Phase 1 completion.
+
+Repository:
+- root
+- origin
+- branch
+- reviewed base
+- current HEAD
+- git status
+
+Closure matrix:
+- F-001 ... CLOSED/OPEN
+- ...
+- F-020 ... CLOSED/OPEN
+
+Implemented fixes:
+- Exact source path/symbol
+- Behavior
+
+Schema:
+- 0001 status
+- 0002 status
+- Constraints/indexes
+- Migration test results
+
+Test safety:
+- Compose project
+- Test DB
+- Test bucket
+- Test collection
+- Guard negative tests
+
+Validation:
+- exact command -> exit code/raw summary
+- full pytest counts
+- acceptance run 1
+- acceptance run 2
+- restart proof
+- Docker build/import
+- compose config
+- git diff --check
+
+CI:
+- workflow source
+- remote run status
+
+Real vs synthetic:
+- exact statement
+
+Changed files:
+- exact path list
+
+Known limitations:
+- exact residual risks
+
+MCP accountability:
+- codebase-memory-mcp
+- context7
+- deepwiki
+- exa
+- postman
+- playwright
+- 21st: FORBIDDEN_NOT_USED
+
+Skill accountability:
+- using-superpowers
+- receiving-code-review
+- writing-plans
+- executing-plans
+- test-driven-development
+- systematic-debugging
+- verification-before-completion
+- requesting-code-review
+
+Review package:
+docs/implementation/review_packages/SPRINT-001-CODE-REVIEW-PACKAGE.md
+
+Git/destructive operations:
+- no git add/commit/push
+- no volume deletion/down -v/prune
+
+Senior-review readiness:
+READY_FOR_SENIOR_REVIEW only if all mandatory gates passed.
+
+Final sentence on PASS:
+
+“Phase 1 Sprint 01 storage-foundation correction senior review’e hazırdır. Bu, Phase 1’in tamamlandığı anlamına gelmez. Sonraki sprint başlatılmamıştır.”
+
+Şimdi Build Mode’da correction’a başla. İlk olarak unsafe acceptance’ı çalıştırma; test resource isolation ve fail-closed guard’ı düzelt. Scope içindeki normal implementasyon için mikro-onay isteme. Yalnız hard stop durumunda kullanıcıya dön.

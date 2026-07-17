@@ -463,7 +463,7 @@ Somut timeline:
 | GPU zero-copy iddiası olmadan DeepStream'a atlamak | Phase 1 stabilizasyonunu atlar |
 | Hardcoded GPU UUID | Donanım değişikliğinde kırılır |
 | `CUDA_VISIBLE_DEVICES=0` tüm worker'lara | Multi-GPU haritalama bozuk |
-| Plaintext secret'ler compose/env'de | Güvenlik ihlali |
+| Plaintext secret'ler compose/env'de | Güvenlik ihlali | 
 | Provider listesini acceptance kanıtı saymak | Inference hot path'i doğrulamaz |
 | `faceId == trackId` | Video-local track ile global identity karışır |
 | Aspect-stretch inference üretimde | Doğruluk riski; parity test şart |

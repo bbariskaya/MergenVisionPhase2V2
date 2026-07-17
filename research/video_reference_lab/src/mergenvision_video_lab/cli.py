@@ -333,5 +333,35 @@ def run_friends(
     console.print_json(json.dumps(results, indent=2, default=str))
 
 
+# ------------------------------------------------------------------------------
+# annotate
+# ------------------------------------------------------------------------------
+
+
+@app.command()
+def annotate(
+    config: str = typer.Option("configs/friends_baseline_cpu.yaml", "--config"),
+    strategy: str = typer.Option("byte_iou", "--strategy"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8080, "--port"),
+) -> None:
+    """Start the sparse anchor annotator backend."""
+    cfg = _load_config(config)
+
+    import uvicorn
+
+    from mergenvision_video_lab.annotator_server import create_app
+
+    api = create_app(cfg, strategy=strategy)
+
+    console.print(f"[green]annotator backend[/green] http://{host}:{port}")
+    console.print("[dim]Run the UI with:[/dim] cd annotator && npm run dev")
+    console.print(
+        f"[dim]SSH tunnel:[/dim] ssh -N -L 5173:localhost:5173 -L {port}:localhost:{port} <user>@<remote>"
+    )
+
+    uvicorn.run(api, host=host, port=port, log_level="info")
+
+
 if __name__ == "__main__":
     app()

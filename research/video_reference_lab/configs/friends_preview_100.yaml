@@ -1,0 +1,89 @@
+schema_version: mv-video-reference-config/v1
+
+video:
+  path: test_videos/Friends.mp4
+  sampling_mode: every_frame
+  max_frames: 100
+
+oracle:
+  model_root: research/video_reference_lab/.model_cache
+  model_pack: buffalo_l
+  provider: cpu
+  allow_cpu_fallback: false
+  allow_model_download: false
+  det_size: [640, 640]
+  detector_low_threshold: 0.10
+
+alignment:
+  output_size: 112
+  color_order: BGR
+  border_mode: constant_zero
+  interpolation: bilinear
+  landmark_order:
+    - left_eye
+    - right_eye
+    - nose
+    - left_mouth
+    - right_mouth
+
+quality:
+  min_face_side_px: 32
+  min_detector_score_recognition: 0.60
+  min_laplacian_variance: 40.0
+  max_alignment_error_normalized: 0.10
+  min_brightness_mean: 30.0
+  max_brightness_mean: 225.0
+  max_dark_clip_fraction: 0.40
+  max_bright_clip_fraction: 0.40
+
+tracking:
+  high_detection_threshold: 0.60
+  low_detection_threshold: 0.10
+  new_track_threshold: 0.70
+  first_stage_min_iou: 0.10
+  second_stage_min_iou: 0.30
+  unconfirmed_min_iou: 0.30
+  short_term_min_cosine: 0.10
+  appearance_weight: 0.35
+  max_lost_frames: 30
+  max_lost_ns: 1000000000
+  scene_cut_reset: true
+  evidence_top_k: 5
+  evidence_min_separation_ns: 200000000
+
+templates:
+  max_selected_samples: 5
+  min_selected_samples: 1
+  min_temporal_separation_ns: 200000000
+  outlier_mad_scale: 3.0
+  outlier_absolute_cosine_floor: 0.20
+
+reconciliation:
+  min_tracklet_cosine: 0.45
+  min_cluster_member_cosine: 0.40
+  min_top1_top2_margin: 0.05
+  overlap_tolerance_ns: 0
+
+gallery:
+  root: test_gallery
+  min_identity_count_for_strict_margin: 2
+  min_samples_per_identity: 2
+  match_threshold: 0.45
+  match_margin: 0.05
+
+appearances:
+  max_gap_multiplier: 2.5
+
+replay:
+  chunk_sizes: [1, 8, 17, 64]
+  repetitions: 2
+
+benchmark:
+  warmup_runs: 5
+  measured_runs: 20
+  informational_target_fps: 600
+
+render:
+  debug_mp4: true
+  preserve_audio_if_possible: true
+  contact_sheet_columns: 4

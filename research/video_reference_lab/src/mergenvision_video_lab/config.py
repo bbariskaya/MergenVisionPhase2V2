@@ -190,6 +190,38 @@ def resolve_repo_relative_path(path: Path | str) -> Path:
     return _repo_root() / p
 
 
+def _preprocess_alignment_fingerprint(config: LabConfig) -> str:
+    """Deterministic fingerprint of the preprocess/alignment contract."""
+    payload = json.dumps(
+        {
+            "output_size": config.alignment.output_size,
+            "color_order": config.alignment.color_order,
+            "border_mode": config.alignment.border_mode,
+            "interpolation": config.alignment.interpolation,
+            "landmark_order": config.alignment.landmark_order,
+            "det_size": config.oracle.det_size,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def resolve_run_dir(config: LabConfig) -> Path:
+    """Return the artifact run directory for a given config."""
+    from mergenvision_video_lab.errors import VideoReadError
+    from mergenvision_video_lab.hashing import sha256_file
+
+    video_path = resolve_repo_relative_path(config.video.path)
+    if not video_path.exists():
+        raise VideoReadError(f"input video not found: {video_path}")
+    video_sha256 = sha256_file(video_path)
+    cfg_sha = config_sha256(config)
+    preprocess_fp = _preprocess_alignment_fingerprint(config)
+    base = Path(config.output.base_dir)
+    return resolve_repo_relative_path(base / video_sha256[:12] / cfg_sha[:12] / preprocess_fp)
+
+
 def load_config(path: Path | str) -> LabConfig:
     """Load and validate a YAML lab configuration."""
     path = Path(path)

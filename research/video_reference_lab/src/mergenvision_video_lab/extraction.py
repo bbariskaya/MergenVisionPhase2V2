@@ -11,7 +11,13 @@ import cv2
 import numpy as np
 
 from mergenvision_video_lab.artifact_store import ArtifactStore, RunLock
-from mergenvision_video_lab.config import LabConfig, config_sha256, resolve_repo_relative_path
+from mergenvision_video_lab.config import (
+    LabConfig,
+    _preprocess_alignment_fingerprint,
+    config_sha256,
+    resolve_repo_relative_path,
+    resolve_run_dir,
+)
 from mergenvision_video_lab.contracts import (
     AlignmentContract,
     BBoxXYXY,
@@ -280,38 +286,6 @@ def _build_manifest(
     )
 
 
-def _preprocess_alignment_fingerprint(config: LabConfig) -> str:
-    """Deterministic fingerprint of the preprocess/alignment contract."""
-    import hashlib
-    import json
-
-    payload = json.dumps(
-        {
-            "output_size": config.alignment.output_size,
-            "color_order": config.alignment.color_order,
-            "border_mode": config.alignment.border_mode,
-            "interpolation": config.alignment.interpolation,
-            "landmark_order": config.alignment.landmark_order,
-            "det_size": config.oracle.det_size,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def resolve_run_dir(config: LabConfig) -> Path:
-    """Return the artifact run directory for a given config."""
-    video_path = resolve_repo_relative_path(config.video.path)
-    if not video_path.exists():
-        raise VideoReadError(f"input video not found: {video_path}")
-    video_sha256 = sha256_file(video_path)
-    cfg_sha = config_sha256(config)
-    preprocess_fp = _preprocess_alignment_fingerprint(config)
-    base = Path(config.output.base_dir)
-    return resolve_repo_relative_path(base / video_sha256[:12] / cfg_sha[:12] / preprocess_fp)
-
-
 def extract_video(
     config: LabConfig,
     force: bool = False,
@@ -336,7 +310,6 @@ def extract_video(
 
     video_sha256 = sha256_file(video_path)
     cfg_sha = config_sha256(config)
-    preprocess_fp = _preprocess_alignment_fingerprint(config)
     run_dir = resolve_run_dir(config)
     store = ArtifactStore(run_dir)
 
@@ -485,6 +458,8 @@ def extract_video(
             serialization_seconds=0.0,
             total_seconds=t_serialization_start - t_start,
         )
+
+        preprocess_fp = _preprocess_alignment_fingerprint(config)
 
         manifest = _build_manifest(
             config=config,
