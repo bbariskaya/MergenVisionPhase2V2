@@ -8,10 +8,12 @@ import { Sidebar } from './Sidebar'
 const pageTitles: Record<string, { title: string; subtitle?: string }> = {
   '/': { title: 'Genel Bakış', subtitle: 'Operasyonel özet' },
   '/identify': { title: 'Yüz Tanıma', subtitle: 'Bir görseldeki yüzleri kayıtlı kişilerle eşleştirin' },
+  '/videos': { title: 'Video Tanıma', subtitle: 'Bir video yükleyin ve işlem sonucunu izleyin' },
 }
 
 const firstSegmentLabels: Record<string, string> = {
   identify: 'Yüz Tanıma',
+  videos: 'Video Tanıma',
   enroll: 'Kaydet',
   faces: 'Kişi Detayı',
   processes: 'İşlem Detayı',

@@ -1,5 +1,5 @@
 import { Card, CardContent } from '@/components/ui/Card'
-import { ScanFace, UserPlus } from 'lucide-react'
+import { ScanFace, UserPlus, Video } from 'lucide-react'
 import { Link } from 'react-router'
 
 export default function DashboardPage() {
@@ -19,15 +19,29 @@ export default function DashboardPage() {
               <div className="rounded-lg bg-primary-50 p-3 text-primary">
                 <ScanFace className="h-6 w-6" />
               </div>
-              <div>
-                <h2 className="font-semibold text-navy-900 group-hover:text-primary">Yüz Tanıma</h2>
-                <p className="mt-1 text-sm text-navy-500">Bir görsel yükleyip yüzleri tanıyın.</p>
-              </div>
-            </CardContent>
-          </Card>
-        </Link>
+          <div>
+            <h2 className="font-semibold text-navy-900 group-hover:text-primary">Yüz Tanıma</h2>
+            <p className="mt-1 text-sm text-navy-500">Bir görsel yükleyip yüzleri tanıyın.</p>
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
 
-        <Card className="h-full">
+    <Link to="/videos">
+      <Card className="group h-full transition-shadow hover:shadow-md">
+        <CardContent className="flex items-start gap-4 p-5">
+          <div className="rounded-lg bg-primary-50 p-3 text-primary">
+            <Video className="h-6 w-6" aria-hidden="true" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-navy-900 group-hover:text-primary">Video Tanıma</h2>
+            <p className="mt-1 text-sm text-navy-500">Bir video yükleyip kutu ve kimlik overlay'i izleyin.</p>
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+
+    <Card className="h-full">
           <CardContent className="flex items-start gap-4 p-5">
             <div className="rounded-lg bg-navy-100 p-3 text-navy-600">
               <UserPlus className="h-6 w-6" />
