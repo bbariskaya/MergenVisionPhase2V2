@@ -1,4 +1,5 @@
 #include "glintr100_engine.h"
+#include "model_profile.h"
 
 #include <cuda_runtime.h>
 
@@ -66,6 +67,12 @@ GlintR100Engine::~GlintR100Engine() {
 
 bool GlintR100Engine::load(int gpu_id, const std::string& engine_path,
                            std::string* error) {
+    return load(gpu_id, ModelProfile(), engine_path, error);
+}
+
+bool GlintR100Engine::load(int gpu_id, const ModelProfile& profile,
+                           const std::string& engine_path,
+                           std::string* error) {
     if (loaded()) {
         if (error) *error = "engine already loaded";
         return false;
@@ -73,7 +80,15 @@ bool GlintR100Engine::load(int gpu_id, const std::string& engine_path,
 
     gpu_id_ = gpu_id;
     engine_path_ = engine_path;
-    contract_ = Contract();  // reset to hardcoded defaults
+    profile_ = profile;
+    contract_ = Contract();  // start from hardcoded defaults
+    if (!profile_.recognizer_input_name.empty()) {
+        contract_.input_name = profile_.recognizer_input_name;
+        contract_.output_name = profile_.recognizer_output_name;
+        contract_.image_h = profile_.recognizer_input_h;
+        contract_.image_w = profile_.recognizer_input_w;
+        contract_.embedding_dim = profile_.recognizer_embedding_dim;
+    }
 
     cudaError_t cuerr = cudaSetDevice(gpu_id_);
     if (cuerr != cudaSuccess) {

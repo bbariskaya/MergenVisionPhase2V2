@@ -4,7 +4,7 @@
 # Uses the pinned NVIDIA TensorRT container so the native wheel is built
 # against the same CUDA/TensorRT libraries present at runtime.
 
-ARG TENSORRT_IMAGE=nvcr.io/nvidia/tensorrt:26.03-py3
+ARG TENSORRT_IMAGE=nvcr.io/nvidia/tensorrt:26.03-py3@sha256:ade1b30517b3d66b911a3cd7faf0146484ab8956098abe66b96b944fa36f4861
 
 # ------------------------------------------------------------------------------
 # Native extension build stage

@@ -25,6 +25,16 @@ from app.domain.entities.process_record import ProcessRecord
 from app.domain.value_objects import BoundingBox, FaceId, ProcessId
 
 
+def _valid_jpeg_header(width: int = 64, height: int = 64) -> bytes:
+    return (
+        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        + b"\xff\xc0\x00\x0b\x08\x00\x01"
+        + height.to_bytes(2, "big")
+        + width.to_bytes(2, "big")
+        + b"\x01\x01\x11\x00"
+    )
+
+
 @dataclass(frozen=True)
 class _FakeDetection:
     bbox: BoundingBox
@@ -154,50 +164,50 @@ def client(fake_controller: FaceController) -> TestClient:
 
 
 def test_recognize_no_face_returns_completed_with_zero_faces(client: TestClient) -> None:
-    response = client.post("/faces/recognize", files={"image": ("no_face.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
+    response = client.post("/api/v1/faces/recognize", files={"image": ("no_face.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "completed"
-    assert data["face_count"] == 0
+    assert data["faceCount"] == 0
     assert data["faces"] == []
-    assert "process_id" in data
+    assert "processId" in data
 
 
 def test_recognize_single_face_returns_new_anonymous(client: TestClient, fake_controller: FaceController) -> None:
     fake_controller._service.next_detections = [
         _FakeDetection(bbox=BoundingBox(x=10, y=20, width=30, height=40), confidence=0.92),
     ]
-    response = client.post("/faces/recognize", files={"image": ("single.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
+    response = client.post("/api/v1/faces/recognize", files={"image": ("single.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "completed"
-    assert data["face_count"] == 1
+    assert data["faceCount"] == 1
     face = data["faces"][0]
     assert face["status"] == "new_anonymous"
     assert face["name"] is None
     assert face["metadata"] is None
-    assert face["bounding_box"] == {"x": 10, "y": 20, "width": 30, "height": 40}
+    assert face["boundingBox"] == {"x": 10, "y": 20, "width": 30, "height": 40}
 
 
 def test_recognize_same_face_twice_returns_anonymous_then_known(client: TestClient, fake_controller: FaceController) -> None:
     fake_controller._service.next_detections = [
         _FakeDetection(bbox=BoundingBox(x=10, y=20, width=30, height=40), confidence=0.94),
     ]
-    first = client.post("/faces/recognize", files={"image": ("single.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
-    face_id = first.json()["faces"][0]["face_id"]
+    first = client.post("/api/v1/faces/recognize", files={"image": ("single.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    face_id = first.json()["faces"][0]["faceId"]
 
-    second = client.post("/faces/recognize", files={"image": ("single2.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
+    second = client.post("/api/v1/faces/recognize", files={"image": ("single2.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
     face = second.json()["faces"][0]
-    assert face["face_id"] == face_id
+    assert face["faceId"] == face_id
     assert face["status"] == "anonymous"
 
-    response = client.post("/faces/enroll", json={"face_id": face_id, "name": "Rachel", "metadata": {"role": "friend"}})
+    response = client.post(f"/api/v1/faces/{face_id}/enroll", json={"name": "Rachel", "metadata": {"role": "friend"}})
     assert response.status_code == 200
     assert response.json()["status"] == "known"
 
-    third = client.post("/faces/recognize", files={"image": ("single3.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
+    third = client.post("/api/v1/faces/recognize", files={"image": ("single3.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
     face = third.json()["faces"][0]
-    assert face["face_id"] == face_id
+    assert face["faceId"] == face_id
     assert face["status"] == "known"
     assert face["name"] == "Rachel"
     assert face["metadata"] == {"role": "friend"}
@@ -208,11 +218,11 @@ def test_recognize_multi_faces_returns_separate_results(client: TestClient, fake
         _FakeDetection(bbox=BoundingBox(x=10, y=20, width=30, height=40), confidence=0.92),
         _FakeDetection(bbox=BoundingBox(x=100, y=200, width=50, height=50), confidence=0.87),
     ]
-    response = client.post("/faces/recognize", files={"image": ("multi.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
+    response = client.post("/api/v1/faces/recognize", files={"image": ("multi.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
     assert response.status_code == 200
     data = response.json()
-    assert data["face_count"] == 2
-    assert len({f["face_id"] for f in data["faces"]}) == 2
+    assert data["faceCount"] == 2
+    assert len({f["faceId"] for f in data["faces"]}) == 2
     assert all(f["status"] == "new_anonymous" for f in data["faces"])
 
 
@@ -220,13 +230,13 @@ def test_enroll_existing_anonymous_returns_known(client: TestClient, fake_contro
     fake_controller._service.next_detections = [
         _FakeDetection(bbox=BoundingBox(x=10, y=20, width=30, height=40), confidence=0.9),
     ]
-    recognized = client.post("/faces/recognize", files={"image": ("x.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
-    face_id = recognized.json()["faces"][0]["face_id"]
+    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    face_id = recognized.json()["faces"][0]["faceId"]
 
-    response = client.post("/faces/enroll", json={"face_id": face_id, "name": "Rachel"})
+    response = client.post(f"/api/v1/faces/{face_id}/enroll", json={"name": "Rachel"})
     assert response.status_code == 200
     data = response.json()
-    assert data["face_id"] == face_id
+    assert data["faceId"] == face_id
     assert data["status"] == "known"
     assert data["name"] == "Rachel"
 
@@ -235,59 +245,61 @@ def test_get_face_detail_returns_known_identity(client: TestClient, fake_control
     fake_controller._service.next_detections = [
         _FakeDetection(bbox=BoundingBox(x=1, y=2, width=3, height=4), confidence=0.9),
     ]
-    recognized = client.post("/faces/recognize", files={"image": ("x.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
-    face_id = recognized.json()["faces"][0]["face_id"]
-    client.post("/faces/enroll", json={"face_id": face_id, "name": "Rachel", "metadata": {"show": "Friends"}})
+    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    face_id = recognized.json()["faces"][0]["faceId"]
+    client.post(f"/api/v1/faces/{face_id}/enroll", json={"name": "Rachel", "metadata": {"show": "Friends"}})
 
-    response = client.get(f"/faces/{face_id}")
+    response = client.get(f"/api/v1/faces/{face_id}")
     assert response.status_code == 200
     data = response.json()
-    assert data["face_id"] == face_id
+    assert data["faceId"] == face_id
     assert data["status"] == "known"
     assert data["name"] == "Rachel"
     assert data["metadata"] == {"show": "Friends"}
 
 
-def test_delete_face_returns_no_content(client: TestClient, fake_controller: FaceController) -> None:
+def test_delete_face_returns_ok_and_blocks_detail(client: TestClient, fake_controller: FaceController) -> None:
     fake_controller._service.next_detections = [
         _FakeDetection(bbox=BoundingBox(x=1, y=2, width=3, height=4), confidence=0.9),
     ]
-    recognized = client.post("/faces/recognize", files={"image": ("x.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
-    face_id = recognized.json()["faces"][0]["face_id"]
+    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    face_id = recognized.json()["faces"][0]["faceId"]
 
-    response = client.delete(f"/faces/{face_id}")
-    assert response.status_code == 204
+    response = client.delete(f"/api/v1/faces/{face_id}")
+    assert response.status_code == 200
+    assert "requestId" in response.json()
 
-    detail = client.get(f"/faces/{face_id}")
+    detail = client.get(f"/api/v1/faces/{face_id}")
     assert detail.status_code == 404
+    assert detail.json()["error"]["code"] == "FACE_NOT_FOUND"
 
 
 def test_get_face_history_lists_processes(client: TestClient, fake_controller: FaceController) -> None:
     fake_controller._service.next_detections = [
         _FakeDetection(bbox=BoundingBox(x=1, y=2, width=3, height=4), confidence=0.9),
     ]
-    recognized = client.post("/faces/recognize", files={"image": ("x.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
-    face_id = recognized.json()["faces"][0]["face_id"]
+    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    face_id = recognized.json()["faces"][0]["faceId"]
 
-    response = client.get(f"/faces/{face_id}/history")
+    response = client.get(f"/api/v1/faces/{face_id}/history")
     assert response.status_code == 200
     data = response.json()
-    assert data["face_id"] == face_id
+    assert data["faceId"] == face_id
     assert len(data["history"]) >= 1
-    assert "process_id" in data["history"][0]
+    assert "processId" in data["history"][0]
 
 
 def test_get_process_returns_completed_details(client: TestClient, fake_controller: FaceController) -> None:
     fake_controller._service.next_detections = [
         _FakeDetection(bbox=BoundingBox(x=1, y=2, width=3, height=4), confidence=0.9),
     ]
-    recognized = client.post("/faces/recognize", files={"image": ("x.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")})
-    process_id = recognized.json()["process_id"]
+    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
+    process_id = recognized.json()["processId"]
 
-    response = client.get(f"/processes/{process_id}")
+    response = client.get(f"/api/v1/processes/{process_id}")
     assert response.status_code == 200
     data = response.json()
-    assert data["process_id"] == process_id
-    assert data["process_type"] == "image_recognize"
+    assert data["processId"] == process_id
+    assert data["processType"] == "image_recognize"
     assert data["status"] == "completed"
-    assert data["face_count"] == 1
+    assert data["faceCount"] == 1

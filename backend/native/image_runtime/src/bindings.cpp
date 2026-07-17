@@ -1,4 +1,5 @@
 #include "pipeline.h"
+#include "model_profile.h"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -7,7 +8,8 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
-#include <fstream>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -20,30 +22,23 @@ namespace mergenvision {
 
 class ImageRuntime {
 public:
-    ImageRuntime(const std::string& model_profile_path,
+    ImageRuntime(const py::dict& model_profile,
                  const std::string& retinaface_engine_path,
                  const std::string& glintr100_engine_path,
                  int device_id,
                  int context_pool_size)
-        : model_profile_path_(model_profile_path),
-          device_id_(device_id),
-          context_pool_size_(context_pool_size) {
+        : device_id_(device_id),
+          context_pool_size_(context_pool_size),
+          profile_(ModelProfile::from_py_dict(model_profile)) {
         if (context_pool_size_ < 1) {
             throw std::invalid_argument("context_pool_size must be >= 1");
         }
-
-        // Validate that the model profile file exists.
-        std::ifstream check(model_profile_path);
-        if (!check) {
-            throw std::runtime_error("model profile not found: " + model_profile_path);
-        }
-        check.close();
 
         slots_.reserve(context_pool_size_);
         for (int i = 0; i < context_pool_size_; ++i) {
             std::string error;
             auto slot = std::make_unique<ExecutionSlot>(
-                device_id_, retinaface_engine_path, glintr100_engine_path, &error);
+                profile_, device_id_, retinaface_engine_path, glintr100_engine_path, &error);
             if (!slot || !slot->available()) {
                 throw std::runtime_error("failed to initialize execution slot " +
                                          std::to_string(i) + ": " + error);
@@ -66,10 +61,20 @@ public:
             throw std::runtime_error("GPU_OVERLOADED");
         }
 
+        // RAII ensures the slot is released even if a C++ exception or CUDA
+        // error unwinds the stack before infer_jpeg returns normally.
+        std::unique_ptr<ExecutionSlot, std::function<void(ExecutionSlot*)>> slot_guard(
+            slot, [this](ExecutionSlot* s) { release_slot(s); });
+
         std::string error;
         InferenceResult result;
-        bool ok = slot->infer_jpeg(ptr, len, &result, &error);
-        release_slot(slot);
+        bool ok;
+        {
+            // Release the Python GIL for the entire GPU inference pipeline so
+            // concurrent Python threads / asyncio executors are not serialized.
+            py::gil_scoped_release release_gil;
+            ok = slot->infer_jpeg(ptr, len, &result, &error);
+        }
         if (!ok) {
             throw std::runtime_error(error);
         }
@@ -144,7 +149,7 @@ private:
         cv_.notify_one();
     }
 
-    std::string model_profile_path_;
+    ModelProfile profile_;
     int device_id_ = 0;
     int context_pool_size_ = 1;
 
@@ -159,8 +164,8 @@ PYBIND11_MODULE(image_runtime, m) {
     m.doc() = "MergenVision native GPU image inference runtime";
 
     py::class_<mergenvision::ImageRuntime>(m, "ImageRuntime")
-        .def(py::init<const std::string&, const std::string&, const std::string&, int, int>(),
-             py::arg("model_profile_path"),
+        .def(py::init<const py::dict&, const std::string&, const std::string&, int, int>(),
+             py::arg("model_profile"),
              py::arg("retinaface_engine_path"),
              py::arg("glintr100_engine_path"),
              py::arg("device_id"),

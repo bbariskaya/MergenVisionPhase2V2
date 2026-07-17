@@ -139,11 +139,16 @@ class IdentityStorageLifecycleService:
             await uow.commit()
             return process
 
-    async def fail_process(self, process_id: ProcessId, error_code: str) -> None:
+    async def fail_process(
+        self,
+        process_id: ProcessId,
+        error_code: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         async with self._unit_of_work_factory() as uow:
             process = await uow.processes.get_by_id(process_id)
             if process is not None and process.status == "processing":
-                process.fail(error_code)
+                process.fail(error_code, details)
                 await uow.processes.update(process)
                 await uow.commit()
 

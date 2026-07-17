@@ -50,6 +50,15 @@ class SqlAlchemyFaceIdentityRepository:
         orm = result.scalar_one_or_none()
         return _to_domain(orm) if orm else None
 
+    async def get_active_by_id(self, face_id: FaceId) -> FaceIdentity | None:
+        result = await self._session.execute(
+            select(FaceIdentityOrm)
+            .where(FaceIdentityOrm.face_id == face_id)
+            .where(FaceIdentityOrm.is_active.is_(True))
+        )
+        orm = result.scalar_one_or_none()
+        return _to_domain(orm) if orm else None
+
     async def update(self, identity: FaceIdentity) -> None:
         result = await self._session.execute(
             select(FaceIdentityOrm).where(FaceIdentityOrm.face_id == identity.face_id)

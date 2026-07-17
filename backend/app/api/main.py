@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
+from uuid import UUID
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import HTTPException
+from fastapi.responses import JSONResponse, Response
 
 from app.api.controllers.face_controller import FaceController
 from app.api.routes import faces, processes
@@ -14,16 +17,31 @@ from app.application.services.identity_storage_lifecycle_service import (
     IdentityStorageLifecycleService,
 )
 from app.application.services.image_recognition_service import ImageRecognitionService
-from app.domain.errors import DomainError
+from app.domain.errors import (
+    DomainError,
+    InvalidMediaError,
+    PayloadTooLargeError,
+    UnsupportedMediaTypeError,
+)
+from app.infrastructure.config import settings
+from app.infrastructure.health.readiness import (
+    DefaultReadinessProbe,
+    ReadinessCheck,
+    ReadinessProbe,
+    ReadinessReport,
+)
 from app.infrastructure.persistence.sqlalchemy.session import async_session_maker
 from app.infrastructure.persistence.sqlalchemy.unit_of_work import SqlAlchemyUnitOfWork
-from app.infrastructure.config import settings
 from app.infrastructure.runtime.native_image_recognition_adapter import (
     NativeImageRecognitionAdapter,
 )
 from app.infrastructure.storage.minio_adapter import MinIOObjectStore
 from app.infrastructure.uuid7 import Uuid7Generator
 from app.infrastructure.vectors.qdrant_adapter import QdrantVectorStore
+
+
+def _generate_request_id() -> str:
+    return str(UUID(int=Uuid7Generator().new_uuid7().int))
 
 
 def _create_image_recognition_service() -> ImageRecognitionService:
@@ -54,12 +72,58 @@ def _create_face_controller() -> FaceController:
     return FaceController(service)
 
 
-@asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    yield
+def _safe_error_body(request_id: str, code: str, message: str, retryable: bool = False) -> dict[str, Any]:
+    return {
+        "requestId": request_id,
+        "error": {
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+            "details": {},
+        },
+    }
 
 
-def create_app() -> FastAPI:
+def create_app(readiness_probe: ReadinessProbe | None = None) -> FastAPI:
+    if readiness_probe is None:
+        readiness_probe = DefaultReadinessProbe(
+            settings_obj=settings,
+            session_maker=async_session_maker,
+            minio_store=MinIOObjectStore(),
+            qdrant_store=QdrantVectorStore(),
+        )
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        report = await readiness_probe.check()
+        app.state.readiness_report = report
+
+        if report.ready:
+            try:
+                app.state.face_controller = _create_face_controller()
+            except Exception as exc:
+                controller_report = ReadinessReport(
+                    ready=False,
+                    status="not_ready",
+                    message=f"native_runtime_init_failed: {exc}",
+                    checks=report.checks + (
+                        ReadinessCheck(
+                            name="native_runtime",
+                            ready=False,
+                            message=f"native runtime initialization failed: {exc}",
+                            retryable=True,
+                        ),
+                    ),
+                )
+                app.state.readiness_report = controller_report
+                app.state.face_controller = None
+        else:
+            app.state.face_controller = None
+
+        yield
+
+        app.state.face_controller = None
+
     app = FastAPI(
         title="MergenVision",
         description="GPU-accelerated persistent face identity API",
@@ -67,19 +131,121 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
-    app.state.face_controller = _create_face_controller()
+    @app.middleware("http")
+    async def _request_id_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        request_id = request.headers.get("X-Request-ID") or _generate_request_id()
+        request.state.request_id = request_id
+        response = await call_next(request)
+        if not response.headers.get("X-Request-ID"):
+            response.headers["X-Request-ID"] = request_id
+        return response
 
     @app.exception_handler(DomainError)
     async def _domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
         return JSONResponse(
-            status_code=400,
-            content={"error": exc.__class__.__name__, "message": str(exc)},
+            status_code=status.HTTP_400_BAD_REQUEST,
+            headers={"X-Request-ID": request_id},
+            content=_safe_error_body(request_id, "INVALID_REQUEST", str(exc)),
         )
 
-    @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    @app.exception_handler(PayloadTooLargeError)
+    async def _payload_too_large_handler(request: Request, exc: PayloadTooLargeError) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        return JSONResponse(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            headers={"X-Request-ID": request_id},
+            content=_safe_error_body(request_id, "PAYLOAD_TOO_LARGE", str(exc)),
+        )
 
-    app.include_router(faces.router)
-    app.include_router(processes.router)
+    @app.exception_handler(UnsupportedMediaTypeError)
+    async def _unsupported_media_handler(
+        request: Request, exc: UnsupportedMediaTypeError
+    ) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        return JSONResponse(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            headers={"X-Request-ID": request_id},
+            content=_safe_error_body(request_id, "UNSUPPORTED_MEDIA_TYPE", str(exc)),
+        )
+
+    @app.exception_handler(InvalidMediaError)
+    async def _invalid_media_handler(request: Request, exc: InvalidMediaError) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            headers={"X-Request-ID": request_id},
+            content=_safe_error_body(request_id, "INVALID_MEDIA", str(exc)),
+        )
+
+    @app.exception_handler(HTTPException)
+    async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        detail = exc.detail if isinstance(exc.detail, dict) else _safe_error_body(
+            request_id,
+            "INTERNAL_ERROR" if exc.status_code >= 500 else "INVALID_REQUEST",
+            str(exc.detail),
+        )
+        if isinstance(detail, dict) and "requestId" not in detail:
+            detail["requestId"] = request_id
+        return JSONResponse(
+            status_code=exc.status_code,
+            headers={"X-Request-ID": request_id},
+            content=detail,
+        )
+
+    @app.exception_handler(Exception)
+    async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_ERROR,
+            headers={"X-Request-ID": request_id},
+            content=_safe_error_body(
+                request_id,
+                "INTERNAL_ERROR",
+                "An unexpected internal error occurred.",
+            ),
+        )
+
+    @app.get("/health/live")
+    async def health_live(request: Request) -> dict[str, str]:
+        return {"status": "ok", "requestId": getattr(request.state, "request_id", "unknown")}
+
+    @app.get("/health/ready")
+    async def health_ready(request: Request) -> JSONResponse:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        report: ReadinessReport | None = getattr(app.state, "readiness_report", None)
+        if report is None:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                headers={"X-Request-ID": request_id},
+                content={
+                    "requestId": request_id,
+                    "ready": False,
+                    "status": "not_ready",
+                    "message": "readiness not initialized",
+                    "checks": [],
+                },
+            )
+
+        body = {
+            "requestId": request_id,
+            "ready": report.ready,
+            "status": report.status,
+            "message": report.message,
+            "checks": [
+                {"name": c.name, "ready": c.ready, "message": c.message, "retryable": c.retryable}
+                for c in report.checks
+            ],
+        }
+        if report.ready:
+            return JSONResponse(headers={"X-Request-ID": request_id}, content=body)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers={"X-Request-ID": request_id},
+            content=body,
+        )
+
+    app.include_router(faces.router, prefix="/api/v1")
+    app.include_router(processes.router, prefix="/api/v1")
     return app

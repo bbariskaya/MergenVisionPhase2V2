@@ -56,6 +56,13 @@ class MinIOObjectStore(ObjectStore):
     def _compute_sha256(self, data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()
 
+    async def check_access(self) -> None:
+        """Verify that the configured bucket is reachable.
+
+        Creates the bucket if it does not exist, proving write access.
+        """
+        await self._ensure_bucket()
+
     async def upload(self, key: str, data: bytes, content_type: str) -> ObjectStat:
         await self._ensure_bucket()
 

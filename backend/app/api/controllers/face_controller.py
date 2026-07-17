@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from app.api.schemas import (
     BoundingBoxSchema,
-    EnrollRequest,
     EnrollResponse,
     FaceHistoryResponse,
     FaceResponse,
@@ -40,35 +40,47 @@ class FaceController:
     def __init__(self, service: ImageRecognitionService) -> None:
         self._service = service
 
-    async def recognize(self, data: RecognizeRequestData) -> RecognizeResponse:
+    async def recognize(self, request_id: str, data: RecognizeRequestData) -> RecognizeResponse:
         result = await self._service.recognize_image(data.image_bytes)
         process = result.process
         return RecognizeResponse(
+            request_id=request_id,
             process_id=str(process.process_id),
             status=process.status,
             face_count=len(result.faces),
             faces=[self._to_face_response(f) for f in result.faces],
         )
 
-    async def enroll(self, request: EnrollRequest) -> EnrollResponse:
+    async def enroll(
+        self,
+        request_id: str,
+        face_id: str,
+        display_name: str,
+        metadata: dict[str, Any],
+    ) -> EnrollResponse:
         try:
-            face_id = FaceId(UUID(request.face_id))
+            parsed_face_id = FaceId(UUID(face_id))
         except ValueError as exc:
             raise ValidationError("face_id must be a valid UUID") from exc
 
         identity = await self._service.enroll_face(
-            face_id=face_id,
-            display_name=request.name,
-            metadata=request.metadata or {},
+            face_id=parsed_face_id,
+            display_name=display_name,
+            metadata=metadata or {},
         )
+        # Enroll uses its own internal process; we surface a synthetic
+        # processId correlation for the API envelope.
+        process_id = str(identity.process_id) if hasattr(identity, "process_id") and identity.process_id else request_id
         return EnrollResponse(
+            request_id=request_id,
+            process_id=process_id,
             face_id=str(identity.face_id),
             status=identity.status,
-            name=identity.display_name or request.name,
+            name=identity.display_name or display_name,
             metadata=dict(identity.identity_metadata),
         )
 
-    async def get_identity(self, face_id_str: str) -> IdentityDetailResponse | None:
+    async def get_identity(self, request_id: str, face_id_str: str) -> IdentityDetailResponse | None:
         try:
             face_id = FaceId(UUID(face_id_str))
         except ValueError as exc:
@@ -78,6 +90,7 @@ class FaceController:
         if identity is None:
             return None
         return IdentityDetailResponse(
+            request_id=request_id,
             face_id=str(identity.face_id),
             status=identity.status,
             name=identity.display_name,
@@ -86,16 +99,23 @@ class FaceController:
             updated_at=self._format_dt(identity.updated_at),
         )
 
-    async def delete_identity(self, face_id_str: str) -> bool:
+    async def delete_identity(self, request_id: str, face_id_str: str) -> EnrollResponse:
         try:
             face_id = FaceId(UUID(face_id_str))
         except ValueError as exc:
             raise ValidationError("face_id must be a valid UUID") from exc
 
         await self._service.delete_identity(face_id)
-        return True
+        return EnrollResponse(
+            request_id=request_id,
+            process_id=request_id,
+            face_id=face_id_str,
+            status="deleted",
+            name="",
+            metadata={},
+        )
 
-    async def get_history(self, face_id_str: str) -> FaceHistoryResponse:
+    async def get_history(self, request_id: str, face_id_str: str) -> FaceHistoryResponse:
         try:
             face_id = FaceId(UUID(face_id_str))
         except ValueError as exc:
@@ -103,6 +123,7 @@ class FaceController:
 
         history = await self._service.get_face_history(face_id)
         return FaceHistoryResponse(
+            request_id=request_id,
             face_id=face_id_str,
             history=[
                 HistoryEntry(
@@ -110,12 +131,14 @@ class FaceController:
                     timestamp=entry["timestamp"],
                     process_type=entry.get("process_type"),
                     status=entry.get("status"),
+                    recognition_status=entry.get("recognition_status"),
+                    match_confidence=entry.get("match_confidence"),
                 )
                 for entry in history
             ],
         )
 
-    async def get_process(self, process_id_str: str) -> ProcessResponse | None:
+    async def get_process(self, request_id: str, process_id_str: str) -> ProcessResponse | None:
         try:
             process_id = ProcessId(UUID(process_id_str))
         except ValueError as exc:
@@ -124,7 +147,7 @@ class FaceController:
         process = await self._service.get_process(process_id)
         if process is None:
             return None
-        return self._to_process_response(process)
+        return self._to_process_response(request_id, process)
 
     def _to_face_response(self, item: RecognitionResultItem) -> FaceResponse:
         return FaceResponse(
@@ -141,8 +164,9 @@ class FaceController:
             confidence=item.confidence,
         )
 
-    def _to_process_response(self, process: ProcessRecord) -> ProcessResponse:
+    def _to_process_response(self, request_id: str, process: ProcessRecord) -> ProcessResponse:
         return ProcessResponse(
+            request_id=request_id,
             process_id=str(process.process_id),
             process_type=process.process_type,
             status=process.status,

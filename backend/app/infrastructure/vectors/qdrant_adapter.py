@@ -6,6 +6,7 @@ import asyncio
 import math
 import uuid
 from collections.abc import Sequence
+from typing import Any
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
@@ -24,6 +25,16 @@ from app.domain.value_objects import FaceId, SampleId
 from app.infrastructure.config import settings
 
 DIMENSION = 512
+EXPECTED_DISTANCE = Distance.COSINE
+REQUIRED_PAYLOAD_INDEXES = {
+    "face_id": PayloadSchemaType.KEYWORD,
+    "active": PayloadSchemaType.BOOL,
+    "model_version": PayloadSchemaType.KEYWORD,
+}
+
+
+class QdrantCollectionContractError(RuntimeError):
+    """Raised when an existing collection does not match the required contract."""
 
 
 class QdrantVectorStore(VectorStore):
@@ -38,6 +49,7 @@ class QdrantVectorStore(VectorStore):
         self._model_version = model_version or settings.model_version
         self._client: AsyncQdrantClient | None = None
         self._ensure_lock = asyncio.Lock()
+        self._validated = False
 
     @property
     def client(self) -> AsyncQdrantClient:
@@ -54,33 +66,66 @@ class QdrantVectorStore(VectorStore):
         if norm == 0.0:
             raise ValidationError("Embedding norm must be non-zero")
 
+    def _validate_collection_contract(self, info: Any) -> None:
+        vectors = info.config.params.vectors
+        if not hasattr(vectors, "size") or vectors.size != DIMENSION:
+            raise QdrantCollectionContractError(
+                f"BLOCKED_QDRANT_COLLECTION_CONTRACT: dimension {getattr(vectors, 'size', None)} != {DIMENSION}"
+            )
+        if vectors.distance != EXPECTED_DISTANCE:
+            raise QdrantCollectionContractError(
+                f"BLOCKED_QDRANT_COLLECTION_CONTRACT: distance {vectors.distance} != {EXPECTED_DISTANCE}"
+            )
+
+        payload_schema = info.payload_schema or {}
+        for field, expected_type in REQUIRED_PAYLOAD_INDEXES.items():
+            index_info = payload_schema.get(field)
+            if index_info is None:
+                raise QdrantCollectionContractError(
+                    f"BLOCKED_QDRANT_COLLECTION_CONTRACT: missing payload index {field}"
+                )
+            actual_type = getattr(index_info, "data_type", None)
+            if actual_type != expected_type:
+                raise QdrantCollectionContractError(
+                    f"BLOCKED_QDRANT_COLLECTION_CONTRACT: {field} index type {actual_type} != {expected_type}"
+                )
+
+    def _raise_contract_error(self, reason: str) -> None:
+        raise QdrantCollectionContractError(f"BLOCKED_QDRANT_COLLECTION_CONTRACT: {reason}")
+
     async def _ensure_collection(self) -> None:
+        if self._validated:
+            return
+
         async with self._ensure_lock:
-            collections = await self.client.get_collections()
-            if any(c.name == self._collection_name for c in collections.collections):
+            if self._validated:
                 return
+
+            collections = await self.client.get_collections()
+            existing = any(c.name == self._collection_name for c in collections.collections)
+
+            if existing:
+                info = await self.client.get_collection(collection_name=self._collection_name)
+                self._validate_collection_contract(info)
+                self._validated = True
+                return
+
             await self.client.create_collection(
                 collection_name=self._collection_name,
                 vectors_config=VectorParams(size=DIMENSION, distance=Distance.COSINE),
             )
-            await self.client.create_payload_index(
-                collection_name=self._collection_name,
-                field_name="face_id",
-                field_schema=PayloadSchemaType.KEYWORD,
-                wait=True,
-            )
-            await self.client.create_payload_index(
-                collection_name=self._collection_name,
-                field_name="active",
-                field_schema=PayloadSchemaType.BOOL,
-                wait=True,
-            )
-            await self.client.create_payload_index(
-                collection_name=self._collection_name,
-                field_name="model_version",
-                field_schema=PayloadSchemaType.KEYWORD,
-                wait=True,
-            )
+            for field_name, field_schema in REQUIRED_PAYLOAD_INDEXES.items():
+                await self.client.create_payload_index(
+                    collection_name=self._collection_name,
+                    field_name=field_name,
+                    field_schema=field_schema,
+                    wait=True,
+                )
+            self._validated = True
+
+    async def ensure_collection(self) -> None:
+        """Public idempotent collection contract check (may create collection)."""
+        await self._ensure_collection()
 
     async def upsert(
         self,
@@ -117,7 +162,15 @@ class QdrantVectorStore(VectorStore):
         result = await self.client.query_points(
             collection_name=self._collection_name,
             query=list(embedding),
-            query_filter=Filter(must=[FieldCondition(key="active", match=MatchValue(value=True))]),
+            query_filter=Filter(
+                must=[
+                    FieldCondition(key="active", match=MatchValue(value=True)),
+                    FieldCondition(
+                        key="model_version",
+                        match=MatchValue(value=self._model_version),
+                    ),
+                ]
+            ),
             limit=top_k,
             with_payload=True,
         )
@@ -126,9 +179,12 @@ class QdrantVectorStore(VectorStore):
             payload = point.payload or {}
             face_id_str = payload.get("face_id")
             sample_id_str = payload.get("sample_id")
+            point_model_version = payload.get("model_version")
             if face_id_str is None or sample_id_str is None:
                 continue
             if str(point.id) != sample_id_str:
+                continue
+            if point_model_version != self._model_version:
                 continue
             try:
                 parsed_sample_id = uuid.UUID(str(point.id))

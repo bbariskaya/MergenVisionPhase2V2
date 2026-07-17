@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model_profile.h"
+
 #include <cuda_runtime.h>
 #include <string>
 #include <memory>
@@ -16,7 +18,10 @@ namespace mergenvision {
 
 class RetinaFaceEngine {
 public:
-    RetinaFaceEngine(const std::string& engine_path, int gpu_id, cudaStream_t stream);
+    RetinaFaceEngine(const ModelProfile& profile,
+                     const std::string& engine_path,
+                     int gpu_id,
+                     cudaStream_t stream);
     ~RetinaFaceEngine();
 
     bool init();
@@ -35,6 +40,7 @@ private:
     bool allocateBuffers();
     void destroy();
 
+    ModelProfile profile_;
     std::string engine_path_;
     int gpu_id_;
     cudaStream_t stream_;

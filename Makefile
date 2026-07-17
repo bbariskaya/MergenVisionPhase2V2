@@ -291,3 +291,48 @@ video-reference-friends-acceptance:
 	cd $(LAB_DIR) && $(LAB_MV) run-friends --config $(VIDEO_LAB_CONFIG)
 
 video-reference-acceptance: video-reference-ci video-reference-doctor-cpu video-reference-real-model-smoke-cpu video-reference-friends-acceptance
+
+# ==============================================================================
+# Phase 2 — Complete Video Recognition Product
+# ==============================================================================
+
+PHASE2_PROJECT := mergenvision-p2-test
+PHASE2_COMPOSE := docker compose -p $(PHASE2_PROJECT) -f $(COMPOSE_FILE)
+
+.PHONY: phase2-services \
+        phase2-step0-static phase2-step0-api-contract phase2-step0-storage \
+        phase2-step0-failure phase2-step0-native phase2-step0-closure \
+        phase2-migrations phase2-control-plane
+
+phase2-services:
+	$(PHASE2_COMPOSE) up -d $(TEST_SERVICES) --wait
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(ALEMBIC) upgrade head
+
+phase2-step0-static:
+	cd $(BACKEND_DIR) && $(RUFF) check app tests scripts
+	cd $(BACKEND_DIR) && $(MYPY) app
+
+phase2-step0-api-contract:
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/unit/api/test_phase2_step0_contract.py \
+	    tests/unit/api/test_health.py -q
+
+phase2-step0-storage:
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/integration/vectors/test_qdrant_model_version.py \
+	    tests/integration/lifecycle/test_delete_detail_history.py -q
+
+phase2-step0-failure:
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/unit/services/test_image_orchestration.py \
+	    tests/unit/api/test_image_validation.py -q
+
+phase2-step0-native:
+	cd $(BACKEND_DIR) && $(WITH_TEST_ENV) $(PYTEST) \
+	    tests/native/test_image_runtime_surface.py \
+	    tests/native/test_image_runtime_safety.py -q
+
+phase2-step0-closure: phase2-services \
+        phase2-step0-static phase2-step0-api-contract \
+        phase2-step0-storage phase2-step0-failure phase2-step0-native
+	git diff --check

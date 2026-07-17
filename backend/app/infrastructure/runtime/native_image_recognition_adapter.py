@@ -19,6 +19,7 @@ from app.application.ports.image_recognition import (
 from app.domain.errors import DomainError
 from app.domain.value_objects import BoundingBox
 from app.infrastructure.config import settings
+from app.infrastructure.model_profile import ModelProfile
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,9 @@ class NativeImageRecognitionAdapter(ImageRecognitionEngine):
         self._gpu_device_id = gpu_device_id if gpu_device_id is not None else settings.gpu_device_id
 
         try:
+            profile = ModelProfile.load(self._model_profile_path)
             self._runtime = image_runtime.ImageRuntime(
-                self._model_profile_path,
+                profile.model_dump(by_alias=True),
                 self._detector_engine_path,
                 self._recognizer_engine_path,
                 self._gpu_device_id,

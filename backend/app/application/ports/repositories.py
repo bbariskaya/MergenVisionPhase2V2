@@ -20,6 +20,9 @@ class FaceIdentityRepository(ABC):
     async def get_by_id(self, face_id: FaceId) -> FaceIdentity | None: ...
 
     @abstractmethod
+    async def get_active_by_id(self, face_id: FaceId) -> FaceIdentity | None: ...
+
+    @abstractmethod
     async def update(self, identity: FaceIdentity) -> None: ...
 
     @abstractmethod

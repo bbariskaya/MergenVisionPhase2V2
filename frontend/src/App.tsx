@@ -1,27 +1,37 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import Layout from './components/Layout'
-import Dashboard from './pages/Dashboard'
-import ImageTest from './pages/ImageTest'
-import VideoTest from './pages/VideoTest'
-import Faces from './pages/Faces'
-import Processes from './pages/Processes'
-import Analytics from './pages/Analytics'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { Layout } from '@/components/Layout'
+import { ToastContainer } from '@/components/Toast'
+import { useToast } from '@/hooks/useToast'
+import DashboardPage from '@/pages/DashboardPage'
+import EnrollPage from '@/pages/EnrollPage'
+import FaceDetailPage from '@/pages/FaceDetailPage'
+import IdentifyPage from '@/pages/IdentifyPage'
+import NotFoundPage from '@/pages/NotFoundPage'
+import ProcessDetailPage from '@/pages/ProcessDetailPage'
+import { Route, Routes } from 'react-router'
 
-function App() {
+function AppContent() {
+  const { toasts, removeToast } = useToast()
+
   return (
-    <BrowserRouter>
+    <Layout>
       <Routes>
-        <Route path="/" element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="image-test" element={<ImageTest />} />
-          <Route path="video-test" element={<VideoTest />} />
-          <Route path="faces" element={<Faces />} />
-          <Route path="processes" element={<Processes />} />
-          <Route path="analytics" element={<Analytics />} />
-        </Route>
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/identify" element={<IdentifyPage />} />
+        <Route path="/enroll/:faceId" element={<EnrollPage />} />
+        <Route path="/faces/:faceId" element={<FaceDetailPage />} />
+        <Route path="/processes/:processId" element={<ProcessDetailPage />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
-    </BrowserRouter>
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
+    </Layout>
   )
 }
 
-export default App
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  )
+}

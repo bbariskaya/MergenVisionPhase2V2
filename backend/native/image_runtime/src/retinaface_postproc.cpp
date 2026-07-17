@@ -1,18 +1,25 @@
 #include "retinaface_postproc.h"
 #include "mergenvision_kernels.h"
+#include "util.h"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
+#include <string>
 
 namespace mergenvision {
 
-static void checkCuda(cudaError_t err, const char* msg) {
+namespace {
+
+void checkCuda(cudaError_t err, const char* msg) {
     if (err != cudaSuccess) {
-        fprintf(stderr, "CUDA error %s: %s\n", msg, cudaGetErrorString(err));
-        abort();
+        throw std::runtime_error(
+            std::string("CUDA error in ") + msg + ": " + cudaGetErrorString(err));
     }
 }
+
+} // namespace
 
 RetinaFacePostproc::RetinaFacePostproc(int input_size, int max_candidates, int device_id, cudaStream_t stream)
     : input_size_(input_size), max_candidates_(max_candidates), device_id_(device_id), stream_(stream) {
@@ -147,8 +154,9 @@ std::vector<FaceDetection> RetinaFacePostproc::processFrame(
     float nms_threshold) {
 
     if (num_anchors != num_priors_) {
-        fprintf(stderr, "Anchor mismatch: %d vs %d\n", num_anchors, num_priors_);
-        return {};
+        throw std::runtime_error(
+            std::string("MODEL_CONTRACT_ERROR: anchor count ") +
+            std::to_string(num_anchors) + " != expected " + std::to_string(num_priors_));
     }
 
     // Initialize candidate buffers so invalid entries are scored/computed safely.
@@ -237,8 +245,9 @@ std::vector<std::vector<FaceDetection>> RetinaFacePostproc::processBatch(
     ensureBuffers(batch);
 
     if (num_anchors != num_priors_) {
-        fprintf(stderr, "Anchor mismatch: %d vs %d\n", num_anchors, num_priors_);
-        return per_frame;
+        throw std::runtime_error(
+            std::string("MODEL_CONTRACT_ERROR: anchor count ") +
+            std::to_string(num_anchors) + " != expected " + std::to_string(num_priors_));
     }
 
     const size_t per = static_cast<size_t>(max_candidates_);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "jpeg_decoder.h"
+#include "model_profile.h"
 #include "retinaface_engine.h"
 #include "retinaface_postproc.h"
 #include "glintr100_engine.h"
@@ -35,15 +36,24 @@ struct InferenceResult {
 
 class ExecutionSlot {
 public:
-    ExecutionSlot(int device_id,
+    enum class State {
+        uninitialized,
+        initialized,
+        unavailable,
+        in_use,
+    };
+
+    ExecutionSlot(const ModelProfile& profile,
+                  int device_id,
                   const std::string& retinaface_engine_path,
                   const std::string& glintr100_engine_path,
                   std::string* error);
     ~ExecutionSlot();
 
-    bool available() const { return !in_use_; }
-    void acquire() { in_use_ = true; }
-    void release() { in_use_ = false; }
+    State state() const { return state_; }
+    bool available() const { return state_ == State::initialized; }
+    void acquire() { state_ = State::in_use; }
+    void release() { state_ = State::initialized; }
 
     bool infer_jpeg(const void* jpeg_data,
                     std::size_t jpeg_size,
@@ -52,6 +62,8 @@ public:
 
 private:
     bool ensure_buffers(int max_faces, std::string* error);
+
+    ModelProfile profile_;
     int device_id_ = 0;
     cudaStream_t stream_ = nullptr;
 
@@ -74,7 +86,7 @@ private:
     float* h_aligned_crops_ = nullptr;
 
     int max_faces_ = 0;
-    bool in_use_ = false;
+    State state_ = State::uninitialized;
 };
 
 } // namespace mergenvision

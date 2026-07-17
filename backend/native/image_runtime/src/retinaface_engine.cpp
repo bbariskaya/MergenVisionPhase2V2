@@ -1,4 +1,5 @@
 #include "retinaface_engine.h"
+#include "model_profile.h"
 #include <NvInfer.h>
 #include <cuda_runtime.h>
 #include <fstream>
@@ -23,8 +24,11 @@ public:
     }
 };
 
-RetinaFaceEngine::RetinaFaceEngine(const std::string& engine_path, int gpu_id, cudaStream_t stream)
-    : engine_path_(engine_path), gpu_id_(gpu_id), stream_(stream) {}
+RetinaFaceEngine::RetinaFaceEngine(const ModelProfile& profile,
+                                   const std::string& engine_path,
+                                   int gpu_id,
+                                   cudaStream_t stream)
+    : profile_(profile), engine_path_(engine_path), gpu_id_(gpu_id), stream_(stream) {}
 
 RetinaFaceEngine::~RetinaFaceEngine() {
     destroy();
@@ -86,27 +90,27 @@ bool RetinaFaceEngine::init() {
         return false;
     }
 
-    const char* input_name = nullptr;
-    int nb = engine_->getNbIOTensors();
-    for (int i = 0; i < nb; ++i) {
-        const char* name = engine_->getIOTensorName(i);
-        if (engine_->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT) {
-            input_name = name;
+    // Validate the engine exposes the input tensor named by the model profile.
+    {
+        bool found = false;
+        int nb = engine_->getNbIOTensors();
+        for (int i = 0; i < nb && !found; ++i) {
+            const char* name = engine_->getIOTensorName(i);
+            if (engine_->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT &&
+                profile_.detector_input_name == name) {
+                found = true;
+            }
+        }
+        if (!found) {
+            logError("model profile input tensor '" + profile_.detector_input_name +
+                     "' not found in engine");
+            return false;
         }
     }
-    if (!input_name) {
-        logError("no input tensor found in engine");
-        return false;
-    }
-    input_name_ = input_name;
+    input_name_ = profile_.detector_input_name;
 
-    nvinfer1::Dims input_shape = engine_->getTensorShape(input_name);
-    if (input_shape.nbDims != 4) {
-        logError("unexpected input shape rank");
-        return false;
-    }
-    max_batch_size_ = getMaxBatchFromEngine(engine_, input_name);
-    input_size_ = input_shape.d[2];
+    max_batch_size_ = getMaxBatchFromEngine(engine_, input_name_.c_str());
+    input_size_ = profile_.detector_input_size;
     if (input_size_ <= 0) input_size_ = 640;
 
     const int steps[] = {8, 16, 32};
@@ -136,13 +140,11 @@ bool RetinaFaceEngine::allocateBuffers() {
     for (int i = 0; i < nb; ++i) {
         const char* name = engine_->getIOTensorName(i);
         if (engine_->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT) continue;
-        if (strcmp(name, "loc") == 0) {
+        if (profile_.detector_loc_name == name) {
             context_->setTensorAddress(name, d_loc_);
-        } else if (strcmp(name, "conf") == 0) {
+        } else if (profile_.detector_conf_name == name) {
             context_->setTensorAddress(name, d_conf_);
-        } else if (strcmp(name, "landms") == 0) {
-            context_->setTensorAddress(name, d_landms_);
-        } else if (strcmp(name, "landmark") == 0) {
+        } else if (profile_.detector_landms_name == name) {
             context_->setTensorAddress(name, d_landms_);
         }
     }

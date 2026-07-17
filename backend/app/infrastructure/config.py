@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     inference_slot_count: int = 1
     match_threshold: float = 0.55
     max_image_bytes: int = 25 * 1024 * 1024
+    max_image_width: int = 8192
+    max_image_height: int = 8192
+    max_image_pixels: int = 67_108_864
 
     log_level: str = "INFO"
 

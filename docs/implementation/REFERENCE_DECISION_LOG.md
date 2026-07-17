@@ -495,3 +495,103 @@
 | Failing test/reproducer | Friends benchmark JSON previously showed `max_active_tracks_estimate: 0`. |
 | Parity/runtime acceptance command | Full `run-friends --max-frames 300`. |
 | Known limitation | Counts tracked tracklets only; lost tracklets are not included in the active estimate. |
+
+---
+
+## DEC-024 — Native Execution Slot Lifecycle
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-024 |
+| Local feature/symbol | `backend/native/image_runtime/src/pipeline.h`, `backend/native/image_runtime/src/pipeline.cpp`, `ExecutionSlot` |
+| Reference URL | `AGENTS.md` §13, §18 |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `ExecutionSlot::available()`, `ExecutionSlot::acquire()`, `ExecutionSlot::release()` |
+| Behavior adopted | Add explicit `ExecutionSlot::State` enum (`uninitialized`, `initialized`, `unavailable`, `in_use`) so a slot whose engine/decoder/stream fails to initialize is marked `unavailable` and is never acquired by `ImageRuntime`. |
+| Behavior explicitly rejected | Continuing to use a plain `bool in_use_` that silently reports `available() == true` after constructor failure. |
+| Local modifications | Added `state_` member; constructor sets `unavailable` on every early-return path and `initialized` only on full success. |
+| Failing test/reproducer | `backend/tests/native/test_image_runtime_safety.py::test_image_runtime_constructor_rejects_broken_slots` |
+| Parity/runtime acceptance command | `make phase2-step0-native` inside the pinned TensorRT container. |
+| Known limitation | C++ source compiles only when CUDA/TensorRT headers are available; host `.venv` skips native tests. |
+
+---
+
+## DEC-025 — Model Profile JSON Parsing in Native Runtime
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-025 |
+| Local feature/symbol | `backend/native/image_runtime/src/model_profile.cpp`, `backend/native/image_runtime/src/model_profile.h`, `backend/app/infrastructure/model_profile.py` |
+| Reference URL | `AGENTS.md` §21, §33; canonical profile JSON |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `ModelProfile::from_py_dict`, detector/recognizer/alignment sections |
+| Behavior adopted | Parse `alignment.crop_size` as `[h, w]`, validate square, store as `alignment_crop_h/w`. Validate detector/recognizer dynamic_profile.max shapes against the parsed input shapes and declared batch maxima. |
+| Behavior explicitly rejected | Treating `crop_size` as scalar int; ignoring dynamic profile contract. |
+| Local modifications | Added `get_list` helper and `validate_4d_shape`; replaced scalar parse with list parse; added dynamic profile checks. |
+| Failing test/reproducer | `backend/tests/native/test_image_runtime_surface.py::test_image_runtime_parses_alignment_crop_size_as_list` |
+| Parity/runtime acceptance command | `make phase2-step0-native` inside the pinned TensorRT container. |
+| Known limitation | Host `.venv` cannot import `image_runtime`; real parse validation needs container build. |
+
+---
+
+## DEC-026 — Native `ImageRuntime` Python Contract Takes a Parsed Profile Dict
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-026 |
+| Local feature/symbol | `backend/native/image_runtime/src/bindings.cpp`, `backend/app/infrastructure/runtime/native_image_recognition_adapter.py`, `backend/tests/native/test_image_runtime_*.py` |
+| Reference URL | `AGENTS.md` §21 |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `ImageRuntime` pybind constructor, `NativeImageRecognitionAdapter.__init__` |
+| Behavior adopted | C++ `ImageRuntime` keeps `const py::dict&` constructor; Python adapter loads the canonical `ModelProfile`, validates it, and passes `model_dump(by_alias=True)` dict to the native module. Native tests use the same dict. |
+| Behavior explicitly rejected | Changing the C++ constructor to load a filesystem path, which would duplicate JSON validation and bypass the Pydantic contract. |
+| Local modifications | `NativeImageRecognitionAdapter._init_runtime` now calls `ModelProfile.load(...)`; native tests call `_load_profile()` helper. |
+| Failing test/reproducer | `backend/tests/native/test_image_runtime_safety.py` (path-string variant was broken) |
+| Parity/runtime acceptance command | `make phase2-step0-native` inside the pinned TensorRT container. |
+| Known limitation | None once module is built. |
+
+---
+
+## DEC-027 — TensorRT Engine Build Manifest Script and Digest-Pinned Container
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-027 |
+| Local feature/symbol | `backend/scripts/build_engines.py`, `backend/Dockerfile.gpu` |
+| Reference URL | `AGENTS.md` §12, §33 |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `trtexec --onnx`, `trtexec --minShapes/--optShapes/--maxShapes` |
+| Behavior adopted | Script builds both engines from ONNX using `trtexec` with the exact dynamic profiles from the JSON, verifies ONNX SHA256, computes engine SHA256, and updates the `engine_manifest` container digest, TensorRT/CUDA versions, GPU compute capability/uuid, and build timestamp. |
+| Behavior explicitly rejected | Shell-only builder with untracked commands and manual SHA updates; mutable TensorRT base image tag. |
+| Local modifications | Added `backend/scripts/build_engines.py`; `Dockerfile.gpu` already pins TensorRT image digest. |
+| Failing test/reproducer | `make phase2-step0-native` when `engine_manifest` is missing or stale. |
+| Parity/runtime acceptance command | Run `backend/scripts/build_engines.py` inside the pinned TensorRT container and verify manifest engine SHA256. |
+| Known limitation | Script cannot be executed on a non-GPU host; it requires `nvidia-smi`, `nvcc`, and `trtexec` from the container. |
+
+---
+
+## DEC-028 — Configurable Native CUDA Architectures
+
+| Field | Value |
+|---|---|
+| Decision ID | DEC-028 |
+| Local feature/symbol | `backend/native/image_runtime/CMakeLists.txt` |
+| Reference URL | CMake `CMAKE_CUDA_ARCHITECTURES` documentation |
+| Repository commit/tag | N/A |
+| Access date | 2026-07-17 |
+| Repository license | Proprietary |
+| Inspected upstream files/symbols | `cmake_policy`, `CUDA_ARCHITECTURES` setting |
+| Behavior adopted | Default architecture list `75;80;86;89` is kept but can be overridden via the `CMAKE_CUDA_ARCHITECTURES` environment variable to allow local build tuning. |
+| Behavior explicitly rejected | Permanently hardcoding `75` only, which would produce broken code for newer GPUs. |
+| Local modifications | `CMakeLists.txt` reads `CMAKE_CUDA_ARCHITECTURES` from env, else applies the default list. |
+| Failing test/reproducer | Native build on a compute capability 8.6 or 8.9 GPU. |
+| Parity/runtime acceptance command | `make phase2-step0-native` inside the pinned TensorRT container. |
+| Known limitation | User may need to set a narrower architecture list for faster container rebuilds. |

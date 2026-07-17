@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model_profile.h"
+
 #include <NvInfer.h>
 #include <cuda_runtime.h>
 
@@ -42,12 +44,17 @@ public:
     GlintR100Engine(const GlintR100Engine&) = delete;
     GlintR100Engine& operator=(const GlintR100Engine&) = delete;
 
-    /* Deserialize engine and validate tensor contract.
+    /* Deserialize engine and validate tensor contract using hardcoded defaults
+     * retained for backward compatibility tests. Prefer load(profile, ...).
+     */
+    bool load(int gpu_id, const std::string& engine_path, std::string* error);
+
+    /* Deserialize engine and validate tensor contract from the model profile.
      * gpu_id selects the CUDA device. engine_path must point to a
      * serialized engine compatible with the linked TensorRT runtime.
      * Returns true on success and false on error (message in error).
      */
-    bool load(int gpu_id, const std::string& engine_path, std::string* error);
+    bool load(int gpu_id, const ModelProfile& profile, const std::string& engine_path, std::string* error);
 
     bool loaded() const { return engine_ != nullptr; }
 
@@ -76,6 +83,7 @@ private:
     int gpu_id_ = 0;
     std::string engine_path_;
     Contract contract_;
+    ModelProfile profile_;
 
     nvinfer1::IRuntime* runtime_ = nullptr;
     nvinfer1::ICudaEngine* engine_ = nullptr;

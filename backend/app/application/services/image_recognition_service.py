@@ -105,14 +105,33 @@ class ImageRecognitionService:
             {"model_version": self._model_version},
         )
 
-        engine = await self._get_engine()
+        try:
+            engine = await self._get_engine()
+        except Exception:
+            await self._lifecycle.fail_process(
+                process.process_id, "native_runtime_unavailable"
+            )
+            raise
+
         try:
             raw = await engine.detect_and_embed(image_bytes)
         except Exception:
             await self._lifecycle.fail_process(process.process_id, "native_inference_failed")
             raise
 
-        faces = await self._resolve_detections(process.process_id, raw.detections)
+        partial_outcomes: list[RecognitionOutcome] = []
+        try:
+            faces = await self._resolve_detections(
+                process.process_id, raw.detections, partial_outcomes
+            )
+        except Exception:
+            await self._lifecycle.fail_process(
+                process.process_id,
+                "identity_resolution_failed",
+                {"partial_face_count": len(partial_outcomes)},
+            )
+            raise
+
         details = {
             "model_version": self._model_version,
             "image_width": raw.image_width,
@@ -130,17 +149,24 @@ class ImageRecognitionService:
         self,
         process_id: ProcessId,
         detections: list[NativeFaceDetection],
+        partial_outcomes: list[RecognitionOutcome],
     ) -> list[RecognitionResultItem]:
         outcomes: list[RecognitionOutcome] = []
-        for det in detections:
-            outcome = await self._lifecycle.resolve_or_create_for_process(
-                process_id=process_id,
-                crop_bytes=det.aligned_crop_bytes,
-                embedding=det.embedding,
-                bbox=det.bounding_box,
-                match_threshold=self._match_threshold,
-            )
-            outcomes.append(outcome)
+        try:
+            for det in detections:
+                outcome = await self._lifecycle.resolve_or_create_for_process(
+                    process_id=process_id,
+                    crop_bytes=det.aligned_crop_bytes,
+                    embedding=det.embedding,
+                    bbox=det.bounding_box,
+                    match_threshold=self._match_threshold,
+                )
+                outcomes.append(outcome)
+                partial_outcomes.append(outcome)
+        except Exception:
+            # Partial results are intentionally left persisted; the caller will
+            # mark the overall process as failed.
+            raise
 
         identity_meta: dict[FaceId, tuple[str | None, dict[str, Any]]] = {}
         for outcome in outcomes:
@@ -187,7 +213,7 @@ class ImageRecognitionService:
 
     async def get_identity_detail(self, face_id: FaceId) -> FaceIdentity | None:
         async with self._unit_of_work_factory() as uow:
-            return await uow.face_identities.get_by_id(face_id)
+            return await uow.face_identities.get_active_by_id(face_id)
 
     async def delete_identity(self, face_id: FaceId) -> bool:
         await self._lifecycle.deactivate_identity(face_id)

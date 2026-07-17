@@ -1,73 +1,123 @@
-import { NavLink } from 'react-router-dom'
-import {
-  LayoutDashboard,
-  Scan,
-  Play,
-  Users,
-  ListVideo,
-  BarChart3,
-  Settings,
-} from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { LayoutDashboard, ScanFace, X } from 'lucide-react'
+import { Link, useLocation } from 'react-router'
 
-const nav = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard },
-  { to: '/image-test', label: 'Image Test', icon: Scan },
-  { to: '/video-test', label: 'Video Test', icon: Play },
-  { to: '/faces', label: 'Faces', icon: Users },
-  { to: '/processes', label: 'Processes', icon: ListVideo },
-  { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-]
-
-function Sidebar({ open }: { open: boolean }) {
-  return (
-    <aside
-      className={`flex flex-col border-r border-[var(--color-border)] bg-[var(--color-panel)] transition-all duration-200 ${
-        open ? 'w-56' : 'w-16'
-      }`}
-    >
-      <div className="flex h-16 items-center gap-3 border-b border-[var(--color-border)] px-4">
-        <img src="/logo.svg" alt="MergenVision" className="h-9 w-9" />
-        {open && (
-          <div>
-            <p className="text-sm font-semibold text-[var(--color-foreground)]">MergenVision</p>
-            <p className="text-[10px] uppercase tracking-wider text-[var(--color-dim)]">Operations</p>
-          </div>
-        )}
-      </div>
-      <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-        {nav.map((item) => {
-          const Icon = item.icon
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                `group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all ${
-                  isActive
-                    ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]'
-                    : 'text-[var(--color-muted)] hover:bg-[var(--color-elevated)] hover:text-[var(--color-foreground)]'
-                } ${open ? '' : 'justify-center'}`
-              }
-            >
-              <Icon size={20} />
-              {open && <span>{item.label}</span>}
-            </NavLink>
-          )
-        })}
-      </nav>
-      <div className="border-t border-[var(--color-border)] p-3">
-        <button
-          type="button"
-          className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-[var(--color-muted)] transition-colors hover:bg-[var(--color-elevated)] hover:text-[var(--color-foreground)] ${
-            open ? '' : 'justify-center'
-          }`}
-        >
-          <Settings size={20} />
-          {open && <span>Settings</span>}
-        </button>
-      </div>
-    </aside>
-  )
+export interface SidebarProps {
+  mobileOpen: boolean
+  onClose: () => void
 }
 
-export default Sidebar
+interface NavItem {
+  to: string
+  label: string
+  icon: typeof LayoutDashboard
+}
+
+const mainItems: NavItem[] = [
+  { to: '/', label: 'Genel Bakış', icon: LayoutDashboard },
+  { to: '/identify', label: 'Yüz Tanıma', icon: ScanFace },
+]
+
+export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
+  const location = useLocation()
+
+  function isActive(path: string) {
+    if (path === '/') return location.pathname === '/'
+    return location.pathname.startsWith(path)
+  }
+
+  function NavLink({ item, onClick }: { item: NavItem; onClick?: () => void }) {
+    const Icon = item.icon
+    const active = isActive(item.to)
+    return (
+      <Link
+        to={item.to}
+        onClick={onClick}
+        className={cn(
+          'group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2',
+          active
+            ? 'bg-white/10 text-white'
+            : 'text-navy-300 hover:bg-white/5 hover:text-white',
+        )}
+        aria-current={active ? 'page' : undefined}
+      >
+        <span
+          className={cn(
+            'absolute left-0 h-5 w-0.5 rounded-r-full transition-all',
+            active ? 'bg-primary' : 'bg-transparent',
+          )}
+          aria-hidden="true"
+        />
+        <Icon className="h-5 w-5" aria-hidden="true" />
+        {item.label}
+      </Link>
+    )
+  }
+
+  function NavGroup({ items, onClick, label }: { items: NavItem[]; onClick?: () => void; label: string }) {
+    return (
+      <nav className="flex flex-col gap-1 px-3" aria-label={label}>
+        {items.map((item) => (
+          <NavLink key={item.to} item={item} onClick={onClick} />
+        ))}
+      </nav>
+    )
+  }
+
+  const brand = (
+    <div className="flex items-center gap-4">
+      <img
+        src="/interprobe_logo.jpeg"
+        alt="Interprobe"
+        className="h-14 w-auto rounded-md"
+      />
+      <div className="flex flex-col">
+        <span className="text-lg font-bold leading-tight text-white">Interprobe</span>
+        <span className="text-xs text-navy-300">Yüz Tanıma Platformu</span>
+      </div>
+    </div>
+  )
+
+  const content = (
+    <>
+      <div className="flex-1 space-y-6 py-5">
+        <NavGroup items={mainItems} label="Ana navigasyon" />
+      </div>
+      <div className="border-t border-navy-800 p-4">
+        <p className="text-[11px] leading-relaxed text-navy-400">
+          Interprobe Yüz Tanıma Platformu
+          <span className="block text-navy-500">v0.1.0 · Demo Ortamı</span>
+        </p>
+      </div>
+    </>
+  )
+
+  return (
+    <>
+      <aside className="hidden w-64 flex-col bg-navy-900 lg:flex">
+        <div className="flex h-20 items-center px-5">{brand}</div>
+        {content}
+      </aside>
+
+      {mobileOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden" data-testid="mobile-drawer">
+          <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden="true" />
+          <div className="absolute left-0 top-0 flex h-full w-64 flex-col bg-navy-900 shadow-xl">
+            <div className="flex h-20 items-center justify-between px-4">
+              {brand}
+              <button
+                onClick={onClose}
+                className="rounded p-1.5 text-navy-300 hover:bg-navy-800 hover:text-white focus-visible:ring-primary"
+                aria-label="Menüyü kapat"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            {content}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}

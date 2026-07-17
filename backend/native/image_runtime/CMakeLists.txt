@@ -5,7 +5,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES 75)
+
+# Allow the build to target the actual GPU architecture via cache variable or
+# environment variable. Defaults to a conservative set (Turing+).
+if(DEFINED ENV{CMAKE_CUDA_ARCHITECTURES})
+    set(CMAKE_CUDA_ARCHITECTURES "$ENV{CMAKE_CUDA_ARCHITECTURES}" CACHE STRING "CUDA architectures" FORCE)
+else()
+    set(CMAKE_CUDA_ARCHITECTURES "75;80;86;89" CACHE STRING "CUDA architectures")
+endif()
+
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 find_package(CUDAToolkit REQUIRED)
@@ -61,6 +69,7 @@ target_link_libraries(image_runtime_cuda PRIVATE CUDA::cudart CUDA::cuda_driver)
 pybind11_add_module(image_runtime
     src/bindings.cpp
     src/pipeline.cpp
+    src/model_profile.cpp
     src/jpeg_decoder.cpp
     src/webp_encoder.cpp
     src/retinaface_engine.cpp
