@@ -1,6 +1,6 @@
 ---
 name: impact-analysis
-description: Bir fonksiyon, sınıf veya dosyanın etki alanını codebase-memory graph üzerinden haritalar. Trigger: "etki analizi", "impact analysis", "kim çağırıyor", "bu değişiklik neyi etkiler", "refactor riski", "who calls this".
+description: "Bir fonksiyon, sınıf veya dosyanın etki alanını codebase-memory graph üzerinden haritalar. Trigger: etki analizi, impact analysis, kim çağırıyor, bu değişiklik neyi etkiler, refactor riski, who calls this."
 when_to_use: "Trigger phrases: impact analysis, etki analizi, kim çağırıyor, neyi etkiler, refactor riski, dependency map. Kullanıcı bir sembol veya dosya üzerinde değişiklik düşünüyor ve etki alanını görmek istiyorsa bu skill'i kullan."
 allowed-tools: mcp__codebase-memory-mcp__search_graph mcp__codebase-memory-mcp__trace_path mcp__codebase-memory-mcp__query_graph mcp__codebase-memory-mcp__get_code_snippet
 ---

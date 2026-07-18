@@ -1,4 +1,5 @@
 """Public data types for Phase 1 GPU bulk extraction."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -21,6 +22,20 @@ class FaceExtraction:
     model_version: str = ""
     preprocess_version: str = ""
 
+    def to_compact_dict(self) -> dict[str, Any]:
+        return {
+            "source_index": self.source_index,
+            "detection_ordinal": self.detection_ordinal,
+            "bbox_original": self.bbox_original.tolist(),
+            "landmarks_original": self.landmarks_original.tolist(),
+            "detector_score": self.detector_score,
+            "quality_primitives": self.quality_primitives,
+            "embedding": self.embedding.tolist(),
+            "embedding_norm": self.embedding_norm,
+            "model_version": self.model_version,
+            "preprocess_version": self.preprocess_version,
+        }
+
 
 @dataclass
 class ImageExtractionResult:
@@ -28,7 +43,7 @@ class ImageExtractionResult:
     source_key: str
     original_width: int
     original_height: int
-    status: str  # accepted, no_face, multi_face, decode_failed, inference-error, ...
+    status: str  # accepted, no_face, quarantine, decode_failed, inference-error, low_quality
     rejection_reason: str | None = None
     faces: list[FaceExtraction] = field(default_factory=list)
 
@@ -40,21 +55,7 @@ class ImageExtractionResult:
             "original_height": self.original_height,
             "status": self.status,
             "rejection_reason": self.rejection_reason,
-            "faces": [
-                {
-                    "source_index": f.source_index,
-                    "detection_ordinal": f.detection_ordinal,
-                    "bbox_original": f.bbox_original.tolist(),
-                    "landmarks_original": f.landmarks_original.tolist(),
-                    "detector_score": f.detector_score,
-                    "quality_primitives": f.quality_primitives,
-                    "embedding": f.embedding.tolist(),
-                    "embedding_norm": f.embedding_norm,
-                    "model_version": f.model_version,
-                    "preprocess_version": f.preprocess_version,
-                }
-                for f in self.faces
-            ],
+            "faces": [f.to_compact_dict() for f in self.faces],
         }
 
 
@@ -64,8 +65,9 @@ class PersonRecord:
 
     person_id: str
     display_name: str
-    status: str = "active"  # active | inactive
-    metadata: dict[str, Any] = field(default_factory=dict)
+    is_active: bool = True
+    person_metadata: dict[str, Any] = field(default_factory=dict)
+    version: int = 1
 
 
 @dataclass
@@ -74,12 +76,11 @@ class FaceRecord:
 
     face_id: str
     person_id: str
-    model_version: str
-    status: str = "active"  # active | inactive
-    is_canonical: bool = True
-    # ``display_name`` and ``metadata`` are mirrored from person for Phase 2 search.
+    status: str = "known"  # known | anonymous
+    is_active: bool = True
     display_name: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
+    identity_metadata: dict[str, Any] = field(default_factory=dict)
+    version: int = 1
 
 
 @dataclass
@@ -88,15 +89,13 @@ class SampleRecord:
 
     sample_id: str
     face_id: str
-    person_id: str
-    status: str = "pending"  # pending | active | failed | inactive
+    state: str = "pending"  # pending | active | failed | inactive
     bucket: str | None = None
     object_key: str | None = None
-    sha256: str = ""
-    model_version: str = ""
-    preprocess_version: str = ""
-    rejection_reason: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    failure_code: str | None = None
+    is_active: bool = False
+    activated_at: str | None = None
+    deactivated_at: str | None = None
 
 
 @dataclass
@@ -122,26 +121,12 @@ class EnrollmentOutcome:
     failed_sample_ids: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
+    def to_compact_dict(self) -> dict[str, Any]:
         return {
-            "source_index": self.source_index,
-            "source_key": self.source_key,
-            "original_width": self.original_width,
-            "original_height": self.original_height,
-            "status": self.status,
-            "rejection_reason": self.rejection_reason,
-            "faces": [
-                {
-                    "source_index": f.source_index,
-                    "detection_ordinal": f.detection_ordinal,
-                    "bbox_original": f.bbox_original.tolist(),
-                    "landmarks_original": f.landmarks_original.tolist(),
-                    "detector_score": f.detector_score,
-                    "quality_primitives": f.quality_primitives,
-                    "embedding": f.embedding.tolist(),
-                    "embedding_norm": f.embedding_norm,
-                    "model_version": f.model_version,
-                    "preprocess_version": f.preprocess_version,
-                }
-                for f in self.faces
-            ],
+            "external_subject_key": self.external_subject_key,
+            "person_id": self.person_id,
+            "face_id": self.face_id,
+            "persisted_sample_ids": self.persisted_sample_ids,
+            "failed_sample_ids": self.failed_sample_ids,
+            "errors": self.errors,
         }

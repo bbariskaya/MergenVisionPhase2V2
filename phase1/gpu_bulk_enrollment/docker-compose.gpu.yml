@@ -4,21 +4,35 @@ services:
       context: .
       dockerfile: Dockerfile.gpu
     image: mv-phase1-bulk:latest
-    runtime: nvidia
+    env_file:
+      - .env
     environment:
-      - NVIDIA_VISIBLE_DEVICES=0,1,2
-      - CUDA_VISIBLE_DEVICES=0,1,2
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    network_mode: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - /path/to/dataset:/dataset:ro
-      - /path/to/artifacts:/artifacts
-      - ../../backend/artifacts/models:/models:ro
+      - ${MV_DATASET_ROOT}:/dataset:ro
+      - ${MV_ARTIFACTS_ROOT}:/artifacts
     command:
       - enroll
       - --dataset-root
       - /dataset
       - --manifest
       - /dataset/manifest.jsonl
+      - --source-namespace
+      - ${MV_SOURCE_NAMESPACE}
+      - --profile
+      - config/model_profile.json
       - --gpu-devices
-      - "0,1,2"
+      - "0"
       - --batch-size
       - "16"

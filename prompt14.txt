@@ -1,0 +1,1399 @@
+Abi durdurman doğru olmuş. Güncel HEAD’i inceledim: agent eski planı canlı şemadan üstün tutmuş ve mevcut Phase 1 scaffold’u şu an çalışır durumda değil. Özellikle yanlış PostgreSQL mapping’i, GPU batch association hataları, Python/Docker uyuşmazlığı ve echo-only CLI var.
+
+Üç sorunun bağlayıcı cevabı:
+
+Eski plan yanlış; canlı ORM/migration takip edilecek: FaceIdentity, FaceSample.
+MinIO key kesin olarak faces/{face_id}/{sample_id}/aligned.webp.
+ID sistemi MergenVisionDemo’daki HMAC + purpose-separated UUIDv5 yaklaşımı olacak; çıplak klasör adından UUIDv5 yapılmayacak. Demo ID implementation.
+
+Bunu aynen gönder:
+
+QWEN — BUILD MODE RECOVERY DIRECTIVE
+PHASE 1 ISOLATED GPU BULK ENROLLMENT
+
+ÖNEMLİ: ŞU AN IMPLEMENTASYONA KÖRLEMESİNE DEVAM ETME.
+
+Mevcut source üzerinde yapılan bağımsız audit, canlı Phase 2 şeması ile oluşturduğun Phase 1 persistence contract’ı arasında ciddi uyuşmazlıklar ve GPU batch pipeline’da correctness hataları buldu.
+
+Bu prompt önceki planın çelişen bütün bölümlerini supersede eder.
+
+Kullanıcıdan aşağıdaki kararları tekrar sorma. Kararlar bağlayıcıdır.
+
+======================================================================
+0. REPOSITORY / REFERENCE / BASELINE
+======================================================================
+
+Aktif repository:
+
+  /home/user/Workspace/MergenVisionPhase2v2
+
+GitHub:
+
+  https://github.com/bbariskaya/MergenVisionPhase2V2
+
+Audit edilen başlangıç HEAD:
+
+  777145b93a52e2f4cf71b70facd39c1d60aaed3d
+
+Reference repository:
+
+  /home/user/Workspace/MergenVisionDemo
+
+GitHub reference:
+
+  https://github.com/bbariskaya/MergenVisionDemo
+
+Reference commit:
+
+  5bf4b4c57542b26058e8d068186faee06c0fc29c
+
+Yazılabilir production source prefix:
+
+  phase1/gpu_bulk_enrollment/**
+
+Yazılabilir runtime artifact prefix:
+
+  .artifacts/phase1_gpu_bulk_enrollment/**
+
+Protected/read-only:
+
+  backend/**
+  frontend/**
+  research/**
+  requirements/**
+  docs/**
+  root Makefile
+  root Dockerfile/Compose dosyaları
+  migrations
+  mevcut Phase 2 testleri
+  MergenVisionDemo’nun tamamı
+
+`backend/**` altında infer_jpeg_batch ekleme.
+Mevcut image/video engine veya adapter’larını değiştirme.
+Mevcut base64 batch-enroll API scaffold’unu genişletme.
+Yeni migration, tablo, kolon veya Phase 2 service oluşturma.
+Git commit/push/add yapma.
+
+Current HEAD’de daha önce oluşmuş `.claude/...` ve `prompt13.txt` değişikliklerini artık başlangıç baseline’ının parçası kabul et, fakat onları değiştirme, silme veya özel exception ile gizleme.
+
+Bundan sonraki bütün source değişiklikleri yalnız allowlist içinde olmalıdır.
+
+======================================================================
+1. ÜRÜN AMACI
+======================================================================
+
+Bu araç bağımsız bir benchmark demosu değildir.
+
+Amaç:
+
+1. Kullanıcı tarafından sağlanan read-only yüz dataset’ini okumak.
+2. Her klasörü/manifest subject’ini bir global Person olarak değerlendirmek.
+3. Fotoğrafları gerçek batched GPU hot path ile işlemek.
+4. Accepted örneklerden known FaceIdentity ve FaceSample üretmek.
+5. Kayıtları mevcut Phase 2 PostgreSQL, MinIO ve Qdrant’a yazmak.
+6. Sonradan mevcut image ve video pipeline’ın bu kişileri known olarak tanımasını sağlamak.
+7. Retry/resume sırasında duplicate Person, FaceIdentity, FaceSample veya Qdrant point üretmemek.
+8. Bir ve üç GPU performansını dürüstçe benchmark etmek.
+
+Bir subject için:
+
+  1 Person
+  1 canonical active known FaceIdentity
+  N accepted active FaceSample
+
+olmalıdır.
+
+Her fotoğraf için yeni Person veya FaceIdentity oluşturma.
+
+Dataset folder/display name aynı şey değildir:
+
+- `external_subject_key`: kararlı teknik kaynak kimliği
+- `display_name`: kullanıcıya gösterilen isim
+
+ID üretiminde display name kullanma.
+
+======================================================================
+2. SOURCE-OF-TRUTH SIRASI
+======================================================================
+
+Çelişki halinde sıralama:
+
+1. Bu prompttaki güncel kullanıcı kararları.
+2. Güncel HEAD’deki gerçek migration.
+3. Güncel HEAD’deki gerçek SQLAlchemy ORM.
+4. Güncel lifecycle, MinIO ve Qdrant adapter source’u.
+5. MergenVisionDemo commit 5bf4b4c içindeki çalışan compute/queue/ID pattern’leri.
+6. Phase 1 package içindeki güncellenmiş TARGET_CONTRACT.
+7. `.claude/plans/phase1-gpu-bulk-enrollment-plan.md`.
+
+`.claude/plans/...` dosyasının mevcut schema açıklaması yanlıştır ve source-of-truth değildir. Dosya protected olduğu için değiştirme; yalnız görmezden gel.
+
+======================================================================
+3. ÜÇ BAĞLAYICI KARAR
+======================================================================
+
+Karar 1 — PostgreSQL contract
+
+Canlı Phase 2 ORM ve migration kullanılacaktır.
+
+Person:
+
+  person_id
+  display_name
+  person_metadata
+  is_active
+  version
+  created_at
+  updated_at
+  deleted_at
+
+FaceIdentity:
+
+  face_id
+  status                 # yalnız anonymous | known
+  is_active
+  display_name
+  identity_metadata
+  person_id              # nullable; known identity için zorunlu
+  redirect_to_face_id
+  version
+  created_at
+  updated_at
+  deleted_at
+
+FaceSample:
+
+  sample_id
+  face_id
+  state                  # pending | active | failed | inactive
+  bucket
+  object_key
+  failure_code
+  is_active
+  created_at
+  activated_at
+  deactivated_at
+
+Özellikle:
+
+- `face_identity_id` diye kolon yok; doğru ad `face_id`.
+- FaceIdentity’de `model_version` yok.
+- FaceIdentity’de `is_canonical` yok.
+- FaceIdentity status’u `active` değildir; `known` veya `anonymous` olur.
+- FaceSample’da `person_id` yok.
+- FaceSample’da `status` yok; doğru alan `state`.
+- FaceSample’da `sha256`, `model_version`, `preprocess_version`, bbox, landmarks, quality_score veya metadata yok.
+- Person’da `status` ve `metadata` yok; doğru alanlar `is_active` ve `person_metadata`.
+
+Bu olmayan kolonları INSERT/UPDATE/SELECT etme.
+
+Karar 2 — MinIO key
+
+Target Phase 2 contract:
+
+  faces/{face_id}/{sample_id}/aligned.webp
+
+Content-Type:
+
+  image/webp
+
+MinIO’ya raw dataset JPEG’i değil, accepted 112×112 aligned face crop yazılacaktır.
+
+Demo’daki:
+
+  enrollments/{person_id}/{photo_id}
+
+formatı target sistem için yanlıştır; kopyalama.
+
+Karar 3 — Deterministic ID
+
+MergenVisionDemo’daki privacy boundary adapte edilecektir:
+
+  identity_key =
+      source_namespace + ":" + normalized_external_subject_key
+
+  identity_hmac =
+      HMAC-SHA256(required_secret, identity_key)
+
+  person_id =
+      UUIDv5(PERSON_NAMESPACE, identity_hmac)
+
+  face_id =
+      UUIDv5(FACE_NAMESPACE, identity_hmac)
+
+  sample_id =
+      UUIDv5(
+          SAMPLE_NAMESPACE,
+          face_id
+          + ":" + source_image_sha256
+          + ":" + model_version
+          + ":" + preprocess_version
+      )
+
+Person ve face_id model değişti diye değişmemelidir. Persistent identity modelden bağımsızdır. Model/preprocess versiyonu sample ID’ye girer.
+
+Zorunlu secret:
+
+  MV_PHASE1_BULK_ID_HMAC_KEY
+
+Hardcoded/default secret yasaktır.
+
+Resume sırasında secret fingerprint’i önceki run journal ile uyuşmuyorsa:
+
+  BLOCKED_ID_NAMESPACE_MISMATCH
+
+döndür.
+
+Raw external_subject_key, klasör yolu veya dataset kişi adı loglara, MinIO key’e, Qdrant payload’a veya benchmark raporuna yazılmayacaktır.
+
+======================================================================
+4. MEVCUT PHASE 1 SOURCE’TA KANITLANMIŞ HATALAR
+======================================================================
+
+Şu anki package tamamlanmış değildir. Önce bunları düzelt.
+
+1. `types.py` sonunda duplicate/yanlış indent edilmiş `return {...}` var.
+   Mevcut hali SyntaxError/import failure üretir.
+
+2. `postgres_store.py` canlı schema ile tamamen uyumsuz kolonlar kullanıyor.
+
+3. `postgres_store.py` makineye özel:
+
+     /home/user/Workspace/MergenVisionPhase2v2/backend
+
+   path’ini sys.path’e ekliyor. Production source’ta absolute host path yasaktır.
+
+4. Broad `except Exception` ile yanlış fallback table contract’ına geçiliyor.
+   Schema/import/network/config hatası sessizce fallback olmamalıdır.
+
+5. Existing active sample’ı retry sırasında tekrar pending yapmak veri bozulmasıdır.
+   Active hiçbir kayıt pending’e downgrade edilmez.
+
+6. Existing Person conflict’inde display name/metadata’yı körlemesine overwrite etme.
+   User rename edilmiş olabilir.
+
+7. Existing redirected/inactive FaceIdentity’yi reactivate etme.
+
+8. `pipeline.py` `ctypes` kullanıyor fakat import etmiyor.
+
+9. Detector TensorRT engine close edilmiyor.
+
+10. Demo’daki alignment/L2 GPU status kontrolleri düşürülmüş.
+
+11. `embedding_norm=1.0` ve `quality_primitives["l2_norm"]=1.0`
+    gerçek ölçüm yapılmadan hardcode edilmiş.
+
+12. Score D2H async copy tamamlanmadan `float(score_h[0])` okunuyor.
+
+13. Corrupt image fallback’inde compact valid-image index ile original input index
+    karışıyor.
+
+14. `valid_host` buffer boyutu total batch olarak ayrılmış fakat GPU output yalnız
+    valid image count kadar olabilir. Out-of-bounds D2H riski vardır.
+
+15. Detection/embedding yanlış source image’e bağlanabilir.
+    `valid_original_indices` mapping zorunludur.
+
+16. `multi_face_policy="quarantine"` dokümante edilmiş fakat uygulanmıyor.
+    Kod her zaman largest face seçiyor.
+
+17. Default bulk enrollment davranışı multi-face görüntüyü quarantine etmelidir.
+    Silent largest-face enrollment identity poisoning yaratabilir.
+
+18. `crop_bytes` her extraction’da `b""`.
+    Bu haliyle gerçek Phase 2 MinIO lifecycle çalışamaz.
+
+19. Chunk-level systemic CUDA/TensorRT error raw exception stringiyle per-image
+    result’a çevriliyor. Fatal GPU error job’ı fail etmelidir.
+
+20. `Dockerfile.gpu` Python 3.11 kullanıyor, pyproject Python 3.12 istiyor.
+
+21. Docker `pip install -e .` komutunu package source/README/CMake kopyalanmadan
+    çalıştırıyor.
+
+22. `config/model_profile.json` makineye özel `/home/user/...` ONNX path’leri içeriyor,
+    fakat container `/models` mount ediyor.
+
+23. Engine path üç ayrı biçimde resolve ediliyor.
+
+24. Engine builder tracked `model_profile.json` dosyasını runtime SHA/timestamp ile
+    mutate ediyor.
+
+25. Engine build `.part → validate → atomic rename` yapmıyor.
+
+26. Engine manifest GPU UUID, compute capability, CUDA/TRT exact version ve container
+    digest taşımıyor.
+
+27. `cli.py` içindeki validate-manifest, enroll, benchmark, reconcile ve report
+    komutları yalnız echo yapıyor.
+
+28. `admission.py`, `benchmark.py`, `identities.py`, `persistence.py`, `queues.py`,
+    `reconciliation.py`, `reporting.py` boş.
+
+29. Birçok native header/source boş placeholder.
+
+30. CMake kullanılmayan SCRFD kodunu ve boş source’ları build graph’a ekliyor.
+
+31. `_reference_face_pipeline.py` izole package içinde eski `app.*` import’ları
+    taşıyan reference snapshot’tır; production runtime tarafından import edilmemelidir.
+
+32. `TARGET_CONTRACT.md` yanlış kolon ve yanlış MinIO key açıklıyor.
+
+33. `config.py` yanlış ve tehlikeli default’lar içeriyor:
+
+      database user/pass
+      minioadmin
+      bucket=mergenvision
+      qdrant collection=faces
+
+34. Secret ve shared storage adreslerinin güvenli default’u olmamalı; zorunlu env olmalı.
+
+35. Qdrant adapter herhangi bir exception’da collection yaratmaya çalışıyor.
+    Network/auth/contract hatası “collection yok” olarak yorumlanmamalı.
+
+36. Qdrant mevcut collection dimension/distance/payload index contract’ını
+    doğrulamıyor.
+
+37. Embedding finite/norm kontrolü persistence boundary’de yapılmıyor.
+
+38. MinIO adapter existing object stat/size/SHA conflict’ini doğrulamadan overwrite
+    yapıyor.
+
+39. `phase2-untouched` gate full eski git tree manifestini current HEAD ile
+    karşılaştırıyor ve allowlist mantığıyla çelişiyor.
+
+40. Gate `.claude` ve prompt dosyalarına hardcoded exception eklemiş.
+    Protected path için exception olmayacaktır.
+
+41. Gerçek contract/native/integration/acceptance testleri yok; yalnız import testi var.
+
+42. `download_lfw.py` hardcoded/destructive davranış içeriyor.
+    Çalıştırma. Dataset indirme/silme/kopyalama yapma.
+
+43. LFW veya diğer dataset production Docker build context’ine alınmayacaktır.
+    Dataset yalnız `/dataset:ro` bind mount olacaktır.
+
+Bu listeyi `notes` diye geçme. Düzeltmeler implementation gate’idir.
+
+======================================================================
+5. DOĞRU AYRIM: DEMO’DAN NEYİ AL, NEYİ ALMA
+======================================================================
+
+MergenVisionDemo’dan source-level incele/adapte et:
+
+- `GpuFacePipeline.extract_batch`
+- `JpegGpuDecoder.decode_batch`
+- `BufferArena`
+- `TrtDeviceEngine`
+- RetinaFace batch preprocess
+- RetinaFace CUDA decode/NMS/scale/compact
+- GPU five-point alignment
+- GlintR100 dynamic batch
+- GPU L2 status handling
+- bounded producer/consumer
+- process-per-GPU ownership
+- HMAC + purpose-separated UUIDv5
+- deterministic person sharding
+- benchmark measurement pattern
+
+MergenVisionDemo’dan KOPYALAMA:
+
+- Demo PostgreSQL schema/ORM
+- `face_identity_id` field names
+- PersonPhoto tablosu
+- Demo raw-image MinIO key
+- `enrollments/{person_id}/{photo_id}`
+- Qdrant camelCase payload
+- `personId`, `photoId`, `modelVersion`
+- Demo national-ID alanları
+- Demo process type’ları
+- Demo API endpoints
+- Demo model alternatifi/SCRFD branch’i
+- Demo’nun silent `pick_largest=True` product semantics’i
+
+Demo compute reference’tir.
+Target persistence contract Phase 2 canlı source’udur.
+
+======================================================================
+6. DOĞRU GPU HOT PATH
+======================================================================
+
+Frozen models:
+
+  backend/artifacts/models/retinaface_r50_dynamic.onnx
+  backend/artifacts/models/glintr100.onnx
+
+Başka model yok.
+SCRFD yok.
+CPU inference fallback yok.
+
+Target:
+
+  encoded JPEG batch
+    → GPU batch decode
+    → GPU RetinaFace preprocess
+    → TensorRT RetinaFace batch
+    → GPU decode/NMS/landmarks
+    → per-image face count
+    → admission decision
+    → GPU five-point alignment
+    → recognizer crop batch
+    → TensorRT GlintR100
+    → GPU L2 normalization
+    → compact result D2H
+    → small aligned crop D2H + WebP encode
+
+Full decoded frame D2H yasaktır.
+
+Python/OpenCV/Pillow full-image decode veya resize yasaktır.
+
+Small 112×112 aligned crop’un CPU’da WebP encode edilmesi kabul edilebilir.
+Bu encode compute-only benchmark’a dahil edilip edilmediği açıkça yazılmalıdır.
+
+Default admission:
+
+- zero face → `no_face`
+- exactly one valid face → candidate
+- more than one face → `multi_face_quarantine`
+- corrupt image → `decode_failed`
+- systemic GPU error → batch/job failure
+- invalid landmarks/alignment → rejected
+- non-finite/zero norm embedding → rejected
+
+Largest-face mode yalnız explicit diagnostic flag ile kullanılabilir; production enrollment default’u olamaz.
+
+Association contract:
+
+Her result şunları korur:
+
+- input ordinal
+- source key HMAC/fingerprint
+- original dimensions
+- detection ordinal
+- bbox original coordinates
+- landmarks original coordinates
+- detector score
+- embedding
+- measured norm
+- aligned WebP
+- model version
+- preprocess version
+- rejection code
+
+Mixed batch:
+
+  valid, corrupt, no-face, valid
+
+gibi olduğunda sonuçlar kesinlikle doğru original input’a dönmelidir.
+
+======================================================================
+7. ENGINE / CONTAINER CONTRACT
+======================================================================
+
+Separate Phase 1 engine kullanılması bağlayıcıdır.
+
+Phase 2 engine/source değiştirilmez.
+
+MergenVisionDemo’nun gerçekten çalışan CUDA/TensorRT/Python stack’ini source ve
+container üzerinden doğrula. Exact uyumlu stack seç ve tek yerde pinle.
+
+Separate Phase 1 TRT 10.3 kullanılabilir; fakat:
+
+- builder ve runtime exact aynı TRT version
+- exact aynı CUDA major/minor
+- engine yalnız Phase 1 container’da load edilir
+- başka repo venv’inin libnvinfer dosyaları kullanılmaz
+- Phase 2 engine dosyası Phase 1 runtime’a load edilmez
+- host’ta engine build edilip container’a taşınmaz
+- base image digest pinlenir
+- Python version pyproject/Docker/runtime arasında aynıdır
+
+Canonical artifact:
+
+  .artifacts/phase1_gpu_bulk_enrollment/
+    engines/
+      <runtime-fingerprint>/
+        retinaface.engine
+        glintr100.engine
+        manifest.json
+
+Runtime fingerprint en az:
+
+- base image digest
+- TensorRT exact version
+- CUDA exact version
+- NVIDIA driver
+- GPU UUID
+- compute capability
+- ONNX SHA
+- engine SHA
+- profiles
+- precision
+- build command
+- build timestamp
+
+Tracked `config/model_profile.json` immutable model contract olarak kalır.
+Generated engine metadata tracked source’a yazılmaz.
+
+Engine build:
+
+  temporary .part
+    → build
+    → deserialize
+    → real inference smoke
+    → SHA
+    → atomic promote
+
+şeklinde olmalıdır.
+
+Batch 256 plan üzerinde yazıyor diye güvenli kabul etme.
+
+Matrix:
+
+  1, 2, 4, 8, 16, 32, 64, 128, 256
+
+yalnız engine profile ve GPU memory izin verdiği ölçüde denenir.
+
+OOM veya correctness divergence varsa daha küçük measured default seçilir.
+
+======================================================================
+8. MANIFEST / DATASET CONTRACT
+======================================================================
+
+Dataset yalnız read-only mount:
+
+  /dataset:ro
+
+Manifest JSONL her subject için en az:
+
+  source_namespace
+  external_subject_key
+  display_name
+  metadata
+  images[]
+
+Her image:
+
+  relative_path
+  optional expected_sha256
+
+İsteğe bağlı:
+
+  target_person_id
+
+`target_person_id` verilmişse:
+
+- Yeni Person oluşturma.
+- Existing active Person’ı doğrula.
+- Existing canonical active known FaceIdentity’yi bul.
+- Aynı face_id’ye yeni samples ekle.
+- Display name ile Person eşleştirmesi yapma.
+
+`target_person_id` verilmemişse deterministic Person/Face oluştur.
+
+Path güvenliği:
+
+- absolute path reject
+- `..` traversal reject
+- symlink root escape reject
+- non-regular file reject
+- unsupported extension reject
+- max byte/dimension guard
+
+Dataset path ve subject folder adı public loglara yazılmaz.
+
+======================================================================
+9. TARGET CROSS-STORE LIFECYCLE
+======================================================================
+
+Phase 1 ayrı persistence adapter’ları yazabilir fakat yalnız mevcut storage’lara
+ve gerçek schema’ya yazmalıdır.
+
+Yeni tablo/migration yok.
+
+Run/checkpoint ledger:
+
+  .artifacts/phase1_gpu_bulk_enrollment/runs/<run_id>/
+
+altında tutulur.
+
+Current process_record constraint’inde `bulk_enroll` veya `bulk_enroll_shard`
+yoktur. Bu process_type’larla PostgreSQL’e kayıt yazma.
+
+Her accepted sample için sıra:
+
+1. Deterministic IDs hesapla.
+2. Existing Person/Face/Sample conflict contract’ını kontrol et.
+3. PostgreSQL:
+   - Person create-if-absent
+   - canonical known FaceIdentity create-if-absent
+   - FaceSample pending:
+     state=pending
+     is_active=false
+     bucket=NULL
+     object_key=NULL
+4. Commit.
+5. Aligned WebP’yi deterministic MinIO key’e upload et.
+6. Existing object varsa size + SHA doğrula.
+7. Qdrant point’i batch upsert et, acceptance’ta `wait=true`.
+8. Qdrant point:
+   - id = sample_id
+   - 512-D finite normalized vector
+   - payload:
+       sample_id
+       face_id
+       active=true
+       model_version
+9. PostgreSQL FaceSample:
+   - state=active
+   - is_active=true
+   - bucket set
+   - object_key set
+   - activated_at set
+10. Commit/checkpoint.
+
+Failure:
+
+- MinIO failure:
+  sample failed + failure_code=minio_upload_failed
+
+- Qdrant failure:
+  MinIO object compensation
+  sample failed + failure_code=qdrant_upsert_failed
+
+- PG activation failure:
+  Qdrant delete/deactivate
+  MinIO delete
+  sample failed/reconciliation record
+
+Retry:
+
+- active sample asla pending’e dönmez
+- existing active sample PG/MinIO/Qdrant ile verify edilir
+- missing derived artifact repair edilir
+- ID conflict başka person/face’e aitse fail-closed
+- user-managed Person fields overwrite edilmez
+- redirected/inactive identity reactivate edilmez
+
+Qdrant collection:
+
+  face_samples_retinaface_r50_glintr100_v1
+
+Model version:
+
+  retinaface_r50_glintr100_v1
+
+Environment bunu farklı verirse fail-fast.
+
+Collection zaten varsa:
+
+- dimension=512
+- distance=Cosine
+- face_id keyword index
+- active bool index
+- model_version keyword index
+
+doğrulanır.
+
+Network/auth error’da collection oluşturmayı deneme.
+
+======================================================================
+10. MULTI-GPU
+======================================================================
+
+Her worker process tam olarak bir fiziksel GPU’ya sahip olmalıdır.
+
+Tercih edilen model:
+
+  worker-gpu-0 → physical GPU 0 → internal CUDA device 0
+  worker-gpu-1 → physical GPU 1 → internal CUDA device 0
+  worker-gpu-2 → physical GPU 2 → internal CUDA device 0
+
+CUDA importundan önce visibility ayarlanır.
+
+Sharding:
+
+  uuid.UUID(person_id).int % worker_count
+
+veya HMAC digest tabanlı kararlı modulo.
+
+Python built-in `hash()` kullanma.
+Fotoğraf bazlı sharding yapma.
+Aynı subject’in bütün fotoğrafları tek worker’a gider.
+
+Bounded katmanlar:
+
+- filesystem read queue
+- GPU extraction queue
+- persistence queue
+- result/checkpoint queue
+
+Unbounded asyncio task/gather oluşturma.
+Persistence yavaşsa GPU producer’a backpressure uygula.
+
+Current package-local compose tek container’a bütün GPU’ları açıyor ve gerçek storage
+env’lerini taşımıyor. Bunu package-local dosya içinde düzelt.
+
+Root compose’a dokunma.
+
+======================================================================
+11. 30 ADIMLIK RECOVERY / IMPLEMENTATION SIRASI
+======================================================================
+
+Aşağıdaki sırayı bozma. Her green gate sonrası mikro-onay istemeden devam et.
+
+Adım 1 — Gerçek baseline
+
+- git status --short -uall
+- git rev-parse HEAD
+- git diff --name-status
+- bütün untracked Phase 1 source’larını listele
+- HEAD=777145b veya gerçek current HEAD’i kaydet
+- protected base SHA’yı run ledger’a yaz
+
+Çıkış:
+source ve dirty state eksiksiz bilinmeli.
+
+Adım 2 — MCP context
+
+Zorunlu:
+
+- prompt-memory-mcp:
+  MergenVision, MergenVisionDemo, Phase 1 bulk enrollment memory search
+- codebase-memory-mcp:
+  target source + reference call graph
+- GitHub connector:
+  current target HEAD + Demo commit
+- deepwiki:
+  reference architecture gerekiyorsa
+- context7:
+  SQLAlchemy/Qdrant/MinIO/TensorRT/CMake version API’leri
+
+İlk memory checkpoint:
+
+  phase1_gpu_bulk_enrollment_recovery_started
+
+Her milestone sonunda verified kararları prompt-memory’ye store et.
+Tool çağrılmadıysa kullanıldı deme.
+
+Adım 3 — Untouched gate’i tamir et
+
+Gate:
+
+- yalnız iki allowlist prefix’i hariç tutar
+- bütün diğer tracked/staged/untracked değişikliklerde fail eder
+- hardcoded user-file exception içermez
+- task-start base SHA ile karşılaştırır
+- allowlist classification unit testine sahip olur
+
+Çıkış:
+gate hem synthetic protected path’te fail hem allowlisted path’te pass etmeli.
+
+Adım 4 — Import/static recovery
+
+- `types.py` SyntaxError düzelt
+- bütün package importları
+- Ruff
+- format check
+- mypy
+- compileall
+
+Çıkış:
+fresh environment’ta package import green.
+
+Adım 5 — Target contract düzeltmesi
+
+Yalnız:
+
+  phase1/gpu_bulk_enrollment/docs/TARGET_CONTRACT.md
+
+güncellenir.
+
+Live ORM/migration/lifecycle/Qdrant/MinIO contract birebir yazılır.
+
+Çıkış:
+nonexistent hiçbir kolon bulunmamalı.
+
+Adım 6 — Reference source map
+
+Demo commit 5bf4b4c source dosyalarını symbol-level eşleştir:
+
+- source path
+- symbol
+- copied/adapted
+- license/provenance
+- target değişikliği
+- neden
+
+Çıkış:
+`.claude` summary yerine gerçek source evidence.
+
+Adım 7 — Container recovery
+
+- Python version tutarlı
+- source kopyalandıktan sonra install
+- base digest pinli
+- dependency versions pinli/locked
+- no `latest`
+- no host absolute path
+- no dependency download at runtime
+- no dataset in build context
+
+Çıkış:
+
+  docker build --no-cache ...
+
+gerçekten green.
+
+Adım 8 — Model contract
+
+Gerçek ONNX inspect:
+
+- SHA
+- opset
+- input/output tensor names
+- dtype
+- dynamic batch dimension
+- exact RetinaFace anchor count/levels
+- GlintR100 512-D output
+- preprocess
+- alignment template
+
+Profile’daki stride/anchor uyumsuzluğunu source/ONNX üzerinden çöz.
+
+Çıkış:
+hardcoded tahmin değil doğrulanmış contract.
+
+Adım 9 — Engine builder recovery
+
+- canonical artifact root
+- immutable source profile
+- atomic build
+- runtime fingerprint
+- deserialize smoke
+- batch profiles
+- engine SHA
+
+Çıkış:
+real GPU batch=1 inference.
+
+Adım 10 — Native surface cleanup
+
+- boş source’ları completion sayma
+- kullanılmayan SCRFD’yi build graph’tan çıkar
+- duplicate reference binding’i runtime’a bağlama
+- yalnız gerçekten kullanılan CUDA operatorleri build et
+- her exported symbol için smoke test
+
+Çıkış:
+native module import ve kernel launch green.
+
+Adım 11 — Pipeline resource lifecycle
+
+- missing ctypes
+- detector close
+- CUDA stream close
+- decoder/arena/recognizer/aligner close
+- partial-init cleanup
+- context manager test
+
+Çıkış:
+20 repeated init/infer/close sonrası GPU memory baseline’a dönmeli.
+
+Adım 12 — Alignment/L2 status
+
+Demo’daki gerçek status buffer kontrolünü geri getir:
+
+- degenerate landmark
+- non-finite alignment
+- non-finite embedding
+- zero norm
+
+Çıkış:
+invalid input persistence’a ulaşmaz.
+
+Adım 13 — Mixed batch mapping
+
+Failing test:
+
+  valid_A, corrupt_B, no_face_C, valid_D
+
+Expected:
+
+- A embedding A’ya
+- B decode_failed
+- C no_face
+- D embedding D’ye
+
+`valid_original_indices` ile explicit mapping yap.
+
+Çıkış:
+source association deterministic.
+
+Adım 14 — Async stream correctness
+
+Host buffer hiçbir zaman stream sync/event tamamlanmadan okunmaz.
+
+Çıkış:
+100 repeated batch sonucu identical.
+
+Adım 15 — Multi-face contract
+
+- face count korunur
+- default quarantine
+- largest yalnız diagnostic opt-in
+- no silent identity poisoning
+
+Çıkış:
+multi-face test stable reason code döndürür.
+
+Adım 16 — Aligned crop
+
+- selected GPU chip
+- yalnız küçük 112×112 D2H
+- WebP encode
+- non-empty bytes
+- decode edilen crop 112×112
+- content type image/webp
+
+Çıkış:
+MinIO’ya yazılabilir gerçek crop.
+
+Adım 17 — Batch parity
+
+Real fixtures:
+
+- batch 1
+- batch 2/4/8/16
+- partial batch
+- mixed dimensions
+- corrupt middle item
+
+Compare:
+
+- bbox tolerance
+- landmark tolerance
+- embedding cosine
+- status/rejection
+- input ordering
+
+Çıkış:
+batch association ve output parity green.
+
+Adım 18 — Manifest security
+
+- traversal
+- absolute path
+- symlink escape
+- duplicate subject
+- duplicate image
+- SHA mismatch
+- missing file
+- invalid display name
+
+Çıkış:
+deterministic, read-only manifest.
+
+Adım 19 — ID system
+
+MergenVisionDemo HMAC pattern’ini adapte et.
+
+Tests:
+
+- same input same IDs
+- order-independent
+- display rename does not change IDs
+- different source namespace changes IDs
+- model/preprocess change changes sample only
+- secret change blocks resume
+- raw source key outputta sızmaz
+
+Adım 20 — Identity bundle
+
+- one person
+- one canonical known face
+- many samples
+- optional existing target_person_id
+
+Çıkış:
+subject grouping doğru.
+
+Adım 21 — PostgreSQL adapter
+
+Yanlış fallback’i kaldır.
+
+Seçenek:
+
+- exact SQLAlchemy Core mapping + startup schema reflection validation
+- veya backend model importu olmadan exact validated contract
+
+Ancak:
+
+- broad fallback yok
+- absolute path yok
+- nonexistent columns yok
+- active→pending downgrade yok
+- existing ownership conflict validation var
+
+Real PostgreSQL contract test zorunlu.
+
+Adım 22 — MinIO adapter
+
+- exact bucket config required
+- exact technical key
+- existing stat
+- size/SHA compare
+- conflict fail
+- bounded concurrency
+- aligned WebP only
+
+Real MinIO integration test zorunlu.
+
+Adım 23 — Qdrant adapter
+
+- exact collection validation
+- required indexes
+- finite 512-D norm validation
+- lowercase payload
+- point ID=sample_id
+- wait=true acceptance
+- network/auth error fail-closed
+
+Real Qdrant integration test zorunlu.
+
+Adım 24 — Cross-store orchestrator
+
+Implement:
+
+  identities.py
+  persistence.py
+  reconciliation.py
+
+Exact pending→MinIO→Qdrant→active order.
+
+Failing integration tests:
+
+- MinIO failure
+- Qdrant failure
+- PG activation failure
+- retry after each failure
+- no orphan normalisation
+- no duplicate row/vector/object
+
+Adım 25 — Bounded queues
+
+Implement:
+
+  queues.py
+  sharding.py
+
+Tests:
+
+- queue max size
+- consumer stall
+- cancellation
+- producer failure
+- consumer failure
+- clean sentinel
+- no deadlock
+- deterministic sharding
+
+Adım 26 — Admission
+
+Implement:
+
+  admission.py
+
+At minimum:
+
+- exact-one-face
+- minimum detector score
+- valid bbox/landmarks
+- finite embedding
+- duplicate source SHA
+- same-subject embedding outlier
+- temporal/order independent diversity selection
+- stable reason codes
+
+Threshold’ları calibrated diye sunma.
+
+Adım 27 — Real CLI
+
+Echo stublarını gerçek implementation’a bağla:
+
+- inspect-models
+- build-engines
+- validate-manifest
+- enroll
+- reconcile
+- report
+- benchmark
+
+CLI exit codes:
+
+- 0 success
+- nonzero fatal/contract failure
+- partial/rejected counts structured reportta
+
+Adım 28 — Small real E2E
+
+En az:
+
+- 2 known subjects
+- subject başına 2+ image
+- no-face
+- corrupt
+- multi-face
+- duplicate
+- holdout image
+
+Real chain:
+
+  read-only dataset
+    → real GPU
+    → PG
+    → MinIO
+    → Qdrant
+
+Evidence:
+
+- Person count
+- FaceIdentity count
+- active FaceSample count
+- MinIO object stat
+- Qdrant point
+- IDs/keys/payload consistency
+
+Adım 29 — Phase 2 black-box continuity
+
+Protected Phase 2 source değiştirilmeden çalışan servis üzerinden:
+
+1. Imported subject’ın holdout JPEG’i mevcut recognize API’ye gönder.
+2. Result `known` olmalı.
+3. Returned face_id canonical imported face_id ile aynı olmalı.
+4. Person projection doğru olmalı.
+5. Restart sonrası aynı kalmalı.
+
+Rights-cleared video holdout mevcutsa:
+
+- existing video job’a gönder
+- imported identity known çıkmalı
+
+Video fixture yoksa yalnız bu gate:
+
+  BLOCKED_REAL_VIDEO_HOLDOUT
+
+olarak raporlanır; diğer implementation durmaz.
+
+Adım 30 — Benchmark / reproducibility / final acceptance
+
+Benchmark kategorileri ayrı:
+
+- scalar reference
+- GPU compute-only
+- single-GPU E2E
+- three-GPU E2E
+- persistence-only
+- retry/resume
+
+Rapor:
+
+- images/sec
+- accepted samples/sec
+- rejected counts/reasons
+- p50/p95/p99
+- GPU memory
+- GPU utilization
+- PG/MinIO/Qdrant timing
+- batch matrix
+- single vs three GPU scaling
+- warmup excluded/included açık
+- no CPU fallback evidence
+
+Ardından:
+
+- fresh checkout
+- no-cache container build
+- engine build/load
+- small E2E
+- protected gate
+- git diff --check
+
+======================================================================
+12. PACKAGE-LOCAL MAKE TARGETS
+======================================================================
+
+Root Makefile’a dokunmadan package Makefile’da gerçek hedefler oluştur:
+
+  make bootstrap
+  make phase2-untouched-gate
+  make static
+  make unit
+  make contract
+  make container-build
+  make engine-build
+  make gpu-smoke
+  make batch-parity
+  make integration
+  make retry-acceptance
+  make phase2-continuity
+  make benchmark
+  make acceptance
+
+Current acceptance sırası yanlıştır. Build/bootstrap olmadan venv Python çağırma.
+
+`make acceptance` yalnız bütün zorunlu gate’ler gerçekten çalıştıysa PASS olur.
+Empty test directory ve skip PASS değildir.
+
+======================================================================
+13. HARD STOPS
+======================================================================
+
+Yapma:
+
+- backend/** değiştirme
+- frontend/** değiştirme
+- migration ekleme
+- root Docker/Compose/Makefile değiştirme
+- mevcut Phase 2 native runtime’ı değiştirme
+- base64 dataset API kullanma
+- bütün dataset’i MinIO’ya raw upload etme
+- raw source JPEG’i aligned crop diye saklama
+- Demo persistence şemasını kopyalama
+- `face_identity_id` kullanma
+- FaceSample’a olmayan kolon yazma
+- `status=active` FaceIdentity oluşturma
+- active sample’ı pending’e çevirme
+- redirected identity’yi reactivate etme
+- Person’ı display name ile otomatik eşleştirme
+- user metadata’yı conflict’te overwrite etme
+- Qdrant’ı PG doğrulaması olmadan source-of-truth sayma
+- CPU inference/decode fallback
+- per-image GPU loop’u batch benchmark diye sunma
+- multi-face görüntüde sessiz largest seçme
+- raw exception/path/name loglama
+- dataset/model indirme
+- `download_lfw.py` çalıştırma
+- başka repo venv/libnvinfer kullanma
+- unpinned `latest`
+- engine’i tracked source içine yazma
+- boş native dosyaları implementation sayma
+- echo-only CLI’ı completed sayma
+- native skip’i PASS sayma
+- git add/commit/push
+- 21st kullanma
+- Ruflo kullanma
+
+======================================================================
+14. MEMORY / MCP ACCOUNTABILITY
+======================================================================
+
+Her session başlangıcında:
+
+1. prompt-memory-mcp search
+2. codebase-memory-mcp context load
+3. current git status/HEAD
+4. package run ledger
+5. protected gate
+
+Her milestone sonunda prompt-memory-mcp’ye yalnız doğrulanmış kısa kayıt yaz:
+
+- karar
+- exact evidence
+- command/result
+- blocker
+- next step
+
+Örnek memory names:
+
+  phase1_bulk_live_schema_contract
+  phase1_bulk_demo_compute_reference
+  phase1_bulk_gpu_batch_mapping_fixed
+  phase1_bulk_cross_store_lifecycle_green
+  phase1_bulk_phase2_continuity_green
+  phase1_bulk_benchmark_complete
+
+MCP unavailable ise kullanılmış gibi davranma. Exact unavailable durumunu yaz ve
+allowed artifact ledger ile context’i koru.
+
+Final accountability:
+
+- prompt-memory-mcp: used / unavailable
+- codebase-memory-mcp: used / skipped reason
+- context7: used / skipped reason
+- deepwiki: used / skipped reason
+- GitHub: used
+- exa: used / skipped reason
+- postman: Phase 2 HTTP continuity acceptance’ta used
+- playwright: CLI/backend sprintinde skipped_not_relevant
+- 21st: FORBIDDEN_NOT_USED
+- Ruflo: FORBIDDEN_NOT_USED
+
+======================================================================
+15. COMPLETION FORMAT
+======================================================================
+
+Final verdict yalnız:
+
+- PASS
+- PARTIAL
+- BLOCKED
+- NOT_TESTED
+
+Final raporda:
+
+1. Gerçekte çalışan kullanıcı sonucu.
+2. Protected tree kanıtı.
+3. Current HEAD/base SHA.
+4. Demo reference commit.
+5. Exact changed-file map.
+6. Container digest/runtime versions.
+7. ONNX/engine SHA/profile/fingerprint.
+8. GPU batch parity.
+9. Mixed corrupt-batch association evidence.
+10. Multi-face quarantine evidence.
+11. Real aligned WebP evidence.
+12. Deterministic ID/idempotency evidence.
+13. PG/MinIO/Qdrant rows/keys/points.
+14. Retry/compensation/reconciliation evidence.
+15. Phase 2 holdout recognition response.
+16. Compute/single-GPU/three-GPU benchmark ayrımı.
+17. GPU memory cleanup.
+18. Exact commands/raw result summaries.
+19. NOT_RUN/SKIPPED/BLOCKED davranışlar.
+20. Known limitations.
+21. MCP/skill accountability.
+
+Kanıt olmadan:
+
+- production-ready
+- fully GPU
+- idempotent
+- Phase 2 compatible
+- three-GPU scaling
+- accuracy verified
+- completed
+
+deme.
+
+======================================================================
+16. ŞİMDİ YAPACAĞIN İLK ŞEY
+======================================================================
+
+Kullanıcıdan yeniden schema/key/ID kararı isteme.
+
+İlk olarak:
+
+1. prompt-memory ve codebase context’i yükle.
+2. Current source’un tamamını audit et.
+3. phase2-untouched gate’i düzelt.
+4. syntax/import/static gate’i green yap.
+5. TARGET_CONTRACT’ı canlı source’a göre düzelt.
+6. GPU batch correctness testlerini yaz.
+7. Minimum gerçek implementation’a devam et.
+
+Persistence veya benchmark’a, GPU batch association/crop/norm/container gate’leri
+green olmadan geçme.
+
+Bir milestone green olduğunda mikro-onay istemeden sıradakine devam et.
+Yalnız gerçek external blocker’da dur.

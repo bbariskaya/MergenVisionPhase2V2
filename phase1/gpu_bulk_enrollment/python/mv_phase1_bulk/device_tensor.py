@@ -1,9 +1,10 @@
 """Device tensor lifetime/ownership contract for the GPU data plane."""
+
 from __future__ import annotations
 
 import ctypes
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from cuda.bindings import runtime as cuda_runtime
 
@@ -27,7 +28,7 @@ class DeviceTensor:
     - Stream ownership is explicit; no implicit synchronization.
     """
 
-    _DTYPE_TO_ITEMSIZE: dict[type, int] = {
+    _DTYPE_TO_ITEMSIZE: ClassVar[dict[Any, int]] = {
         ctypes.c_uint8: 1,
         ctypes.c_int8: 1,
         ctypes.c_uint16: 2,
@@ -60,15 +61,13 @@ class DeviceTensor:
         itemsize = self._DTYPE_TO_ITEMSIZE.get(dtype)
         if itemsize is None:
             raise TypeError(f"Unsupported DeviceTensor dtype: {dtype}")
-        self._itemsize = itemsize
+        self._itemsize: int = itemsize
         # Lease-backed tensors report the allocation size, which may exceed the
         # requested view shape (e.g., scratch buffers reused with smaller shapes).
         if self._lease is not None:
-            self._nbytes = self._lease.ptr_nbytes
+            self._nbytes: int = self._lease.ptr_nbytes
         else:
-            self._nbytes = self._itemsize * int(
-                __import__("functools").reduce(int.__mul__, self._shape, 1)
-            )
+            self._nbytes = self._itemsize * int(__import__("functools").reduce(int.__mul__, self._shape, 1))
 
     @property
     def ptr(self) -> int:
@@ -104,10 +103,8 @@ class DeviceTensor:
         return self._c_contiguous_strides(self._shape, self._dtype)
 
     @staticmethod
-    def _c_contiguous_strides(
-        shape: tuple[int, ...], dtype: type
-    ) -> tuple[int, ...]:
-        itemsize: int = {
+    def _c_contiguous_strides(shape: tuple[int, ...], dtype: type) -> tuple[int, ...]:
+        mapping: dict[Any, int] = {
             ctypes.c_uint8: 1,
             ctypes.c_int8: 1,
             ctypes.c_uint16: 2,
@@ -115,7 +112,8 @@ class DeviceTensor:
             ctypes.c_float: 4,
             ctypes.c_int32: 4,
             ctypes.c_int64: 8,
-        }.get(dtype, ctypes.sizeof(dtype))
+        }
+        itemsize: int = mapping.get(dtype, ctypes.sizeof(dtype))
         strides = []
         prod = 1
         for dim in reversed(shape):
@@ -134,7 +132,7 @@ class DeviceTensor:
             f"nbytes={self._nbytes})"
         )
 
-    def bind_stream(self, stream: int) -> "DeviceTensor":
+    def bind_stream(self, stream: int) -> DeviceTensor:
         """Return a new view tied to the provided stream; owner unchanged."""
         return DeviceTensor(
             self._ptr,
@@ -150,15 +148,19 @@ class DeviceTensor:
 _CUDA_CHECK_ERRORS = True
 
 
-def check_cuda(err: cuda_runtime.cudaError_t | tuple, msg: str) -> None:
+def check_cuda(err: cuda_runtime.cudaError_t | tuple[Any, ...], msg: str) -> None:
     # cuda.bindings may return the error code directly or as a tuple.
     if isinstance(err, tuple):
         err = err[0]
     name = cuda_runtime.cudaGetErrorName(err)
     if isinstance(name, tuple):
         name = name[1] if len(name) > 1 else name[0]
+    name_str = str(name)
     text = cuda_runtime.cudaGetErrorString(err)
     if isinstance(text, tuple):
         text = text[1] if len(text) > 1 else text[0]
+    text_str = str(text)
+    if err != cuda_runtime.cudaError_t.cudaSuccess:
+        raise RuntimeError(f"{msg}: {name_str} ({text_str})")
     if err != cuda_runtime.cudaError_t.cudaSuccess:
         raise RuntimeError(f"{msg}: {name} ({text})")

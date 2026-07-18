@@ -1,0 +1,43 @@
+# Version control
+.git
+.gitignore
+
+# Python caches
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.so
+*.wheel
+native/build/
+native/**/*.o
+native/**/*.a
+
+# Runtime artifacts (large or generated)
+.artifacts/
+*.onnx
+*.trt
+*.plan
+*.pb
+reports/
+benchmark_results/
+
+# Datasets and image fixtures
+lfw/
+fixtures/images/
+fixtures/crops/
+
+# Local environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/

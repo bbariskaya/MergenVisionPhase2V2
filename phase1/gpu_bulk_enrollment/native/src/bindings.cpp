@@ -62,21 +62,6 @@ extern "C" int mergenvision_scale_clip_compact_xy(
     int* d_out_count,
     cudaStream_t stream);
 
-extern "C" int mergenvision_scrfd_decode_level(
-    const float* d_scores,
-    const float* d_bboxes,
-    const float* d_kps,
-    const float2* d_anchors,
-    int num_anchors,
-    int stride,
-    float conf_threshold,
-    float* d_out_boxes,
-    float* d_out_scores,
-    float* d_out_landmarks,
-    int* d_counter,
-    int max_candidates,
-    cudaStream_t stream);
-
 extern "C" int mergenvision_retinaface_decode_batch(
     const float* d_loc,
     const float* d_conf,
@@ -226,29 +211,6 @@ PYBIND11_MODULE(_mv_phase1_bulk_native, m) {
        py::arg("img_w"), py::arg("img_h"),
        py::arg("out_boxes_ptr"), py::arg("out_landmarks_ptr"), py::arg("out_scores_ptr"),
        py::arg("out_count_ptr"), py::arg("stream_ptr") = 0);
-
-    m.def("scrfd_decode_level", [](uintptr_t scores_ptr, uintptr_t bboxes_ptr,
-                                   uintptr_t kps_ptr, uintptr_t anchors_ptr,
-                                   int num_anchors, int stride, float conf_threshold,
-                                   uintptr_t out_boxes_ptr, uintptr_t out_scores_ptr,
-                                   uintptr_t out_landmarks_ptr, uintptr_t counter_ptr,
-                                   int max_candidates, uintptr_t stream_ptr) {
-        check(mergenvision_scrfd_decode_level(
-            reinterpret_cast<const float*>(scores_ptr),
-            reinterpret_cast<const float*>(bboxes_ptr),
-            reinterpret_cast<const float*>(kps_ptr),
-            reinterpret_cast<const float2*>(anchors_ptr),
-            num_anchors, stride, conf_threshold,
-            reinterpret_cast<float*>(out_boxes_ptr),
-            reinterpret_cast<float*>(out_scores_ptr),
-            reinterpret_cast<float*>(out_landmarks_ptr),
-            reinterpret_cast<int*>(counter_ptr),
-            max_candidates,
-            int_to_stream(stream_ptr)), "scrfd_decode_level");
-    }, py::arg("scores_ptr"), py::arg("bboxes_ptr"), py::arg("kps_ptr"), py::arg("anchors_ptr"),
-       py::arg("num_anchors"), py::arg("stride"), py::arg("conf_threshold"),
-       py::arg("out_boxes_ptr"), py::arg("out_scores_ptr"), py::arg("out_landmarks_ptr"),
-       py::arg("counter_ptr"), py::arg("max_candidates"), py::arg("stream_ptr") = 0);
 
     m.def("retinaface_decode_batch", [](uintptr_t loc_ptr, uintptr_t conf_ptr,
                                         uintptr_t landms_ptr, uintptr_t priors_ptr,

@@ -1,4 +1,5 @@
 """GPU L2 normalization wrapper for embedding vectors."""
+
 from __future__ import annotations
 
 import ctypes
@@ -56,21 +57,15 @@ def l2_normalize_device(
 
     if output is None:
         output = arena.reserve((rows, cols), ctypes.c_float, stream=active_stream)
-    else:
-        if output.shape != (rows, cols) or output.dtype is not ctypes.c_float:
-            raise ValueError(
-                f"output shape/dtype mismatch: {output.shape}/{output.dtype}"
-            )
+    elif output.shape != (rows, cols) or output.dtype is not ctypes.c_float:
+        raise ValueError(f"output shape/dtype mismatch: {output.shape}/{output.dtype}")
 
     owns_status = False
     if status is None:
         status = arena.reserve((1,), ctypes.c_int32, stream=active_stream)
         owns_status = True
-    else:
-        if status.shape != (1,) or status.dtype is not ctypes.c_int32:
-            raise ValueError(
-                f"status must be [1] int32, got {status.shape} {status.dtype}"
-            )
+    elif status.shape != (1,) or status.dtype is not ctypes.c_int32:
+        raise ValueError(f"status must be [1] int32, got {status.shape} {status.dtype}")
 
     if owns_status:
         err = cuda_runtime.cudaMemsetAsync(status.ptr, 0, 4, active_stream)

@@ -3,6 +3,7 @@
 Decoded RGB image -> 640x640 resize -> RGB->BGR swap + mean subtraction
 -> NCHW float32.  All work stays on the GPU.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -100,9 +101,7 @@ class RetinaFacePreprocessor:
             tensors.append(t)
 
         sizes = [(self._input_size, self._input_size)] * n
-        resized = cvcuda.resize(
-            batch, sizes, cvcuda.Interp.LINEAR, stream=cvcuda_stream
-        )
+        resized = cvcuda.resize(batch, sizes, cvcuda.Interp.LINEAR, stream=cvcuda_stream)
 
         plane_size = self._input_size * self._input_size * 3
         tmp_nhwc = self._arena.reserve(
@@ -124,13 +123,9 @@ class RetinaFacePreprocessor:
             check_cuda(err, "preprocess_batch resize D2D")
             resized_images.append(img)
 
-        tmp_wrapper = _CudaArrayInterface(
-            tmp_nhwc.ptr, tmp_nhwc.shape, ctypes.c_uint8
-        )
+        tmp_wrapper = _CudaArrayInterface(tmp_nhwc.ptr, tmp_nhwc.shape, ctypes.c_uint8)
         uint8_nhwc = cvcuda.as_tensor(tmp_wrapper, cvcuda.TensorLayout.NHWC)
-        f32 = cvcuda.convertto(
-            uint8_nhwc, cvcuda.Type.F32, scale=1.0, offset=0.0, stream=cvcuda_stream
-        )
+        f32 = cvcuda.convertto(uint8_nhwc, cvcuda.Type.F32, scale=1.0, offset=0.0, stream=cvcuda_stream)
         twisted = cvcuda.color_twist(f32, self._twist, stream=cvcuda_stream)
         nchw = cvcuda.reformat(twisted, cvcuda.TensorLayout.NCHW, stream=cvcuda_stream)
         nchw_cai = nchw.cuda().__cuda_array_interface__

@@ -1,0 +1,16 @@
+{
+  "run_id": "019f75fb-8a7d-717a-9a1c-9d2ca37ba1b1",
+  "started_at": "2026-07-18T16:07:27.101566+00:00",
+  "head_sha": "777145b93a52e2f4cf71b70facd39c1d60aaed3d",
+  "github": "https://github.com/bbariskaya/MergenVisionPhase2V2",
+  "reference_commit": "5bf4b4c57542b26058e8d068186faee06c0fc29c",
+  "allowlist_prefixes": [
+    "phase1/gpu_bulk_enrollment/",
+    ".artifacts/phase1_gpu_bulk_enrollment/"
+  ],
+  "baseline_untracked": [
+    ".claude/cross-repo-intelligence/nvdiagstreamer-insights.md",
+    ".claude/projectsummary.md",
+    "prompt14.txt"
+  ]
+}

@@ -9,8 +9,10 @@ simple ``DeviceTensor`` that is returned to the arena free list when it is
 garbage collected.  It does not fence on a stream; callers must synchronize
 the relevant stream before reusing the arena.
 """
+
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import logging
 import time
@@ -33,7 +35,7 @@ class _BufferKey:
 
 
 class _AllocationRecord:
-    __slots__ = ("ptr", "key", "event", "state")
+    __slots__ = ("event", "key", "ptr", "state")
 
     def __init__(self, ptr: int, key: _BufferKey, event: int | None) -> None:
         self.ptr = ptr
@@ -47,7 +49,7 @@ class BufferLease:
 
     def __init__(
         self,
-        arena: "BufferArena",
+        arena: BufferArena,
         record: _AllocationRecord,
         generation: int,
     ) -> None:
@@ -111,9 +113,7 @@ class BufferLease:
             raise RuntimeError("BufferLease is stale because the arena was closed")
         # Reject release while live views exist.  Views are weakly tracked.
         if any(view is not None for view in self._views):
-            raise RuntimeError(
-                "Cannot release BufferLease while active DeviceTensor views exist"
-            )
+            raise RuntimeError("Cannot release BufferLease while active DeviceTensor views exist")
         if self._record.event is None:
             err, event = cuda_runtime.cudaEventCreate()
             check_cuda(err, "BufferLease release event create")
@@ -149,7 +149,7 @@ class BufferArena:
         return self._device_id
 
     def _itemsize(self, dtype: type) -> int:
-        return {
+        mapping: dict[Any, int] = {
             ctypes.c_uint8: 1,
             ctypes.c_int8: 1,
             ctypes.c_uint16: 2,
@@ -157,12 +157,11 @@ class BufferArena:
             ctypes.c_float: 4,
             ctypes.c_int32: 4,
             ctypes.c_int64: 8,
-        }.get(dtype, ctypes.sizeof(dtype))
+        }
+        return mapping.get(dtype, ctypes.sizeof(dtype))
 
     def _nbytes(self, shape: tuple[int, ...], dtype: type) -> int:
-        return self._itemsize(dtype) * int(
-            __import__("functools").reduce(int.__mul__, shape, 1)
-        )
+        return self._itemsize(dtype) * int(__import__("functools").reduce(int.__mul__, shape, 1))
 
     def _event_complete(self, event: int, timeout: float = 10.0) -> bool:
         deadline = time.monotonic() + timeout
@@ -204,11 +203,10 @@ class BufferArena:
             if record.state == "free" and record.event is not None:
                 return record
         for record in records:
-            if record.state == "pending" and record.event is not None:
-                if self._event_query_nonblocking(record.event):
-                    record.state = "free"
-                    self._pending.discard(record)
-                    return record
+            if record.state == "pending" and record.event is not None and self._event_query_nonblocking(record.event):
+                record.state = "free"
+                self._pending.discard(record)
+                return record
         return None
 
     def acquire(
@@ -229,9 +227,7 @@ class BufferArena:
             check_cuda(err, f"BufferArena cudaMalloc({nbytes})")
             err, event = cuda_runtime.cudaEventCreate()
             check_cuda(err, "BufferArena cudaEventCreate")
-            record = _AllocationRecord(
-                ptr=int(raw_ptr), key=key, event=int(event)
-            )
+            record = _AllocationRecord(ptr=int(raw_ptr), key=key, event=int(event))
             self._records_by_key[key].append(record)
             self._unique_count += 1
             logger.debug("Arena allocated shape=%s dtype=%s nbytes=%d", shape, dtype, nbytes)
@@ -252,10 +248,8 @@ class BufferArena:
 
     def _return_legacy_record(self, record: _AllocationRecord) -> None:
         if self._closed:
-            try:
+            with contextlib.suppress(Exception):
                 cuda_runtime.cudaFree(record.ptr)
-            except Exception:
-                pass
             return
         record.state = "free"
 
@@ -266,12 +260,7 @@ class BufferArena:
         return {r.ptr for r in self._pending}
 
     def completed_ptrs(self) -> set[int]:
-        return {
-            r.ptr
-            for records in self._records_by_key.values()
-            for r in records
-            if r.state == "free"
-        }
+        return {r.ptr for records in self._records_by_key.values() for r in records if r.state == "free"}
 
     def unique_allocation_count(self) -> int:
         return self._unique_count
@@ -322,10 +311,8 @@ class BufferArena:
         else:
             if record.event is not None:
                 # Drop any lingering event from a previous lease reuse.
-                try:
+                with contextlib.suppress(Exception):
                     cuda_runtime.cudaEventDestroy(record.event)
-                except Exception:
-                    pass
                 record.event = None
             logger.debug("Arena reused shape=%s dtype=%s", shape, dtype)
 
@@ -341,10 +328,8 @@ class BufferArena:
 
         def release(r: _AllocationRecord = record) -> None:
             if self._closed:
-                try:
+                with contextlib.suppress(Exception):
                     cuda_runtime.cudaFree(r.ptr)
-                except Exception:
-                    pass
             else:
                 r.state = "free"
 
@@ -361,34 +346,25 @@ class BufferArena:
         # GPU work still references.
         for records in self._records_by_key.values():
             for record in records:
-                if record.state == "pending" and record.event is not None:
-                    try:
-                        self._event_complete(record.event)
-                    except Exception as exc:
-                        logger.warning("BufferArena close pending wait failed: %s", exc)
+                if record.state != "pending" or record.event is None:
+                    continue
+                with contextlib.suppress(Exception):
+                    self._event_complete(record.event)
 
         # Synchronize the default stream as a conservative barrier.
-        try:
+        with contextlib.suppress(Exception):
             cuda_runtime.cudaStreamSynchronize(0)
-        except Exception as exc:
-            logger.warning("BufferArena default stream sync failed: %s", exc)
 
         for records in self._records_by_key.values():
             for record in records:
                 if record.event is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         cuda_runtime.cudaEventDestroy(record.event)
-                    except Exception as exc:
-                        logger.warning("BufferArena event destroy failed: %s", exc)
-                try:
+                with contextlib.suppress(Exception):
                     cuda_runtime.cudaFree(record.ptr)
-                except Exception as exc:
-                    logger.warning("BufferArena cudaFree failed for %s: %s", record.ptr, exc)
         self._records_by_key.clear()
         self._pending.clear()
 
     def __del__(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.close()
-        except Exception:
-            pass

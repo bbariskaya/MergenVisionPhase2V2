@@ -1,4 +1,5 @@
 """GPU five-point face alignment using native similarity transform + warp."""
+
 from __future__ import annotations
 
 import ctypes
@@ -48,21 +49,14 @@ class GpuFaceAligner:
 
         active_stream = stream if stream is not None else 0
         n = landmarks.shape[0]
-        matrices = self._arena.reserve(
-            (n, 6), ctypes.c_float, stream=active_stream
-        )
+        matrices = self._arena.reserve((n, 6), ctypes.c_float, stream=active_stream)
 
         owns_status = False
         if status is None:
-            status = self._arena.reserve(
-                (1,), ctypes.c_int32, stream=active_stream
-            )
+            status = self._arena.reserve((1,), ctypes.c_int32, stream=active_stream)
             owns_status = True
-        else:
-            if status.shape != (1,) or status.dtype is not ctypes.c_int32:
-                raise ValueError(
-                    f"status must be [1] int32, got {status.shape} {status.dtype}"
-                )
+        elif status.shape != (1,) or status.dtype is not ctypes.c_int32:
+            raise ValueError(f"status must be [1] int32, got {status.shape} {status.dtype}")
 
         err = cuda_runtime.cudaMemsetAsync(status.ptr, 0, 4, active_stream)
         check_cuda(err, "status memset")
@@ -90,8 +84,7 @@ class GpuFaceAligner:
             check_cuda(err, "status sync")
             if status_host[0] != 0:
                 raise ValueError(
-                    f"similarity_transform failed (status={status_host[0]}); "
-                    "non-finite or degenerate landmarks"
+                    f"similarity_transform failed (status={status_host[0]}); non-finite or degenerate landmarks"
                 )
 
         return DeviceTensor(

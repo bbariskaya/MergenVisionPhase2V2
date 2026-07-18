@@ -8,13 +8,15 @@ Manifest format (JSONL, one record per line):
 `subject_key` is the stable external identifier for a person.
 `image_paths` are relative to the dataset root.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -67,16 +69,14 @@ class EnrollmentManifest:
 
         records: list[SubjectRecord] = []
         with manifest_path.open("r", encoding="utf-8") as f:
-            for line_no, line in enumerate(f, start=1):
-                line = line.strip()
+            for line_no, raw_line in enumerate(f, start=1):
+                line = raw_line.strip()
                 if not line:
                     continue
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError as exc:
-                    raise ManifestValidationError(
-                        f"manifest line {line_no}: invalid JSON: {exc}"
-                    ) from exc
+                    raise ManifestValidationError(f"manifest line {line_no}: invalid JSON: {exc}") from exc
                 record = cls._parse_record(
                     obj,
                     dataset_root,
@@ -105,61 +105,43 @@ class EnrollmentManifest:
     ) -> SubjectRecord:
         subject_key = obj.get("subject_key")
         if not isinstance(subject_key, str) or not subject_key:
-            raise ManifestValidationError(
-                f"manifest line {line_no}: missing or invalid subject_key"
-            )
+            raise ManifestValidationError(f"manifest line {line_no}: missing or invalid subject_key")
 
         image_paths_raw = obj.get("image_paths")
         if not isinstance(image_paths_raw, list) or not image_paths_raw:
-            raise ManifestValidationError(
-                f"manifest line {line_no}: missing or empty image_paths"
-            )
+            raise ManifestValidationError(f"manifest line {line_no}: missing or empty image_paths")
 
         image_paths: list[Path] = []
         for p in image_paths_raw:
             if not isinstance(p, str):
-                raise ManifestValidationError(
-                    f"manifest line {line_no}: image_paths must be strings"
-                )
+                raise ManifestValidationError(f"manifest line {line_no}: image_paths must be strings")
             rel = Path(p)
             if rel.is_absolute():
-                raise ManifestValidationError(
-                    f"manifest line {line_no}: absolute image path not allowed: {p}"
-                )
+                raise ManifestValidationError(f"manifest line {line_no}: absolute image path not allowed: {p}")
             resolved = (dataset_root / rel).resolve()
             # Path traversal guard: resolved must be under dataset_root.
             try:
                 resolved.relative_to(dataset_root)
             except ValueError as exc:
-                raise ManifestValidationError(
-                    f"manifest line {line_no}: path traversal detected: {p}"
-                ) from exc
+                raise ManifestValidationError(f"manifest line {line_no}: path traversal detected: {p}") from exc
 
             if validate_paths:
                 if not resolved.exists():
-                    raise ManifestValidationError(
-                        f"manifest line {line_no}: image not found: {resolved}"
-                    )
+                    raise ManifestValidationError(f"manifest line {line_no}: image not found: {resolved}")
                 stat = resolved.stat()
                 if stat.st_size > max_file_size_bytes:
-                    raise ManifestValidationError(
-                        f"manifest line {line_no}: image exceeds size limit: {resolved}"
-                    )
+                    raise ManifestValidationError(f"manifest line {line_no}: image exceeds size limit: {resolved}")
                 if require_sha256:
                     expected = obj.get("sha256")
                     if expected:
                         actual = cls._sha256_file(resolved)
                         if actual != expected:
-                            raise ManifestValidationError(
-                                f"manifest line {line_no}: SHA256 mismatch for {resolved}"
-                            )
+                            raise ManifestValidationError(f"manifest line {line_no}: SHA256 mismatch for {resolved}")
 
             image_paths.append(resolved)
 
         if not image_paths:
-            raise ManifestValidationError(
-                f"manifest line {line_no}: no valid image paths for subject {subject_key}"
-            )
+            raise ManifestValidationError(f"manifest line {line_no}: no valid image paths for subject {subject_key}")
 
         return SubjectRecord(subject_key=subject_key, image_paths=image_paths)
 

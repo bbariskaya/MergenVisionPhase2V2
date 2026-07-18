@@ -1,10 +1,12 @@
 """TensorRT execution context with direct device-pointer binding."""
+
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import tensorrt as trt
 from cuda.bindings import runtime as cuda_runtime
@@ -76,19 +78,14 @@ class TrtDeviceEngine:
         buf = self._output_buffers.get(name)
         needed = int(__import__("functools").reduce(int.__mul__, shape, 1))
         if buf is not None and buf.dtype == ctype:
-            capacity = int(
-                __import__("functools").reduce(int.__mul__, buf.shape, 1)
-            )
+            capacity = int(__import__("functools").reduce(int.__mul__, buf.shape, 1))
             if capacity >= needed:
                 return buf
 
         # Grow capacity to the current requirement; first call allocates.
         buf = self._arena.reserve(shape, ctype, stream=stream)
         self._output_buffers[name] = buf
-        logger.debug(
-            "Allocated/reallocated output buffer %s shape=%s ctype=%s",
-            name, shape, ctype.__name__
-        )
+        logger.debug("Allocated/reallocated output buffer %s shape=%s ctype=%s", name, shape, ctype.__name__)
         return buf
 
     def _check_open(self) -> None:
@@ -117,37 +114,24 @@ class TrtDeviceEngine:
             if provided != expected:
                 missing = expected - provided
                 extra = provided - expected
-                raise ValueError(
-                    f"Input name mismatch. Missing: {sorted(missing)}, "
-                    f"Extra: {sorted(extra)}"
-                )
+                raise ValueError(f"Input name mismatch. Missing: {sorted(missing)}, Extra: {sorted(extra)}")
 
             active_stream = stream if stream is not None else int(self._stream)
 
             for name, tensor in inputs.items():
                 if tensor.device_id != self._device_id:
-                    raise ValueError(
-                        f"Input '{name}' is on device {tensor.device_id}, "
-                        f"expected {self._device_id}"
-                    )
+                    raise ValueError(f"Input '{name}' is on device {tensor.device_id}, expected {self._device_id}")
                 shape = tuple(tensor.shape)
                 if not self._context.set_input_shape(name, shape):
-                    raise RuntimeError(
-                        f"set_input_shape failed for '{name}' with shape {shape}"
-                    )
+                    raise RuntimeError(f"set_input_shape failed for '{name}' with shape {shape}")
                 if not self._context.set_tensor_address(name, tensor.ptr):
-                    raise RuntimeError(
-                        f"set_tensor_address failed for input '{name}'"
-                    )
+                    raise RuntimeError(f"set_tensor_address failed for input '{name}'")
 
             outputs: dict[str, DeviceTensor] = {}
             for name in self._output_names:
                 shape = tuple(self._context.get_tensor_shape(name))
                 if any(s <= 0 for s in shape):
-                    raise RuntimeError(
-                        f"Output '{name}' has invalid shape {shape}; "
-                        "input shapes may not be set"
-                    )
+                    raise RuntimeError(f"Output '{name}' has invalid shape {shape}; input shapes may not be set")
                 dtype = self._engine.get_tensor_dtype(name)
                 ctype = self._trt_dtype_to_ctype(dtype)
                 buf = self._ensure_output_buffer(name, shape, ctype, active_stream)
@@ -160,9 +144,7 @@ class TrtDeviceEngine:
                     stream=active_stream,
                 )
                 if not self._context.set_tensor_address(name, tensor.ptr):
-                    raise RuntimeError(
-                        f"set_tensor_address failed for output '{name}'"
-                    )
+                    raise RuntimeError(f"set_tensor_address failed for output '{name}'")
                 outputs[name] = tensor
 
             if not self._context.execute_async_v3(active_stream):
@@ -172,7 +154,7 @@ class TrtDeviceEngine:
 
     @staticmethod
     def _trt_dtype_to_ctype(dtype: trt.DataType) -> type:
-        mapping = {
+        mapping: dict[trt.DataType, type] = {
             trt.DataType.FLOAT: __import__("ctypes").c_float,
             trt.DataType.INT32: __import__("ctypes").c_int32,
             trt.DataType.INT8: __import__("ctypes").c_int8,
@@ -186,7 +168,10 @@ class TrtDeviceEngine:
         return ctype
 
     def input_profile(self, name: str, profile_index: int = 0) -> tuple[list[int], list[int], list[int]]:
-        return self._engine.get_tensor_profile_shape(name, profile_index)
+        return cast(
+            tuple[list[int], list[int], list[int]],
+            self._engine.get_tensor_profile_shape(name, profile_index),
+        )
 
     def warmup(self, input_shapes: dict[str, tuple[int, ...]]) -> None:
         self._set_device()
@@ -218,7 +203,5 @@ class TrtDeviceEngine:
             self._closed = True
 
     def __del__(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.close()
-        except Exception:
-            pass

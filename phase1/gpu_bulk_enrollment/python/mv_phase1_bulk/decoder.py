@@ -1,4 +1,5 @@
 """nvImageCodec JPEG GPU decoder with no silent CPU fallback."""
+
 from __future__ import annotations
 
 import ctypes
@@ -6,8 +7,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-import nvidia.nvimgcodec as nvimgcodec
 from cuda.bindings import runtime as cuda_runtime
+from nvidia import nvimgcodec
 
 from mv_phase1_bulk.device_tensor import DeviceTensor, check_cuda
 
@@ -86,8 +87,7 @@ class JpegGpuDecoder:
         info = self._decode_info(image)
         if info.backend_kind != "GPU_ONLY":
             raise RuntimeError(
-                f"Unexpected decode backend {info.backend_kind}; "
-                "CPU fallback is not allowed in production"
+                f"Unexpected decode backend {info.backend_kind}; CPU fallback is not allowed in production"
             )
 
         return self._tensor_from_image(image, stream), info
@@ -114,8 +114,7 @@ class JpegGpuDecoder:
             images = [images]
         if len(images) != len(encoded_list):
             raise RuntimeError(
-                f"nvImageCodec batch decode returned {len(images)} images for "
-                f"{len(encoded_list)} inputs"
+                f"nvImageCodec batch decode returned {len(images)} images for {len(encoded_list)} inputs"
             )
 
         tensors: list[DeviceTensor] = []
@@ -126,8 +125,7 @@ class JpegGpuDecoder:
             info = self._decode_info(image)
             if info.backend_kind != "GPU_ONLY":
                 raise RuntimeError(
-                    f"Unexpected decode backend {info.backend_kind}; "
-                    "CPU fallback is not allowed in production"
+                    f"Unexpected decode backend {info.backend_kind}; CPU fallback is not allowed in production"
                 )
             tensors.append(self._tensor_from_image(image, stream))
             infos.append(info)
@@ -136,11 +134,7 @@ class JpegGpuDecoder:
     def _decode_info(self, image: Any) -> DecodeInfo:
         # buffer_kind is the official evidence of where the decoded buffer lives.
         buffer_kind = image.buffer_kind
-        kind_name = (
-            "GPU_ONLY"
-            if buffer_kind == nvimgcodec.ImageBufferKind.STRIDED_DEVICE
-            else str(buffer_kind)
-        )
+        kind_name = "GPU_ONLY" if buffer_kind == nvimgcodec.ImageBufferKind.STRIDED_DEVICE else str(buffer_kind)
         cuda_view = image.cuda()
         cai = cuda_view.__cuda_array_interface__
         h, w, c = cai["shape"]

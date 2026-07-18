@@ -1,9 +1,10 @@
 """MinIO store writing into Phase 2's existing object bucket.
 
 Uploads follow the Phase 2 contract:
-- Object key: ``faces/{face_id}/{sample_id}/aligned.webp``
-- Content type: ``image/webp``
+- Object key: ``faces/{face_id}/{sample_id}/original.jpg``
+- Content type: ``image/jpeg``
 - Metadata: ``x-amz-meta-sha256`` = hex digest of payload
+- Existing objects are verified by size and SHA; conflicts fail-closed.
 """
 
 from __future__ import annotations
@@ -11,10 +12,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Any
 
 from minio import Minio
 from minio.error import S3Error
+
+
+@dataclass(frozen=True)
+class ObjectStat:
+    object_key: str
+    size: int | None
+    sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -26,7 +35,7 @@ class UploadResult:
 
 
 class MinioStore:
-    """Bounded-concurrent MinIO uploader for aligned face crops."""
+    """Bounded-concurrent MinIO uploader for original input JPEGs."""
 
     def __init__(
         self,
@@ -58,7 +67,6 @@ class MinioStore:
                 if not self._client.bucket_exists(self._bucket_name):
                     self._client.make_bucket(self._bucket_name)
             except S3Error as exc:
-                # Bucket may already exist in a race; ignore if so.
                 if exc.code not in ("BucketAlreadyExists", "BucketAlreadyOwnedByYou"):
                     raise
 
@@ -66,24 +74,52 @@ class MinioStore:
         await self._ensure_bucket_task
 
     def _object_key(self, face_id: str, sample_id: str) -> str:
-        return f"faces/{face_id}/{sample_id}/aligned.webp"
+        return f"faces/{face_id}/{sample_id}/original.jpg"
+
+    def _stat_sync(self, object_key: str) -> ObjectStat | None:
+        try:
+            info = self._client.stat_object(self._bucket_name, object_key)
+        except S3Error as exc:
+            if exc.code == "NoSuchKey":
+                return None
+            raise
+        sha256 = info.metadata.get("sha256") if info.metadata else None
+        if sha256 is None:
+            sha256 = info.metadata.get("X-Amz-Meta-Sha256") if info.metadata else None
+        return ObjectStat(
+            object_key=object_key,
+            size=info.size,
+            sha256=sha256,
+        )
 
     def _upload_sync(
         self,
         face_id: str,
         sample_id: str,
         data: bytes,
-        content_type: str = "image/webp",
+        content_type: str = "image/jpeg",
     ) -> UploadResult:
         sha256 = hashlib.sha256(data).hexdigest()
         object_key = self._object_key(face_id, sample_id)
+        existing = self._stat_sync(object_key)
+        if existing is not None:
+            if existing.size != len(data):
+                raise RuntimeError(f"BLOCKED_MINIO_CONFLICT: {object_key} exists with different size")
+            if existing.sha256 is not None and existing.sha256 != sha256:
+                raise RuntimeError(f"BLOCKED_MINIO_CONFLICT: {object_key} exists with different sha256")
+            return UploadResult(
+                object_key=object_key,
+                etag=None,
+                sha256=sha256,
+                bytes_written=len(data),
+            )
         result = self._client.put_object(
             self._bucket_name,
             object_key,
-            data,
+            BytesIO(data),
             length=len(data),
             content_type=content_type,
-            metadata={"x-amz-meta-sha256": sha256},
+            metadata={"sha256": sha256},
         )
         return UploadResult(
             object_key=object_key,
@@ -97,7 +133,7 @@ class MinioStore:
         face_id: str,
         sample_id: str,
         data: bytes,
-        content_type: str = "image/webp",
+        content_type: str = "image/jpeg",
     ) -> UploadResult:
         await self._ensure_bucket()
         async with self._semaphore:
@@ -112,8 +148,8 @@ class MinioStore:
     async def upload_many(
         self,
         items: list[tuple[str, str, bytes]],
-        content_type: str = "image/webp",
-    ) -> list[UploadResult | Exception]:
+        content_type: str = "image/jpeg",
+    ) -> list[UploadResult | BaseException]:
         """Upload many samples concurrently with bounded parallelism.
 
         Returns a list aligned with ``items``; failed uploads are returned as
@@ -123,20 +159,23 @@ class MinioStore:
 
         async def _one(face_id: str, sample_id: str, data: bytes) -> UploadResult:
             async with self._semaphore:
-                return await asyncio.to_thread(
-                    self._upload_sync, face_id, sample_id, data, content_type
-                )
+                return await asyncio.to_thread(self._upload_sync, face_id, sample_id, data, content_type)
 
         return await asyncio.gather(
             *(_one(face_id, sample_id, data) for face_id, sample_id, data in items),
             return_exceptions=True,
         )
 
+    async def stat(self, object_key: str) -> ObjectStat | None:
+        await self._ensure_bucket()
+        async with self._semaphore:
+            return await asyncio.to_thread(self._stat_sync, object_key)
+
     async def delete_best_effort(self, object_key: str) -> None:
         """Best-effort cleanup; used during rollback."""
         try:
-            await asyncio.to_thread(
-                self._client.remove_object, self._bucket_name, object_key
-            )
+            await self._ensure_bucket()
+            async with self._semaphore:
+                await asyncio.to_thread(self._client.remove_object, self._bucket_name, object_key)
         except Exception:
             pass

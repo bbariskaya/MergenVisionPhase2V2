@@ -1,109 +1,99 @@
 """PostgreSQL persistence store for Phase 2's existing tables.
 
 This store connects to the running Phase 2 PostgreSQL and writes directly into
-``person``, ``face_identity`` and ``face_sample`` using Phase 2's own ORM models
-when available. No new tables or migrations are created by Phase 1.
+``person``, ``face_identity`` and ``face_sample`` using SQLAlchemy Core. No new
+tables or migrations are created by Phase 1.
+
+The schema is an exact mirror of the live Phase 2 ORM at HEAD so the contract
+never drifts. Broad fallback to a guessed schema is forbidden.
 """
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Sequence
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from datetime import UTC, datetime
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     Column,
     DateTime,
     ForeignKey,
+    Integer,
     MetaData,
     String,
     Table,
     UniqueConstraint,
+    func,
     select,
+    text,
     update,
 )
-from sqlalchemy.dialects.postgresql import UUID, insert as pg_insert
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from mv_phase1_bulk.types import FaceRecord, PersonRecord, SampleRecord
 
-# Phase 2 models are reused read-only so the schema can never drift.
-# If the backend package is importable (e.g. when running inside the Phase 2
-# repository or Docker context), use its declarative models. Otherwise fall back
-# to an identical SQLAlchemy Core mirror so the package stays self-contained.
-_PHASE2_BACKEND = Path("/home/user/Workspace/MergenVisionPhase2v2/backend")
-if str(_PHASE2_BACKEND) not in sys.path:
-    sys.path.insert(0, str(_PHASE2_BACKEND))
+metadata = MetaData()
 
-try:
-    from app.infrastructure.persistence.sqlalchemy.models.person import PersonOrm  # type: ignore[import]
-    from app.infrastructure.persistence.sqlalchemy.models.face_identity import FaceIdentityOrm  # type: ignore[import]
-    from app.infrastructure.persistence.sqlalchemy.models.face_sample import FaceSampleOrm  # type: ignore[import]
+person_table = Table(
+    "person",
+    metadata,
+    Column("person_id", UUID(as_uuid=True), primary_key=True),
+    Column("display_name", String(255), nullable=False),
+    Column("person_metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    Column("is_active", Boolean, nullable=False, default=True),
+    Column("version", Integer, nullable=False, default=1),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
+    Column("deleted_at", DateTime(timezone=True), nullable=True),
+)
 
-    _USE_PHASE2_MODELS = True
-    person_table = PersonOrm.__table__
-    face_identity_table = FaceIdentityOrm.__table__
-    face_sample_table = FaceSampleOrm.__table__
-    metadata = PersonOrm.metadata
-except Exception:  # pragma: no cover - fallback only
-    _USE_PHASE2_MODELS = False
-    metadata = MetaData()
+face_identity_table = Table(
+    "face_identity",
+    metadata,
+    Column("face_id", UUID(as_uuid=True), primary_key=True),
+    Column("status", String(16), nullable=False),
+    Column("is_active", Boolean, nullable=False, default=True),
+    Column("display_name", String(255), nullable=True),
+    Column("identity_metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    Column(
+        "person_id",
+        UUID(as_uuid=True),
+        ForeignKey("person.person_id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    Column(
+        "redirect_to_face_id",
+        UUID(as_uuid=True),
+        ForeignKey("face_identity.face_id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    Column("version", Integer, nullable=False, default=1),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
+    Column("deleted_at", DateTime(timezone=True), nullable=True),
+)
 
-    person_table = Table(
-        "person",
-        metadata,
-        Column("person_id", UUID(as_uuid=True), primary_key=True),
-        Column("display_name", String(255), nullable=False),
-        Column("status", String(32), nullable=False, default="active"),
-        Column("metadata", JSON, nullable=False, default=dict),
-        Column("created_at", DateTime(timezone=True), nullable=False),
-        Column("updated_at", DateTime(timezone=True), nullable=False),
-        Column("deleted_at", DateTime(timezone=True), nullable=True),
-    )
-
-    face_identity_table = Table(
-        "face_identity",
-        metadata,
-        Column("face_id", UUID(as_uuid=True), primary_key=True),
-        Column("person_id", UUID(as_uuid=True), ForeignKey("person.person_id"), nullable=False),
-        Column("model_version", String(64), nullable=False),
-        Column("status", String(32), nullable=False, default="active"),
-        Column("is_canonical", Boolean, nullable=False, default=True),
-        Column("display_name", String(255), nullable=False),
-        Column("metadata", JSON, nullable=False, default=dict),
-        Column("created_at", DateTime(timezone=True), nullable=False),
-        Column("updated_at", DateTime(timezone=True), nullable=False),
-        Column("deleted_at", DateTime(timezone=True), nullable=True),
-        UniqueConstraint("person_id", "model_version", name="uq_face_identity_person_model"),
-    )
-
-    face_sample_table = Table(
-        "face_sample",
-        metadata,
-        Column("sample_id", UUID(as_uuid=True), primary_key=True),
-        Column("face_id", UUID(as_uuid=True), ForeignKey("face_identity.face_id"), nullable=False),
-        Column("person_id", UUID(as_uuid=True), ForeignKey("person.person_id"), nullable=False),
-        Column("status", String(32), nullable=False, default="pending"),
-        Column("bucket", String(128), nullable=True),
-        Column("object_key", String(512), nullable=True),
-        Column("sha256", String(64), nullable=False),
-        Column("model_version", String(64), nullable=False),
-        Column("preprocess_version", String(32), nullable=False),
-        Column("rejection_reason", String(128), nullable=True),
-        Column("metadata", JSON, nullable=False, default=dict),
-        Column("created_at", DateTime(timezone=True), nullable=False),
-        Column("updated_at", DateTime(timezone=True), nullable=False),
-        Column("deleted_at", DateTime(timezone=True), nullable=True),
-        UniqueConstraint("face_id", "sha256", name="uq_face_sample_face_sha256"),
-    )
+face_sample_table = Table(
+    "face_sample",
+    metadata,
+    Column("sample_id", UUID(as_uuid=True), primary_key=True),
+    Column("face_id", UUID(as_uuid=True), ForeignKey("face_identity.face_id", ondelete="RESTRICT"), nullable=False),
+    Column("state", String(16), nullable=False),
+    Column("bucket", String(255), nullable=True),
+    Column("object_key", String(1024), nullable=True),
+    Column("failure_code", String(64), nullable=True),
+    Column("is_active", Boolean, nullable=False, default=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("activated_at", DateTime(timezone=True), nullable=True),
+    Column("deactivated_at", DateTime(timezone=True), nullable=True),
+    UniqueConstraint("face_id", "object_key", name="uq_face_sample_face_object_key"),
+)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class PostgresStore:
@@ -134,6 +124,84 @@ class PostgresStore:
         return self._engine
 
     # ------------------------------------------------------------------
+    # Conflict-safe reads
+    # ------------------------------------------------------------------
+    async def get_person(self, conn: AsyncConnection, person_id: str) -> PersonRecord | None:
+        row = await conn.execute(
+            select(
+                person_table.c.person_id,
+                person_table.c.display_name,
+                person_table.c.person_metadata,
+                person_table.c.is_active,
+                person_table.c.version,
+            ).where(person_table.c.person_id == person_id)
+        )
+        r = row.mappings().first()
+        if r is None:
+            return None
+        return PersonRecord(
+            person_id=str(r.person_id),
+            display_name=r.display_name,
+            is_active=r.is_active,
+            person_metadata=dict(r.person_metadata or {}),
+            version=r.version,
+        )
+
+    async def get_face_identity(self, conn: AsyncConnection, face_id: str) -> FaceRecord | None:
+        row = await conn.execute(
+            select(
+                face_identity_table.c.face_id,
+                face_identity_table.c.person_id,
+                face_identity_table.c.status,
+                face_identity_table.c.is_active,
+                face_identity_table.c.display_name,
+                face_identity_table.c.identity_metadata,
+                face_identity_table.c.version,
+            ).where(face_identity_table.c.face_id == face_id)
+        )
+        r = row.mappings().first()
+        if r is None:
+            return None
+        return FaceRecord(
+            face_id=str(r.face_id),
+            person_id=str(r.person_id) if r.person_id else "",
+            status=r.status,
+            is_active=r.is_active,
+            display_name=r.display_name or "",
+            identity_metadata=dict(r.identity_metadata or {}),
+            version=r.version,
+        )
+
+    async def get_sample(self, conn: AsyncConnection, sample_id: str) -> SampleRecord | None:
+        row = await conn.execute(
+            select(
+                face_sample_table.c.sample_id,
+                face_sample_table.c.face_id,
+                face_sample_table.c.state,
+                face_sample_table.c.bucket,
+                face_sample_table.c.object_key,
+                face_sample_table.c.failure_code,
+                face_sample_table.c.is_active,
+                face_sample_table.c.activated_at,
+                face_sample_table.c.deactivated_at,
+            ).where(face_sample_table.c.sample_id == sample_id)
+        )
+        r = row.mappings().first()
+        if r is None:
+            return None
+        return SampleRecord(
+            sample_id=str(r.sample_id),
+            face_id=str(r.face_id),
+            state=r.state,
+            bucket=r.bucket,
+            object_key=r.object_key,
+            failure_code=r.failure_code,
+            is_active=r.is_active,
+            activated_at=r.activated_at.isoformat() if r.activated_at else None,
+            deactivated_at=r.deactivated_at.isoformat() if r.deactivated_at else None,
+        )
+
+    # ------------------------------------------------------------------
     # Bulk upsert helpers
     # ------------------------------------------------------------------
     async def upsert_people(
@@ -143,30 +211,18 @@ class PostgresStore:
     ) -> None:
         if not people:
             return
-        now = _utcnow()
         rows = [
             {
                 "person_id": p.person_id,
                 "display_name": p.display_name,
-                "status": p.status,
-                "metadata": p.metadata,
-                "created_at": now,
-                "updated_at": now,
-                "deleted_at": None,
+                "person_metadata": p.person_metadata,
+                "is_active": p.is_active,
+                "version": p.version,
             }
             for p in people
         ]
         stmt = pg_insert(person_table).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["person_id"],
-            set_={
-                "display_name": stmt.excluded.display_name,
-                "status": stmt.excluded.status,
-                "metadata": stmt.excluded.metadata,
-                "updated_at": stmt.excluded.updated_at,
-                "deleted_at": None,
-            },
-        )
+        stmt = stmt.on_conflict_do_nothing(index_elements=["person_id"])
         await conn.execute(stmt)
 
     async def upsert_faces(
@@ -176,34 +232,20 @@ class PostgresStore:
     ) -> None:
         if not faces:
             return
-        now = _utcnow()
         rows = [
             {
                 "face_id": f.face_id,
-                "person_id": f.person_id,
-                "model_version": f.model_version,
                 "status": f.status,
-                "is_canonical": f.is_canonical,
+                "is_active": f.is_active,
                 "display_name": f.display_name,
-                "metadata": f.metadata,
-                "created_at": now,
-                "updated_at": now,
-                "deleted_at": None,
+                "identity_metadata": f.identity_metadata,
+                "person_id": f.person_id or None,
+                "version": f.version,
             }
             for f in faces
         ]
         stmt = pg_insert(face_identity_table).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["face_id"],
-            set_={
-                "status": stmt.excluded.status,
-                "is_canonical": stmt.excluded.is_canonical,
-                "display_name": stmt.excluded.display_name,
-                "metadata": stmt.excluded.metadata,
-                "updated_at": stmt.excluded.updated_at,
-                "deleted_at": None,
-            },
-        )
+        stmt = stmt.on_conflict_do_nothing(index_elements=["face_id"])
         await conn.execute(stmt)
 
     async def upsert_samples_pending(
@@ -211,110 +253,105 @@ class PostgresStore:
         conn: AsyncConnection,
         samples: Sequence[SampleRecord],
     ) -> None:
-        """Insert or re-touch samples in ``pending`` state for idempotent retries."""
+        """Insert pending samples only if they do not already exist.
+
+        Existing active/inactive/failed samples are never downgraded to pending.
+        """
         if not samples:
             return
-        now = _utcnow()
         rows = [
             {
                 "sample_id": s.sample_id,
                 "face_id": s.face_id,
-                "person_id": s.person_id,
-                "status": "pending",
-                "bucket": s.bucket,
-                "object_key": s.object_key,
-                "sha256": s.sha256,
-                "model_version": s.model_version,
-                "preprocess_version": s.preprocess_version,
-                "rejection_reason": s.rejection_reason,
-                "metadata": s.metadata,
-                "created_at": now,
-                "updated_at": now,
-                "deleted_at": None,
+                "state": "pending",
+                "bucket": None,
+                "object_key": None,
+                "failure_code": None,
+                "is_active": False,
             }
             for s in samples
         ]
         stmt = pg_insert(face_sample_table).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["sample_id"],
-            set_={
-                "status": "pending",
-                "bucket": stmt.excluded.bucket,
-                "object_key": stmt.excluded.object_key,
-                "sha256": stmt.excluded.sha256,
-                "model_version": stmt.excluded.model_version,
-                "preprocess_version": stmt.excluded.preprocess_version,
-                "rejection_reason": stmt.excluded.rejection_reason,
-                "metadata": stmt.excluded.metadata,
-                "updated_at": stmt.excluded.updated_at,
-                "deleted_at": None,
-            },
-        )
+        stmt = stmt.on_conflict_do_nothing(index_elements=["sample_id"])
         await conn.execute(stmt)
 
     async def activate_samples(
         self,
         conn: AsyncConnection,
-        sample_ids: Sequence[str],
+        activations: Sequence[tuple[str, str, str]],
     ) -> None:
-        if not sample_ids:
+        """Activate samples with their own object keys.
+
+        Each tuple is ``(sample_id, bucket, object_key)``.  The update is done
+        per-row because object keys differ per sample.
+        """
+        if not activations:
             return
-        await conn.execute(
-            update(face_sample_table)
-            .where(face_sample_table.c.sample_id.in_(sample_ids))
-            .values(status="active", updated_at=_utcnow(), rejection_reason=None),
-        )
+        activated_at = _utcnow()
+        for sample_id, bucket, object_key in activations:
+            await conn.execute(
+                update(face_sample_table)
+                .where(face_sample_table.c.sample_id == sample_id)
+                .values(
+                    state="active",
+                    is_active=True,
+                    bucket=bucket,
+                    object_key=object_key,
+                    activated_at=activated_at,
+                    failure_code=None,
+                ),
+            )
 
     async def fail_samples(
         self,
         conn: AsyncConnection,
         sample_ids: Sequence[str],
-        reason: str,
+        failure_code: str,
     ) -> None:
         if not sample_ids:
             return
         await conn.execute(
             update(face_sample_table)
             .where(face_sample_table.c.sample_id.in_(sample_ids))
-            .values(status="failed", updated_at=_utcnow(), rejection_reason=reason),
+            .values(
+                state="failed",
+                is_active=False,
+                failure_code=failure_code,
+            ),
         )
 
-    async def get_samples_by_status(
+    async def get_samples_by_state(
         self,
         conn: AsyncConnection,
-        status: str,
+        state: str,
         limit: int = 10000,
     ) -> list[SampleRecord]:
         result = await conn.execute(
             select(
                 face_sample_table.c.sample_id,
                 face_sample_table.c.face_id,
-                face_sample_table.c.person_id,
-                face_sample_table.c.status,
+                face_sample_table.c.state,
                 face_sample_table.c.bucket,
                 face_sample_table.c.object_key,
-                face_sample_table.c.sha256,
-                face_sample_table.c.model_version,
-                face_sample_table.c.preprocess_version,
-                face_sample_table.c.rejection_reason,
-                face_sample_table.c.metadata,
+                face_sample_table.c.failure_code,
+                face_sample_table.c.is_active,
+                face_sample_table.c.activated_at,
+                face_sample_table.c.deactivated_at,
             )
-            .where(face_sample_table.c.status == status)
+            .where(face_sample_table.c.state == state)
             .limit(limit)
         )
         return [
             SampleRecord(
                 sample_id=str(row.sample_id),
                 face_id=str(row.face_id),
-                person_id=str(row.person_id),
-                status=row.status,
+                state=row.state,
                 bucket=row.bucket,
                 object_key=row.object_key,
-                sha256=row.sha256,
-                model_version=row.model_version,
-                preprocess_version=row.preprocess_version,
-                rejection_reason=row.rejection_reason,
-                metadata=dict(row.metadata or {}),
+                failure_code=row.failure_code,
+                is_active=row.is_active,
+                activated_at=row.activated_at.isoformat() if row.activated_at else None,
+                deactivated_at=row.deactivated_at.isoformat() if row.deactivated_at else None,
             )
             for row in result.mappings()
         ]
@@ -328,7 +365,11 @@ class PostgresStore:
         faces: Sequence[FaceRecord],
         samples: Sequence[SampleRecord],
     ) -> None:
-        """Write pending person/face/sample rows inside one transaction."""
+        """Write pending person/face/sample rows inside one transaction.
+
+        Existing rows are left untouched; create-if-absent semantics keep bulk
+        enrollment idempotent.
+        """
         async with self._engine.begin() as conn:  # type: ignore[union-attr]
             await self.upsert_people(conn, people)
             await self.upsert_faces(conn, faces)
@@ -336,4 +377,57 @@ class PostgresStore:
 
     async def get_pending_samples(self, limit: int = 10000) -> list[SampleRecord]:
         async with self._engine.connect() as conn:  # type: ignore[union-attr]
-            return await self.get_samples_by_status(conn, "pending", limit=limit)
+            return await self.get_samples_by_state(conn, "pending", limit=limit)
+
+    async def activate_samples_tx(
+        self,
+        activations: Sequence[tuple[str, str, str]],
+    ) -> None:
+        """Activate samples inside a fresh transaction."""
+        async with self._engine.begin() as conn:  # type: ignore[union-attr]
+            await self.activate_samples(conn, activations)
+
+    async def fail_samples_tx(
+        self,
+        failures: Sequence[tuple[str, str]],
+    ) -> None:
+        """Mark samples as failed inside a fresh transaction."""
+        async with self._engine.begin() as conn:  # type: ignore[union-attr]
+            for sample_id, failure_code in failures:
+                await self.fail_samples(conn, [sample_id], failure_code)
+
+    async def get_samples_for_face_ids(
+        self,
+        face_ids: Sequence[str],
+    ) -> list[SampleRecord]:
+        """Return every face_sample row for the given face ids."""
+        if not face_ids:
+            return []
+        async with self._engine.connect() as conn:  # type: ignore[union-attr]
+            result = await conn.execute(
+                select(
+                    face_sample_table.c.sample_id,
+                    face_sample_table.c.face_id,
+                    face_sample_table.c.state,
+                    face_sample_table.c.bucket,
+                    face_sample_table.c.object_key,
+                    face_sample_table.c.failure_code,
+                    face_sample_table.c.is_active,
+                    face_sample_table.c.activated_at,
+                    face_sample_table.c.deactivated_at,
+                ).where(face_sample_table.c.face_id.in_(face_ids))
+            )
+            return [
+                SampleRecord(
+                    sample_id=str(row.sample_id),
+                    face_id=str(row.face_id),
+                    state=row.state,
+                    bucket=row.bucket,
+                    object_key=row.object_key,
+                    failure_code=row.failure_code,
+                    is_active=row.is_active,
+                    activated_at=row.activated_at.isoformat() if row.activated_at else None,
+                    deactivated_at=row.deactivated_at.isoformat() if row.deactivated_at else None,
+                )
+                for row in result.mappings()
+            ]

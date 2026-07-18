@@ -1,4 +1,5 @@
 """GPU ArcFace recognizer using a TensorRT engine and native L2 normalize."""
+
 from __future__ import annotations
 
 import ctypes
@@ -43,9 +44,7 @@ class GpuRecognizer:
         """Return the recognizer engine's maximum batch size."""
         input_name = self._engine._input_names[0]
         try:
-            _, _, max_shape = self._engine.engine.get_tensor_profile_shape(
-                input_name, 0
-            )
+            _, _, max_shape = self._engine.engine.get_tensor_profile_shape(input_name, 0)
             return int(max_shape[0])
         except Exception:
             return 64
@@ -71,9 +70,7 @@ class GpuRecognizer:
         if faces.dtype is not ctypes.c_float:
             raise TypeError(f"GpuRecognizer expects float32 faces, got {faces.dtype}")
         if len(faces.shape) != 4 or faces.shape[1:] != (3, 112, 112):
-            raise ValueError(
-                f"GpuRecognizer expects [N,3,112,112], got {faces.shape}"
-            )
+            raise ValueError(f"GpuRecognizer expects [N,3,112,112], got {faces.shape}")
 
         active_stream = stream if stream is not None else 0
         n = faces.shape[0]
@@ -86,9 +83,7 @@ class GpuRecognizer:
 
         embeddings: list[DeviceTensor] = []
         for offset in range(0, n, max_batch):
-            chunk = self._slice_faces(
-                faces, offset, min(max_batch, n - offset), active_stream
-            )
+            chunk = self._slice_faces(faces, offset, min(max_batch, n - offset), active_stream)
             embeddings.append(self._embed_chunk(chunk, active_stream, status=status))
 
         return self._concat_embeddings(embeddings, active_stream)
@@ -129,9 +124,7 @@ class GpuRecognizer:
         # ArcFace engines have a single output embedding tensor.
         embedding_tensor = next(iter(outputs.values()))
         if embedding_tensor.dtype is not ctypes.c_float:
-            raise TypeError(
-                f"Recognizer output is not float32: {embedding_tensor.dtype}"
-            )
+            raise TypeError(f"Recognizer output is not float32: {embedding_tensor.dtype}")
         # Normalize in place on the engine output buffer; no D2D copy.
         return l2_normalize_device(
             embedding_tensor,

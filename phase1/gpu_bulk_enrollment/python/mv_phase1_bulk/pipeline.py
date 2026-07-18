@@ -1,9 +1,12 @@
 """GPU batch extraction pipeline wrapper."""
+
 from __future__ import annotations
 
+import contextlib
+import ctypes
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from cuda.bindings import runtime as cuda_runtime
@@ -75,9 +78,7 @@ class GpuFacePipeline:
     def warmup(self) -> None:
         self._set_device()
         input_name = self._detector_engine._input_names[0]
-        self._detector_engine.warmup(
-            {input_name: (1, 3, self._detector_input_size, self._detector_input_size)}
-        )
+        self._detector_engine.warmup({input_name: (1, 3, self._detector_input_size, self._detector_input_size)})
         self._recognizer.warmup()
         logger.info("GPU face pipeline warmup complete")
 
@@ -85,23 +86,24 @@ class GpuFacePipeline:
         for obj in (
             self._decoder,
             self._preprocessor,
+            self._detector_engine,
             self._postprocess,
             self._aligner,
             self._recognizer,
             self._arena,
         ):
-            try:
+            with contextlib.suppress(Exception):
                 obj.close()
-            except Exception as exc:
-                logger.warning("close failed for %s: %s", obj, exc)
         if hasattr(self, "_stream"):
-            try:
+            with contextlib.suppress(Exception):
                 cuda_runtime.cudaStreamDestroy(self._stream)
-            except Exception as exc:
-                logger.warning("stream destroy failed: %s", exc)
             del self._stream
 
-    def __enter__(self) -> "GpuFacePipeline":
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def __enter__(self) -> GpuFacePipeline:
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -113,7 +115,7 @@ class GpuFacePipeline:
         *,
         source_keys: list[str] | None = None,
         max_batch: int = 256,
-        multi_face_policy: str = "largest",
+        multi_face_policy: str = "quarantine",
     ) -> list[ImageExtractionResult]:
         """Batch extraction optimised for RetinaFace R50 dynamic batch.
 
@@ -126,8 +128,8 @@ class GpuFacePipeline:
         max_batch:
             Maximum number of images processed in one detector/recognizer call.
         multi_face_policy:
-            ``largest`` (default) keeps the largest face per image; ``quarantine``
-            rejects images with more than one detected face.
+            ``quarantine`` (default) rejects images with more than one detected
+            face; ``largest`` keeps the largest face per image.
 
         Returns
         -------
@@ -189,40 +191,37 @@ class GpuFacePipeline:
         b = len(chunk)
 
         # Decode
+        d_images: list[DeviceTensor | None] = []
+        infos: list[DecodeInfo | None] = []
         try:
-            d_images, infos = self._decoder.decode_batch(
-                chunk, stream=int(self._stream)
-            )
+            decoded, decoded_infos = self._decoder.decode_batch(chunk, stream=int(self._stream))
+            d_images = list(decoded)
+            infos = list(decoded_infos)
         except Exception as exc:
             logger.warning("batch decode failed, falling back to per-image: %s", exc)
-            d_images = []
-            infos: list[DecodeInfo | None] = []
             for encoded in chunk:
                 try:
-                    d_img, info = self._decoder.decode(
-                        encoded, stream=int(self._stream)
-                    )
+                    d_img, decoded_info = self._decoder.decode(encoded, stream=int(self._stream))
                     d_images.append(d_img)
-                    infos.append(info)
+                    infos.append(decoded_info)
                 except Exception as inner:
                     d_images.append(None)
                     infos.append(None)
                     logger.debug("single decode failed: %s", inner)
 
-        # Preprocess only successfully decoded images.
-        valid_images: list[DeviceTensor] = [
-            img for img in d_images if img is not None
-        ]
-        if not valid_images:
+        # Preprocess only successfully decoded images, preserving original index
+        # so detection outputs can be aligned with per-image metadata.
+        valid_indices: list[int] = [idx for idx, img in enumerate(d_images) if img is not None]
+        valid_images: list[DeviceTensor] = [cast(DeviceTensor, d_images[idx]) for idx in valid_indices]
+        valid_infos: list[DecodeInfo] = [cast(DecodeInfo, infos[idx]) for idx in valid_indices]
+        if not valid_images or len(valid_images) != len(valid_infos):
             for i in range(b):
                 res = results[chunk_start + i]
                 res.status = "decode_failed"
                 res.rejection_reason = "jpeg_decode_failed"
             return
 
-        d_input = self._preprocessor.preprocess_batch(
-            valid_images, stream=int(self._stream)
-        )
+        d_input = self._preprocessor.preprocess_batch(valid_images, stream=int(self._stream))
 
         # Detect
         input_name = self._detector_engine._input_names[0]
@@ -238,17 +237,33 @@ class GpuFacePipeline:
         )
         scaled_list = self._postprocess.scale_and_compact(
             per_image,
-            original_heights=[info.height for info in infos if info is not None],
-            original_widths=[info.width for info in infos if info is not None],
+            original_heights=[info.height for info in valid_infos],
+            original_widths=[info.width for info in valid_infos],
             stream=int(self._stream),
         )
+
+        # Per-image face counts drive both the quarantine decision and the
+        # largest-face selection.  Copy them back explicitly before the kernel
+        # so the host policy logic and the native picker see consistent data.
+        face_counts_host = np.empty(len(scaled_list), dtype=np.int32)
+        for i, scaled in enumerate(scaled_list):
+            err = cuda_runtime.cudaMemcpyAsync(
+                int(face_counts_host.ctypes.data) + i * 4,
+                scaled.count.ptr,
+                4,
+                cuda_runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                int(self._stream),
+            )
+            check_cuda(err, "face count D2H")
+        err = cuda_runtime.cudaStreamSynchronize(int(self._stream))
+        check_cuda(err, "face count sync")
 
         # Per-image largest-face selection stays on device.
         batch_selections = self._postprocess.pick_largest_device(
             scaled_list,
             stream=int(self._stream),
         )
-        valid_host = np.empty(b, dtype=np.int32)
+        valid_host = np.empty(len(valid_images), dtype=np.int32)
         err = cuda_runtime.cudaMemcpyAsync(
             valid_host.ctypes.data,
             batch_selections.valid.ptr,
@@ -273,9 +288,16 @@ class GpuFacePipeline:
             res.original_width = info.width
             res.original_height = info.height
 
-            if not valid_host[valid_idx]:
+            face_count = int(face_counts_host[valid_idx])
+            if face_count == 0 or not valid_host[valid_idx]:
                 res.status = "no_face"
                 res.rejection_reason = "no_face_detected"
+                valid_idx += 1
+                continue
+
+            if multi_face_policy == "quarantine" and face_count > 1:
+                res.status = "quarantine"
+                res.rejection_reason = "multiple_faces"
                 valid_idx += 1
                 continue
 
@@ -333,18 +355,16 @@ class GpuFacePipeline:
         )
         chip_plane_bytes = 3 * 112 * 112 * 4
 
-        for j, (_, img_idx, _, _lms_h, _) in enumerate(selected):
+        for j, (_, valid_idx, _, _lms_h, _) in enumerate(selected):
             d_landmarks = DeviceTensor(
-                batch_selections.landmarks.ptr + img_idx * 10 * 4,
+                batch_selections.landmarks.ptr + valid_idx * 10 * 4,
                 (1, 10),
                 ctypes.c_float,
                 self._device_id,
                 batch_selections.landmarks,
                 stream=int(self._stream),
             )
-            chip = self._aligner.align(
-                d_images[img_idx], d_landmarks, stream=int(self._stream)
-            )
+            chip = self._aligner.align(valid_images[valid_idx], d_landmarks, stream=int(self._stream))
             err = cuda_runtime.cudaMemcpyAsync(
                 chip_batch.ptr + j * chip_plane_bytes,
                 chip.ptr,
@@ -375,21 +395,24 @@ class GpuFacePipeline:
             int(self._stream),
         )
         check_cuda(err, "extract_batch embeddings D2H")
+
+        # Only embeddings are copied to host; the aligned crop stays on GPU.
         err = cuda_runtime.cudaStreamSynchronize(int(self._stream))
         check_cuda(err, "extract_batch final sync")
 
         for j, (global_idx, _img_idx, box_h, lms_h, score) in enumerate(selected):
             res = results[global_idx]
             embedding = embeddings_host[j]
+            norm = float(np.linalg.norm(embedding))
             face = FaceExtraction(
                 source_index=global_idx,
                 detection_ordinal=0,
                 bbox_original=box_h,
                 landmarks_original=lms_h.reshape(5, 2),
                 detector_score=score,
-                quality_primitives={"l2_norm": 1.0},
+                quality_primitives={"l2_norm": norm},
                 embedding=embedding,
-                embedding_norm=1.0,
+                embedding_norm=norm,
                 crop_bytes=b"",
                 model_version=self._model_version,
                 preprocess_version=self._preprocess_version,

@@ -1,6 +1,6 @@
 ---
 name: cross-repo-researcher
-description: MergenVisionDemo reposunu codebase-memory-mcp ile ULTRA-THOROUGH modda arastirir, kritik pattern'leri cikarir ve sonuclari hem Phase2v2'ye knowledge pack dosyasi hem de prompt-memory graph'ine yazar. Kullanim: /cross-repo-researcher
+description: "MergenVisionDemo reposunu codebase-memory-mcp ile ULTRA-THOROUGH modda arastirir, kritik pattern'leri cikarir ve sonuclari hem Phase2v2'ye knowledge pack dosyasi hem de prompt-memory graph'ine yazar. Kullanim: /cross-repo-researcher"
 disable-model-invocation: true
 allowed-tools: Agent Bash(mkdir *) Read mcp__prompt-memory-mcp__store_memory mcp__prompt-memory-mcp__search_memories mcp__prompt-memory-mcp__relate_nodes
 ---

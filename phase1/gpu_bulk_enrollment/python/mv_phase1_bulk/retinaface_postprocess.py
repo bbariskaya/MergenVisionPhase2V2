@@ -4,8 +4,10 @@ Only small control-plane counters and the final selected landmarks are copied
 back to the host.  This avoids the large device-to-host transfer of raw
 ``loc/conf/landms`` tensors.
 """
+
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import logging
 from dataclasses import dataclass
@@ -57,32 +59,32 @@ def _build_priors(image_size: int = 640) -> np.ndarray:
 class RetinaFaceDetections:
     """Surviving detections for one image, still normalized to 640-space."""
 
-    boxes: DeviceTensor          # [N, 4]
-    scores: DeviceTensor         # [N]
-    landmarks: DeviceTensor      # [N, 10]
+    boxes: DeviceTensor  # [N, 4]
+    scores: DeviceTensor  # [N]
+    landmarks: DeviceTensor  # [N, 10]
     count: int
-    order: DeviceTensor          # [N]
-    keep: DeviceTensor           # [N]
+    order: DeviceTensor  # [N]
+    keep: DeviceTensor  # [N]
 
 
 @dataclass(frozen=True)
 class RetinaFaceScaledDetections:
     """Detections scaled back to original image coordinates."""
 
-    boxes: DeviceTensor          # [K, 4]
-    scores: DeviceTensor         # [K]
-    landmarks: DeviceTensor      # [K, 10]
-    count: DeviceTensor          # [1]
+    boxes: DeviceTensor  # [K, 4]
+    scores: DeviceTensor  # [K]
+    landmarks: DeviceTensor  # [K, 10]
+    count: DeviceTensor  # [1]
 
 
 @dataclass(frozen=True)
 class RetinaFaceBatchSelections:
     """Per-image largest face selected entirely on device."""
 
-    boxes: DeviceTensor          # [B, 4]
-    scores: DeviceTensor         # [B]
-    landmarks: DeviceTensor      # [B, 10]
-    valid: DeviceTensor          # [B]  int32, 1 if a face exists
+    boxes: DeviceTensor  # [B, 4]
+    scores: DeviceTensor  # [B]
+    landmarks: DeviceTensor  # [B, 10]
+    valid: DeviceTensor  # [B]  int32, 1 if a face exists
 
 
 class RetinaFacePostprocess:
@@ -129,9 +131,7 @@ class RetinaFacePostprocess:
     ) -> list[RetinaFaceDetections]:
         active_stream = stream if stream is not None else 0
         if set(outputs.keys()) != {"loc", "conf", "landms"}:
-            raise ValueError(
-                f"RetinaFace requires outputs loc/conf/landms, got {set(outputs.keys())}"
-            )
+            raise ValueError(f"RetinaFace requires outputs loc/conf/landms, got {set(outputs.keys())}")
         loc_t = outputs["loc"]
         conf_t = outputs["conf"]
         landms_t = outputs["landms"]
@@ -151,23 +151,13 @@ class RetinaFacePostprocess:
         ):
             raise ValueError("RetinaFace output batch/anchor mismatch")
         if num_anchors != self._priors.shape[0]:
-            raise ValueError(
-                f"Anchor mismatch: priors={self._priors.shape[0]}, outputs={num_anchors}"
-            )
+            raise ValueError(f"Anchor mismatch: priors={self._priors.shape[0]}, outputs={num_anchors}")
 
-        cand_boxes = self._arena.reserve(
-            (batch, self._max_candidates, 4), ctypes.c_float, stream=active_stream
-        )
-        cand_scores = self._arena.reserve(
-            (batch, self._max_candidates), ctypes.c_float, stream=active_stream
-        )
-        cand_landmarks = self._arena.reserve(
-            (batch, self._max_candidates, 10), ctypes.c_float, stream=active_stream
-        )
+        cand_boxes = self._arena.reserve((batch, self._max_candidates, 4), ctypes.c_float, stream=active_stream)
+        cand_scores = self._arena.reserve((batch, self._max_candidates), ctypes.c_float, stream=active_stream)
+        cand_landmarks = self._arena.reserve((batch, self._max_candidates, 10), ctypes.c_float, stream=active_stream)
         counters = self._arena.reserve((batch,), ctypes.c_int32, stream=active_stream)
-        err = cuda_runtime.cudaMemsetAsync(
-            counters.ptr, 0, batch * 4, active_stream
-        )
+        err = cuda_runtime.cudaMemsetAsync(counters.ptr, 0, batch * 4, active_stream)
         check_cuda(err, "retinaface counters memset")
 
         retinaface_decode_batch(
@@ -204,9 +194,7 @@ class RetinaFacePostprocess:
         for b in range(batch):
             count = int(count_arr[b])
             if count > self._max_candidates:
-                logger.warning(
-                    "RetinaFace candidate overflow: image %d %d > %d", b, count, self._max_candidates
-                )
+                logger.warning("RetinaFace candidate overflow: image %d %d > %d", b, count, self._max_candidates)
                 count = self._max_candidates
             if count == 0:
                 per_image.append(
@@ -363,6 +351,9 @@ class RetinaFacePostprocess:
             )
             check_cuda(err, "pick_largest count D2H")
 
+        err = cuda_runtime.cudaStreamSynchronize(active_stream)
+        check_cuda(err, "pick_largest count sync")
+
         retinaface_pick_largest(
             boxes_ptrs.ctypes.data,
             landmarks_ptrs.ctypes.data,
@@ -395,7 +386,5 @@ class RetinaFacePostprocess:
 
     def close(self) -> None:
         self._arena.close()
-        try:
+        with contextlib.suppress(Exception):
             cuda_runtime.cudaFree(self._priors.ptr)
-        except Exception:
-            logger.exception("retinaface priors cudaFree failed")

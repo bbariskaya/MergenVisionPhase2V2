@@ -1,6 +1,14 @@
 # Phase 2 Target Contract
 
-This document captures the read-only contracts the Phase 1 bulk enrollment tool must satisfy so that enrolled identities are visible to the existing Phase 2 image and video pipelines.
+This document captures the read-only contracts the Phase 1 isolated GPU bulk enrollment tool must satisfy so that enrolled identities are visible to the existing Phase 2 image and video pipelines.
+
+Source-of-truth order:
+
+1. This document.
+2. Current HEAD `backend/app/infrastructure/persistence/sqlalchemy/models/{person,face_identity,face_sample}.py`.
+3. Current HEAD `backend/app/infrastructure/storage/minio_adapter.py`.
+4. Current HEAD `backend/app/infrastructure/vectors/qdrant_adapter.py`.
+5. MergenVisionDemo commit `5bf4b4c57542b26058e8d068186faee06c0fc29c` compute/queue/ID patterns.
 
 ## PostgreSQL
 
@@ -8,12 +16,12 @@ This document captures the read-only contracts the Phase 1 bulk enrollment tool 
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `person_id` | UUID PK | Phase 1 generates deterministic UUIDv7 or namespace-based UUID; schema expects UUID. |
-| `display_name` | VARCHAR(255) NOT NULL | From manifest subject display name. |
-| `person_metadata` | JSONB NOT NULL default `{}` | May hold `source_dataset`, `external_subject_key`, `source_namespace`. |
+| `person_id` | UUID PK | Deterministic UUIDv5 over HMAC(secret, namespace:key). |
+| `display_name` | VARCHAR(255) NOT NULL | From manifest subject display name. User rename must be preserved; never blindly overwritten on conflict. |
+| `person_metadata` | JSONB NOT NULL default `{}` | May hold `source_namespace`, `external_subject_key` fingerprint. Raw source key must not leak. |
 | `is_active` | BOOLEAN NOT NULL default true | Soft delete uses `deleted_at` + `is_active=false`. |
-| `version` | INTEGER NOT NULL default 1 | Constraint `version >= 1`. |
-| `created_at/updated_at/deleted_at` | TIMESTAMPTZ | `deleted_at` null unless soft-deleted. |
+| `version` | INTEGER NOT NULL default 1 | Constraint `version >= 1`. Do not increment during idempotent bulk re-runs. |
+| `created_at/updated_at/deleted_at` | TIMESTAMPTZ | Managed by ORM defaults; do not inject synthetic timestamps. |
 
 Constraint: `(is_active=true AND deleted_at IS NULL) OR (is_active=false AND deleted_at IS NOT NULL)`.
 
@@ -21,68 +29,77 @@ Constraint: `(is_active=true AND deleted_at IS NULL) OR (is_active=false AND del
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `face_identity_id` | UUID PK | Deterministic UUID per subject. |
-| `person_id` | UUID nullable | Set when status is `known`. |
+| `face_id` | UUID PK | Deterministic UUIDv5 over HMAC(secret, namespace:key). Same person/model-independent identity. |
+| `status` | VARCHAR(16) NOT NULL | `anonymous` or `known`. Phase 1 bulk writes `known`. |
+| `is_active` | BOOLEAN NOT NULL default true | `false` when redirected or deleted. Do not reactivate a redirected/inactive identity. |
 | `display_name` | VARCHAR(255) nullable | Required when `status='known'`. |
-| `status` | VARCHAR(20) nullable | `pending`, `known`, `redirect`, `deleted`. |
-| `is_active` | BOOLEAN NOT NULL | `false` when `redirect` or `deleted`. |
-| `redirect_to_face_id` | UUID nullable | Set when `status='redirect'`. |
+| `identity_metadata` | JSONB NOT NULL default `{}` | May hold `source_namespace`, `external_subject_key` fingerprint. |
+| `person_id` | UUID nullable | Set when `status='known'`; FK to `person.person_id`. |
+| `redirect_to_face_id` | UUID nullable | Set when this identity redirects to a canonical face. Phase 1 bulk must not enroll into a redirected identity. |
+| `version` | INTEGER NOT NULL default 1 | Constraint `version >= 1`. |
+| `created_at/updated_at/deleted_at` | TIMESTAMPTZ | ORM defaults. |
 
 Check constraints:
-- `known` requires `person_id` and `display_name`.
-- `redirect` implies `is_active=false`.
+- `status IN ('anonymous', 'known')`.
+- `known` requires `person_id IS NOT NULL AND display_name IS NOT NULL AND btrim(display_name) != ''`.
+- `redirect_to_face_id IS NOT NULL` implies `is_active=false`.
 - Active/deleted consistency.
 
-Phase 1 will create `pending` rows during reservation and promote to `known` on successful persistence.
+Phase 1 bulk creates one canonical `known` `FaceIdentity` per subject, linked to the deterministic `Person`.
 
 ### `face_sample`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `sample_id` | UUID PK | Deterministic UUID; used as Qdrant point ID. |
-| `face_identity_id` | UUID NOT NULL | Canonical face identity. |
-| `person_id` | UUID nullable | Person reference; must match `face_identity.person_id` when known. |
-| `bucket` | VARCHAR nullable | Required when active. |
-| `object_key` | VARCHAR nullable | Required when active; technical UUID key. |
-| `model_version` | VARCHAR NOT NULL | Same as Phase 2 `settings.model_version`. |
-| `preprocess_version` | VARCHAR NOT NULL | From `model_profile.json`. |
-| `embedding_model` | VARCHAR NOT NULL | Same as `model_version` (GlintR100). |
-| `detector_model` | VARCHAR NOT NULL | Detector model tag (RetinaFace). |
-| `bbox` | JSONB | `{x, y, width, height}` in original image coordinates. |
-| `landmarks` | JSONB | 5 landmarks `[{x,y}, ...]` in original image coordinates. |
-| `quality_score` | FLOAT | Detector confidence or quality primitive. |
-| `status` | VARCHAR(20) NOT NULL | `pending`, `active`, `failed`, `inactive`. |
-| `activated_at` | TIMESTAMPTZ | Required when active. |
+| `sample_id` | UUID PK | Deterministic UUIDv5 over `face_id:image_sha256:model_version:preprocess_version`. Used as Qdrant point ID. |
+| `face_id` | UUID NOT NULL | FK to `face_identity.face_id`. |
+| `state` | VARCHAR(16) NOT NULL | `pending`, `active`, `failed`, `inactive`. Correct column name is `state`, not `status`. |
+| `bucket` | VARCHAR(255) nullable | Required when `state='active'`. |
+| `object_key` | VARCHAR(1024) nullable | Required when `state='active'`; technical key `faces/{face_id}/{sample_id}/aligned.webp`. |
+| `failure_code` | VARCHAR(64) nullable | Required when `state='failed'`. |
+| `is_active` | BOOLEAN NOT NULL default false | `true` only for `state='active'`. |
+| `created_at` | TIMESTAMPTZ | ORM default. |
+| `activated_at` | TIMESTAMPTZ nullable | Required when `state='active'`. |
+| `deactivated_at` | TIMESTAMPTZ nullable | Set when `state='inactive'`. |
 
 Check constraints:
-- Active requires `bucket`, `object_key`, `activated_at` not null.
-- Status enum limited.
+- `state IN ('pending', 'active', 'failed', 'inactive')`.
+- `pending` implies `is_active=false`, `bucket/object_key NULL`, `activated_at/deactivated_at NULL`, `failure_code NULL`.
+- `active` implies `is_active=true`, `bucket/object_key NOT NULL`, `activated_at NOT NULL`, `failure_code NULL`.
+- `failed` implies `is_active=false`, `failure_code NOT NULL`.
+- `inactive` implies `is_active=false`, `bucket/object_key NOT NULL`, `activated_at/deactivated_at NOT NULL`.
 
-Phase 1 will write `pending` rows, then upload to MinIO, batch upsert Qdrant, then update to `active`.
+Phase 1 writes `state='pending'`, then uploads to MinIO, upserts Qdrant, then updates to `state='active'` with `activated_at`.
 
 ## MinIO
 
-- Bucket: `settings.minio_bucket_name`.
-- Object key format: `enrollments/{person_id}/{sample_id}`.
-- Content type: `image/webp` for aligned crop.
+- Bucket: configured via `MV_MINIO_BUCKET_NAME`; no dangerous default.
+- Object key format: `faces/{face_id}/{sample_id}/aligned.webp`.
+- Content type: `image/webp`.
 - User metadata: `sha256` = SHA-256 of object bytes.
-- Idempotency: if same key exists with same size/sha256, reuse existing stat.
+- Idempotency: if same key exists, verify size and SHA match; reject conflict.
+- Only accepted aligned 112×112 face crops are written. Raw dataset JPEG must never be stored under this key.
 
 ## Qdrant
 
-- Collection: `settings.qdrant_collection_name`.
+- Collection: configured via `MV_QDRANT_COLLECTION_NAME`; default collection name is `face_samples_retinaface_r50_glintr100_v1`.
 - Vector: 512-D float32, distance = `COSINE`.
 - Point ID: `str(sample_id)` (UUID string).
 - Payload:
   - `sample_id`: str(sample_id)
-  - `face_id`: str(face_identity_id)
+  - `face_id`: str(face_id)
   - `active`: true
-  - `model_version`: settings.model_version
+  - `model_version`: exact model version string
+- Required payload indexes:
+  - `face_id`: KEYWORD
+  - `active`: BOOL
+  - `model_version`: KEYWORD
+- Collection must be validated on startup. Network/auth/contract errors must fail-closed, not silently create a collection.
 
 ## Model / Preprocess Contract
 
-- `model_version`: from Phase 2 `.env` / settings.
-- `preprocess_version`: from `model_profile.json` field.
+- `model_version`: `retinaface_r50_glintr100_v1` unless overridden by env.
+- `preprocess_version`: from `config/model_profile.json` field.
 - Detector input: 640×640 RGB float32 NCHW.
 - Recognizer input: 112×112 RGB float32 NCHW.
 - Embedding: 512-D, L2-normalized on GPU.
@@ -95,8 +112,35 @@ Phase 1 will write `pending` rows, then upload to MinIO, batch upsert Qdrant, th
 
 ## Identity Query Filter Used by Phase 2 Video Pipeline
 
-Qdrant query filter used by `QdrantVectorStore.query`:
+`QdrantVectorStore.query` filters by:
+
 - `active == true`
 - `model_version == settings.model_version`
 
 Therefore Phase 1 must write `active=true` and the exact `model_version` string.
+
+## Deterministic ID Contract
+
+Required env:
+
+```text
+MV_PHASE1_BULK_ID_HMAC_KEY=<secret>
+```
+
+Derivation:
+
+```text
+identity_key = source_namespace + ":" + normalized_external_subject_key
+identity_hmac = HMAC-SHA256(MV_PHASE1_BULK_ID_HMAC_KEY, identity_key)
+person_id = UUIDv5(PERSON_NAMESPACE, identity_hmac)
+face_id = UUIDv5(FACE_NAMESPACE, identity_hmac)
+sample_id = UUIDv5(
+    SAMPLE_NAMESPACE,
+    face_id + ":" + source_image_sha256 + ":" + model_version + ":" + preprocess_version
+)
+```
+
+- `person_id` and `face_id` are stable across model/preprocess changes.
+- `sample_id` changes when image bytes, model version, or preprocess version change.
+- Resume uses a journal fingerprint of the HMAC key; mismatch raises `BLOCKED_ID_NAMESPACE_MISMATCH`.
+- Raw `external_subject_key`, folder path, or display name must not appear in logs, object keys, Qdrant payload, or benchmark reports.

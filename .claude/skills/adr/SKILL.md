@@ -1,9 +1,9 @@
 ---
 name: adr
-description: Codebase-memory ADR yönetimi. Kullanim: /adr get, /adr init, /adr update docs/adr.md
+description: "Codebase-memory ADR yönetimi. Kullanim: /adr get, /adr init, /adr update docs/adr.md"
 disable-model-invocation: true
-allowed-tools: Bash(python scripts/mcp_adr.py *)
-argument-hint: [get|init|update] [file]
+allowed-tools: "Bash(python scripts/mcp_adr.py *)"
+argument-hint: "[get|init|update] [file]"
 ---
 
 # /adr — Architecture Decision Record yönetimi

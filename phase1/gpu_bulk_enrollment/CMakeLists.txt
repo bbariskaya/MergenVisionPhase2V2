@@ -11,13 +11,6 @@ find_package(CUDAToolkit REQUIRED)
 
 set(MV_PHASE1_BULK_NATIVE_SOURCES
     native/src/bindings.cpp
-    native/src/engine.cpp
-    native/src/pipeline.cpp
-    native/src/jpeg_batch_decoder.cpp
-    native/src/detector_preprocess.cu
-    native/src/detector_postprocess.cu
-    native/src/alignment.cu
-    native/src/recognizer_preprocess.cu
     native/src/l2_normalize.cu
     native/src/argsort.cu
     native/src/nms.cu
@@ -25,9 +18,9 @@ set(MV_PHASE1_BULK_NATIVE_SOURCES
     native/src/retinaface_pick_largest.cu
     native/src/scale_clip_compact.cu
     native/src/scale_clip_compact_xy.cu
-    native/src/scrfd_decode.cu
     native/src/similarity_transform.cu
     native/src/warp_align.cu
+    native/src/test_helpers.cu
 )
 
 pybind11_add_module(_mv_phase1_bulk_native ${MV_PHASE1_BULK_NATIVE_SOURCES})
