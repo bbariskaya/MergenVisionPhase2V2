@@ -10,7 +10,9 @@ from typing import Any, cast
 
 import numpy as np
 from cuda.bindings import runtime as cuda_runtime
+from nvidia import nvimgcodec
 
+from mv_phase1_bulk._gpu_ops import nchw_float_to_hwc_uint8
 from mv_phase1_bulk.alignment import GpuFaceAligner
 from mv_phase1_bulk.buffer_arena import BufferArena
 from mv_phase1_bulk.decoder import DecodeInfo, JpegGpuDecoder
@@ -22,6 +24,27 @@ from mv_phase1_bulk.trt_device_engine import TrtDeviceEngine
 from mv_phase1_bulk.types import FaceExtraction, ImageExtractionResult
 
 logger = logging.getLogger(__name__)
+
+
+class _CudaHwCImage:
+    """Minimal __cuda_array_interface__ wrapper for a contiguous uint8 HWC chip."""
+
+    def __init__(self, ptr: int, shape: tuple[int, int, int]) -> None:
+        self._ptr = ptr
+        self._shape = shape
+        # C-contiguous HWC uint8 strides.
+        h, w, c = shape
+        self._strides = (w * c, c, 1)
+
+    @property
+    def __cuda_array_interface__(self) -> dict[str, Any]:
+        return {
+            "shape": self._shape,
+            "typestr": "|u1",
+            "data": (self._ptr, False),
+            "version": 3,
+            "strides": self._strides,
+        }
 
 
 class GpuFacePipeline:
@@ -47,6 +70,7 @@ class GpuFacePipeline:
         self._detector_nms_threshold = float(det_cfg["nms_threshold"])
         self._embedding_dim = int(rec_cfg["embedding_dim"])
 
+        self._set_device()
         self._decoder = JpegGpuDecoder(device_id=device_id)
         self._preprocessor = RetinaFacePreprocessor(
             input_size=self._detector_input_size,
@@ -68,8 +92,21 @@ class GpuFacePipeline:
             embedding_dim=self._embedding_dim,
         )
         self._arena = BufferArena(device_id=device_id)
+        self._set_device()
         err, self._stream = cuda_runtime.cudaStreamCreate()
         check_cuda(err, "pipeline stream create")
+
+        # JPEG encoder for aligned face chips.  HYBRID_CPU_GPU selects the
+        # nvJPEG CUDA encoder path; if unavailable, default auto-selection is
+        # still GPU-accelerated and never falls back to PIL/FFmpeg.
+        try:
+            self._jpeg_encoder = nvimgcodec.Encoder(
+                device_id=device_id,
+                backends=[nvimgcodec.Backend(backend_kind=nvimgcodec.BackendKind.HYBRID_CPU_GPU)],
+            )
+        except Exception as exc:
+            logger.warning("HYBRID_CPU_GPU JPEG encoder unavailable (%s); using default", exc)
+            self._jpeg_encoder = nvimgcodec.Encoder(device_id=device_id)
 
     def _set_device(self) -> None:
         err = cuda_runtime.cudaSetDevice(self._device_id)
@@ -396,9 +433,39 @@ class GpuFacePipeline:
         )
         check_cuda(err, "extract_batch embeddings D2H")
 
-        # Only embeddings are copied to host; the aligned crop stays on GPU.
+        # Convert aligned float32 NCHW batch to uint8 HWC on the GPU and encode
+        # each chip to JPEG using nvImageCodec.  Only embeddings and the encoded
+        # JPEG bitstreams cross to the CPU; the 112×112 crop stays on device.
+        chips_uint8_hwc = self._arena.reserve(
+            (m, 112, 112, 3),
+            ctypes.c_uint8,
+            stream=int(self._stream),
+        )
+        nchw_float_to_hwc_uint8(
+            chip_batch.ptr,
+            chips_uint8_hwc.ptr,
+            m,
+            112,
+            112,
+            int(self._stream),
+        )
+
         err = cuda_runtime.cudaStreamSynchronize(int(self._stream))
         check_cuda(err, "extract_batch final sync")
+
+        chip_stride = 112 * 112 * 3
+        crop_bytes_list: list[bytes] = []
+        for j in range(m):
+            chip_img = nvimgcodec.as_image(
+                _CudaHwCImage(
+                    chips_uint8_hwc.ptr + j * chip_stride,
+                    (112, 112, 3),
+                ),
+                sample_format=nvimgcodec.SampleFormat.I_RGB,
+                color_spec=nvimgcodec.ColorSpec.SRGB,
+            )
+            encoded = self._jpeg_encoder.encode(chip_img, "jpeg")
+            crop_bytes_list.append(bytes(encoded))
 
         for j, (global_idx, _img_idx, box_h, lms_h, score) in enumerate(selected):
             res = results[global_idx]
@@ -413,7 +480,7 @@ class GpuFacePipeline:
                 quality_primitives={"l2_norm": norm},
                 embedding=embedding,
                 embedding_norm=norm,
-                crop_bytes=b"",
+                crop_bytes=crop_bytes_list[j],
                 model_version=self._model_version,
                 preprocess_version=self._preprocess_version,
             )

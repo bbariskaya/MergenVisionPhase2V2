@@ -1,0 +1,30 @@
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+batch decode failed, falling back to per-image: nvImageCodec batch decode returned None for an image
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+enrolled AJ_Cook: persisted=0 failed=2
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+batch decode failed, falling back to per-image: nvImageCodec batch decode returned None for an image
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+enrolled AJ_Lamas: persisted=0 failed=2
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+batch decode failed, falling back to per-image: nvImageCodec batch decode returned None for an image
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+enrolled Aaron_Eckhart: persisted=0 failed=2
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+batch decode failed, falling back to per-image: nvImageCodec batch decode returned None for an image
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+enrolled Aaron_Guiel: persisted=0 failed=2
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+batch decode failed, falling back to per-image: nvImageCodec batch decode returned None for an image
+[0;31m[ERROR] [0m[nvimgcodec] Exception during decode: Error in the CUDA API call - CUDA Runtime failure '#400' : invalid resource handle
+[0;33m[WARNING] [0m[pynvimgcodec] Something went wrong during decoding image #0 there will be None on corresponding output position
+enrolled Aaron_Patterson: persisted=0 failed=2

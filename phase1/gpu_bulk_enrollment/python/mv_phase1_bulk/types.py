@@ -60,22 +60,10 @@ class ImageExtractionResult:
 
 
 @dataclass
-class PersonRecord:
-    """Phase 2 compatible person row."""
-
-    person_id: str
-    display_name: str
-    is_active: bool = True
-    person_metadata: dict[str, Any] = field(default_factory=dict)
-    version: int = 1
-
-
-@dataclass
 class FaceRecord:
     """Phase 2 compatible face_identity row."""
 
     face_id: str
-    person_id: str
     status: str = "known"  # known | anonymous
     is_active: bool = True
     display_name: str = ""
@@ -104,7 +92,6 @@ class EnrollmentBundle:
 
     external_subject_key: str
     display_name: str
-    person_id: str
     face_id: str
     model_version: str
     samples: list[SampleRecord] = field(default_factory=list)
@@ -115,7 +102,6 @@ class EnrollmentOutcome:
     """Result of persisting one bundle."""
 
     external_subject_key: str
-    person_id: str
     face_id: str
     persisted_sample_ids: list[str] = field(default_factory=list)
     failed_sample_ids: list[str] = field(default_factory=list)
@@ -124,9 +110,7 @@ class EnrollmentOutcome:
     def to_compact_dict(self) -> dict[str, Any]:
         return {
             "external_subject_key": self.external_subject_key,
-            "person_id": self.person_id,
             "face_id": self.face_id,
             "persisted_sample_ids": self.persisted_sample_ids,
             "failed_sample_ids": self.failed_sample_ids,
-            "errors": self.errors,
         }

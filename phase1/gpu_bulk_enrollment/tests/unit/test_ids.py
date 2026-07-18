@@ -9,7 +9,6 @@ from mv_phase1_bulk.ids import (
     hmac_key_fingerprint,
     make_face_id,
     make_object_key,
-    make_person_id,
     make_sample_id,
     normalize_uuid,
 )
@@ -20,20 +19,11 @@ def _hmac_key(monkeypatch: Any) -> None:
     monkeypatch.setenv("MV_PHASE1_BULK_ID_HMAC_KEY", "unit-test-key")
 
 
-def test_person_id_is_deterministic() -> None:
-    a = make_person_id("ns", "subject_A")
-    b = make_person_id("ns", "subject_A")
+def test_face_id_is_deterministic() -> None:
+    a = make_face_id("ns", "subject_A")
+    b = make_face_id("ns", "subject_A")
     assert a == b
     assert normalize_uuid(a) == a
-
-
-def test_face_id_differs_from_person_id() -> None:
-    person_id = make_person_id("ns", "subject_A")
-    face_id = make_face_id("ns", "subject_A")
-    assert face_id != person_id
-    # Both are valid UUIDs.
-    assert normalize_uuid(person_id) == person_id
-    assert normalize_uuid(face_id) == face_id
 
 
 def test_same_subject_same_face() -> None:
@@ -73,7 +63,7 @@ def test_object_key_follows_phase2_contract() -> None:
     face_id = make_face_id("ns", "subject_A")
     sample_id = make_sample_id(face_id, "sha", "model_v1", "pre_v1")
     key = make_object_key(face_id, sample_id)
-    assert key == f"faces/{face_id}/{sample_id}/original.jpg"
+    assert key == f"faces/{face_id}/{sample_id}/aligned.jpg"
 
 
 def test_hmac_fingerprint_is_stable() -> None:

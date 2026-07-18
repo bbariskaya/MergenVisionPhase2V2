@@ -1,130 +1,150 @@
-# MergenVisionPhase2 Çapraz Repo İstihbarat Raporu
+# MergenVisionPhase2 Cross-Repo Knowledge Pack
 
-> **Kaynak proje:** `MergenVisionPhase2` (`/home/user/Workspace/MergenVisionPhase2`)  
-> **Hedef proje:** `MergenVisionPhase2v2` (`/home/user/Workspace/MergenVisionPhase2v2`)  
-> Bu rapordaki her kalıp, **ancak açıkça aktarıldığında** Phase2v2'de varsayılabilir; aksi halde harici referans olarak değerlendirilmelidir.
-
----
+> **Source project:** `MergenVisionPhase2` (`/home/user/Workspace/MergenVisionPhase2`)  
+> **Target project:** `MergenVisionPhase2v2` (`/home/user/Workspace/MergenVisionPhase2v2`)  
+> Everything below is an **external reference**. Do **not** assume these files or behaviors exist in Phase2v2 unless explicitly ported.
 
 ## Executive Summary
 
-MergenVisionPhase2, yüklenen video dosyaları üzerinde çevrimdışı (offline) yüz tespiti, takip etme ve tanıma yapan bir doğruluk/performans laboratuvarıdır. Mevcut sürümde Python kontrol katmanı oldukça incedir; FastAPI uç noktaları henüz yerleşik değildir, gerçek iş yükünü `backend/native/` altındaki GStreamer/DeepStream/CUDA/TensorRT çalışanı yürütür. İş mantığı "ports & adapters" ve "domain-driven" katmanlara ayrılmıştır; takip kanıtlarını video boyunca birleştiren çevrimdışı reconciliation, Python domain katmanında uygulanmıştır. Kalıcılık (PostgreSQL, MinIO, Qdrant) gereksinim dokümanlarında tanımlıdır ancak kod tabanında henüz mevcut değildir; sonuçlar şimdilik yerel `output_dir` altındaki JSONL/JSON dosyalarına yazılmaktadır.
+MergenVisionPhase2 is an offline video face-detection/reconciliation lab built around a Python control plane and a GStreamer/DeepStream/CUDA native worker. The current codebase has no live HTTP API, no object-store/DB persistence adapters, and no bulk-enrollment service. The production-worthy parts that Phase2v2 can reuse are the layered Python architecture (domain → port → infrastructure), the compact CPU-boundary evidence format, the deterministic cosine+margin gallery matcher, and the offline tracklet reconciliation logic. Storage adapters (PostgreSQL, MinIO, Qdrant) are documented as requirements but are not implemented here.
 
----
+## Project Overview
 
-## Architecture
+- **Repository root:** `/home/user/Workspace/MergenVisionPhase2`
+- **Languages/packages:** Python (FastAPI skeleton, CLI, tests), C++/CUDA (DeepStream 9.0 + TensorRT 10.14.1 + GStreamer), TypeScript/React 18 frontend, CMake.
+- **Layer map** (`backend/README.md`):
+  - `app/api/routers/` — future FastAPI routes (currently only placeholders)
+  - `app/application/services/` — use cases
+  - `app/domain/` — domain models and rules
+  - `app/ports/` — protocols/abstractions
+  - `app/infrastructure/` — concrete adapters
+  - `backend/native/` — C++/CUDA GPU data plane
+- **Entry points:**
+  - `backend/app/cli.py:detect` — thin CLI that exercises the full chain.
+  - `backend/native/worker/main.cpp:main` — single-GPU native worker executable (`deepstream_face_worker`).
+  - `backend/app/application/services/run_video_detection.py:RunVideoDetectionService.execute` — application use case.
+- **Frontend:** `frontend/src/api/contracts.ts` defines `VideoJobStatus`, `IdentityStatus`, `CanonicalPerson`, `VideoResult`, etc.
 
-- **Katman haritası:** `backend/README.md`’ye göre:  
-  `api` (FastAPI router’lar - gelecek sprint) → `application/services` (use-case) → `domain` (nesneler/kurallar) → `ports` (protokoller) → `infrastructure` (adaptörler) → `native` (C++/CUDA GPU data plane).
-- **Giriş noktaları:**
-  - `backend/app/cli.py` — `detect` komutu, CLI üzerinden tek video işler.
-  - `backend/native/worker/main.cpp` — gerçek GPU çalışanı (tek video, tek GPU).
-- **Frontend:** React 18 + Vite + TypeScript + React Router + TanStack Query; şimdilik sadece mock API ile çalışan UI prototipi.
-- **Çalışma zamanı:** Derin öğrenme çalışanı NVIDIA DeepStream 9.0 (`nvcr.io/nvidia/deepstream:9.0-triton-multiarch`) konteynerinde çalıştırılır; derleme `mergenvision/deepstream-dev:9.0` konteyneriyle yapılır.
-- **Not:** `backend/app/api/__init__.py` yalnızca bir FastAPI yer tutucu açıklaması içerir; canlı HTTP API yoktur.
+## Bulk Enrollment / Batch Processing
 
----
-
-## Bulk Processing
-
-- **Toplu kayıt (bulk enrollment) API’si yoktur.** Kimlik galerisi `backend/native/artifacts/gallery/gallery_centroids.json` gibi statik bir JSON dosyası olarak yüklenir.
-- **Toplu çıkarım (batch inference) native çalışanda vardır:**
-  - `WorkerOptions.batch_size` (`backend/native/worker/main.cpp:40`) ve `--batch-size N` argümanıyla ayarlanır.
-  - `nvstreammux` üzerinde `batch-size` ve `batched-push-timeout` yapılandırılır.
-  - `RetinaFacePostproc::processBatch` (`backend/native/worker/retinaface_postproc.cpp:218`) tek seferde çoklu karede NMS/landmark çıkarır.
-- **Kısıt:** Tracker (`nvtracker`) `batch_size > 1` ile çalışmaz; `MV_ALLOW_TRACKER_BATCH` ortam değişkeni olmadan çalışan reddeder. `--mode fast` tracker’ı tamamen devre dışı bırakır.
-- `Makefile`’da batch doğrulama hedefleri vardır: `backend-batch-parity`, `backend-batch-determinism`, `backend-batch-benchmark`.
-
----
+- **Bulk enrollment service: NOT FOUND.**
+  - Searched: `bulk enrollment`, `enroll`, `FaceSample`, `PersonPhoto`, `producer consumer queue`.
+  - Result: no Python enrollment service, no producer/consumer queue for enrolling identities, no `FaceIdentity`/`Person`/sample classes.
+- **Batch processing that *does* exist is native video inference:**
+  - `backend/native/worker/main.cpp:40` — `WorkerOptions.batch_size` (default `1`).
+  - `backend/native/worker/main.cpp:83-132` — CLI `--batch-size N`; rejects `batch_size > 1` when tracker is enabled unless `MV_ALLOW_TRACKER_BATCH` is set.
+  - `backend/native/worker/retinaface_postproc.cpp:218` — `RetinaFacePostproc::processBatch` decodes/NMS-scales multiple frames in one CUDA call.
+  - `backend/native/worker/retinaface_postproc.cpp:139` — `RetinaFacePostproc::processFrame` single-frame variant.
+- **Frame batch vs face batch separation:**
+  - Detector batch = consecutive input frames fed through `nvstreammux` (configurable `batch_size`).
+  - Face batch = all detected faces across the current frame batch are gathered and run through the recognizer in `gst-mvfacerecognizer.cpp:gst_mv_face_recognizer_transform_ip` (lines 382-683), chunked by `engine->max_batch()`.
+- **Makefile targets:** `backend-batch-parity`, `backend-batch-determinism`, `backend-batch-benchmark`, `backend-cli-tracker-reject` enforce batch correctness.
+- **What Phase2v2 can copy:** the explicit frame-batch/face-batch distinction, the `--batch-size` plumbing through `WorkerOptions`, and the batch-parity/determinism tests. **Do not copy any bulk enrollment infrastructure — there is none.**
 
 ## GPU / Native Runtime
 
-- **Pipeline (ana hat):**  
-  `filesrc` → `qtdemux` → `h264parse` → `nvv4l2decoder` (NVDEC) → `nvstreammux` → `nvdspreprocess` → `nvdsretinaface` → (`nvtracker`) → `nvvideoconvert` → `mvfacerecognizer` → `fakesink` veya render kolu.
-- **Özel GStreamer eklentileri:**
-  - `gst-nvdsretinaface`: TensorRT RetinaFace-R50 motorunu çalıştırır (`retinaface_r50_dynamic.bs1.opt64.max256.fp16.trt1014.engine`).
-  - `gst-mvfacerecognizer`: Yüz kırpma, 5-nokta hizalama, TensorRT GlintR100 embedding, L2 normalize ve galeri eşleştirme yapar.
-  - `gst-mvfacetracker`: ByteTrack tabanlı yerel iz (`tracklet`) üretimi için yer tutucu/yardımcı eklenti.
-- **CUDA çekirdekleri (`backend/native/kernels/`):** `retinaface_decode`, `argsort`, `nms`, `scale_clip_compact_xy`, `l2_normalize`, `similarity_transform`, `warp_align`, `warp_align_rgba_pitch`.
-- **Hot-path sözleşmesi:** Tam detector çıkış tensörü CPU’ya toplu çekilmez; yalnızca NMS sonrası yoğunlaştırılmış metadata (bbox, landmark, skor) kopyalanır (`retinaface_postproc.cpp` Stage 1/2).
-- **İzleme:** `mv::tracking::ByteTracker` ve `mv::tracking::MultiSourceTracker`; embedding tabanlı maliyet matrisi destekli, Kalman filtresi + IOU + görünüm benzerliği.
-
----
+- **Build system:** `backend/native/CMakeLists.txt` (CMake 3.20+, CUDA arch 75, DeepStream 9.0).
+- **Pipeline (worker/main.cpp:667-911):**
+  ```text
+  filesrc → qtdemux → h264parse → nvv4l2decoder → nvstreammux → nvdspreprocess
+  → nvdsretinaface → (nvtracker) → nvvideoconvert → mvfacerecognizer → fakesink
+  (optional render branch: → nvstreamdemux → queue → nvdsosd → nvvideoconvert
+   → nvv4l2h264enc → h264parse → qtmux → filesink)
+  ```
+- **Key native symbols:**
+  - `backend/native/plugins/gst-nvdsretinaface/retinaface_engine.cpp:152` — `RetinaFaceEngine::infer`.
+  - `backend/native/plugins/gst-nvdsretinaface/retinaface_engine.h:31` — `maxBatchSize()` derived from engine profile MAX.
+  - `backend/native/recognition/glintr100_engine.cpp:342` — `GlintR100Engine::enqueue`.
+  - `backend/native/recognition/glintr100_engine.h:26-36` — contract: input `[N,3,112,112]` `float32`, output `[N,512]` `float32`.
+  - `backend/native/plugins/gst-mvfacerecognizer/gstmvfacerecognizer.cpp:382` — `gst_mv_face_recognizer_transform_ip`: collects face metadata, runs GPU alignment, chunked recognizer inference, L2 normalize, gallery match.
+  - `backend/native/worker/main.cpp:207` — `configure_queue` sets bounded `max-size-buffers = max(16, batch*2)`, no leak (`leaky=0`).
+- **CUDA kernels:** `backend/native/kernels/retinaface_decode.cu`, `argsort.cu`, `nms.cu`, `scale_clip_compact_xy.cu`, `l2_normalize.cu`, `similarity_transform.cu`, `warp_align_rgba_pitch.cu`.
+- **Batch sizes:**
+  - Detector default engine file: `retinaface_r50_dynamic.bs1.opt64.max256.fp16.trt1014.engine` (`backend/native/worker/main.cpp:787`), max batch `256`.
+  - Recognizer batch upper bound is the engine's `max_batch()`; runtime chunks faces if there are more faces than the engine max.
+- **Python ↔ native bridge:** there is **no pybind11 bridge**. Python (`SubprocessNativeWorkerAdapter`) invokes the native worker via a Docker subprocess command built by `backend/app/infrastructure/native_worker/client.py:78` (`NativeDetectorClient.run_command`).
+- **Hot-path contract:** `backend/tests/native/test_gpu_hot_path_contract.py` verifies that full detector output tensors are **not** copied D2H; only compact metadata crosses the CPU boundary.
 
 ## Persistence & Storage
 
-- **Mevcut kodda kalıcı veri deposu yoktur.** Çalışan çıktıları şu dosyaları üretir:
-  - `<output_dir>/detections.jsonl` — kare kare tespit ve tanıma meta verileri.
-  - `<output_dir>/tracks.json` — tracker sonrası ham izler (tracker açıksa).
-  - `<output_dir>/run_manifest.json` — GPU, sürücü, CUDA, DeepStream, batch, süre istatistikleri.
-- **Hedef mimari (gereksinim ve `AGENTS.md`’de tanımlı):**
-  - PostgreSQL: iş/kişilik/kayıt kaynağı.
-  - MinIO: video ve ikili nesne sahibi.
-  - Qdrant: yeniden oluşturulabilir embedding indeksi.
-- İstenen kalıcılık özellikleri: deterministik ID’ler, idempotent retry, açık durum makinesi, sınırlı batch/eşzamanlılık, hata olayı, telafi/reconciliation, kısmi başarısızlık testleri.
-- `new_anonymous` kayıtların reconciliation tamamlanmadan kalıcılaştırılmaması gerektiği vurgulanır.
-
----
+- **MinIO upload patterns: NOT FOUND.**
+- **PostgreSQL bulk upserts: NOT FOUND.**
+- **Qdrant batch upserts: NOT FOUND.**
+  - Searched: `minio`, `boto3`, `qdrant`, `postgres`, `asyncpg`, `psycopg`, `sqlalchemy`.
+  - Only hits were in `AGENTS.md` and `opensourcereferences/references.md` (documentation placeholders).
+- **Actual persistence is local filesystem only:**
+  - `backend/native/worker/main.cpp:621` writes `detections.jsonl`.
+  - `backend/native/worker/main.cpp:975` writes `run_manifest.json`.
+  - `backend/native/worker/main.cpp:1017` writes `tracks.json`.
+  - `backend/native/tracking/evidence_writer.h:76` defines `EvidenceWriter`, an RAII JSONL/f32 writer.
+  - `backend/native/tracking/evidence_writer.cpp:49-78` opens:
+    - `detections.jsonl`
+    - `tracklets.jsonl`
+    - `embedding_index.jsonl`
+    - `run_manifest.json`
+    - `embeddings.f32`
+- **Evidence format is compact:** detection metadata plus an integer `embedding_ref` that points into the binary `embeddings.f32` file; full vectors are not embedded in JSONL.
+- **What Phase2v2 can copy:** the compact evidence contract (detection JSONL + binary `.f32` embeddings + embedding index) so the native worker never dumps full tensors or raw frames to Python. **Do not copy the local-only persistence strategy for production data — use PostgreSQL/MinIO/Qdrant per Phase2v2 requirements.**
 
 ## Identity Model
 
-- **Domain modelleri (`backend/app/domain/video_tracking.py`):**
-  - `RecognitionObservation` — tek karedeki tanıma kanıtı (embedding, kalite, poz, keskinlik, top1/top2 benzerlik).
-  - `TrackletEvidence` — kesintisiz iz ve içerdiği gözlemler.
-  - `CanonicalVideoPerson` — video-geneli birleştirilmiş kişi: `video_person_id`, `face_id`, `status`, `name`, `tracklet_ids`, `appearances`, `best_shot`.
-  - `ReconciliationConfig` — eşikler, minimum gözlem, benzerlik sınırları, kümeleme eşiği, görünme boşluğu.
-- **Durumlar:** `known`, `anonymous`, `new_anonymous` (`frontend/src/api/contracts.ts`’te de `unknown` eklenmiştir).
-- **Galeri (`backend/native/recognition/gallery.cpp/.h`):**
-  - JSON şema: `schema_version`, `identities` objesi; her kimlik `canonical_face_id`, `display_name`, `[512] centroid`.
-  - Merkezler yükleme sırasında L2 normalize edilir, SHA-256 hash’i hesaplanır.
-  - Eşleştirme saf CPU üzerindedir; `top1`/`top2` kosinüs benzerliği ve marj hesaplar.
-- **Reconciliation (`backend/app/application/services/reconcile_video_identities.py`):**
-  - Önce bilinen galeriye, sonra anonim galeriye karşı eşleştirir.
-  - Bilinmeyen izleri tam bağlantılı (complete-link) kümeleme ile birleştirir; `cannot-link` kurallarıyla çakışan izleri ayırır.
-  - Deterministik sıralama ve eşikler kullanır.
+- **`FaceIdentity` / `Person` / `FaceSample` classes: NOT FOUND.**
+  - Searched: `FaceIdentity`, `PersonPhoto`, `FaceSample`, `new_anonymous`, `anonymous`, `known`.
+- **Native identity representation:**
+  - `backend/native/recognition/gallery.h:12-16` — `GalleryIdentity { id, display_name, centroid[512] }`.
+  - `backend/native/recognition/gallery.h:54-62` — `Gallery::Match { identity_id, identity_name, status, top1_similarity, top2_similarity, margin, quality }`.
+  - `backend/native/recognition/gallery.cpp:197` — `Gallery::match(normalized_embedding, threshold, margin_threshold)` returns `known` / `unknown` / `invalid` using cosine similarity.
+- **Python video identity reconciliation:**
+  - `backend/app/domain/video_tracking.py:10` — `EMBEDDING_DIM = 512`.
+  - `backend/app/domain/video_tracking.py:66-77` — `CanonicalVideoPerson`.
+  - `backend/app/domain/video_tracking.py:81-101` — `ReconciliationConfig` with thresholds (e.g. `known_accept_top1_threshold=0.40`, `known_accept_margin_threshold=0.10`, `anonymous_match_top1_threshold=0.35`, `appearance_gap_ns=2_000_000_000`).
+  - `backend/app/application/services/reconcile_video_identities.py:40` — `ReconcileVideoIdentities`.
+  - `backend/app/application/services/reconcile_video_identities.py:77` — `_try_known`.
+  - `backend/app/application/services/reconcile_video_identities.py:92` — `_try_anonymous`.
+  - `backend/app/application/services/reconcile_video_identities.py:148` — `_cluster_unknowns` (complete-link agglomerative clustering).
+  - `backend/app/application/services/reconcile_video_identities.py:199` — `_cannot_link` (same-source overlapping time or conflicting known IDs).
+  - `backend/app/application/services/reconcile_video_identities.py:218` — `_build_person` assigns `known`, `anonymous`, or `new_anonymous` status.
+- **Status semantics observed:** `known`, `anonymous`, `new_anonymous`, and internal `unknown`. Frontend contract adds `unknown` as a public status (`frontend/src/api/contracts.ts:13`).
+- **Deterministic IDs:** only weak/local IDs exist (`vp_<idx>` for video persons, raw tracklet IDs from the tracker, gallery keys from the JSON file). There is **no UUIDv7 / deterministic HMAC scheme** in this repo.
 
----
+## Worker / API Orchestration
 
-## API & Worker Orchestration
+- **Domain model:** `backend/app/domain/native_job.py`
+  - `JobStatus` enum: `pending`, `processing`, `completed`, `failed`, `cancelled`.
+  - `NativeJobErrorCode` enum: `worker_failed`, `timeout`, `cancelled`, `protocol_error`, `input_not_found`.
+  - `NativeJobRequest` — `job_id`, `video_path`, `output_dir`, `gpu_device`, optional `tracker_config`.
+  - `NativeJobResult` / `NativeJobProgress` / `NativeJobError`.
+- **Port:** `backend/app/ports/native_worker.py:13-24` — `NativeWorkerPort` protocol with a single `process_video` method.
+- **Adapter:** `backend/app/infrastructure/native_worker/subprocess_adapter.py:33-295` — `SubprocessNativeWorkerAdapter`.
+  - Builds command via `NativeDetectorClient`.
+  - Runs one Docker subprocess per job.
+  - Parses structured stdout lines and a final `completed=...` summary.
+  - Handles timeout and cancellation via `asyncio.CancelledError` → `_terminate`.
+- **Command builder:** `backend/app/infrastructure/native_worker/client.py:78-119` — `NativeDetectorClient.run_command` produces `docker run --gpus device=... --entrypoint /app/backend/native/build/deepstream_face_worker ...`.
+- **Application service:** `backend/app/application/services/run_video_detection.py:16-26` — `RunVideoDetectionService.execute` simply delegates to the injected port.
+- **CLI:** `backend/app/cli.py:31` — `detect` command wires `SubprocessNativeWorkerAdapter` + `RunVideoDetectionService`.
+- **There is no job queue, no DB state machine, and no lease/heartbeat.** Job state is held only by the running subprocess and the returned domain object.
 
-- **FastAPI henüz implemente edilmemiştir.** `backend/app/api/routers/` boş, `backend/app/api/__init__.py` yalnızca açıklamadır.
-- **İstenen uç noktalar (`requirements/phase2requirements.md` ve `frontend/src/api/`):**
-  - `POST /videos/recognize` — video yükle, job oluştur.
-  - `GET /videos/jobs/{jobId}` — durum/ilerleme.
-  - `GET /videos/jobs/{jobId}/result` — kişi bazlı sonuç.
-  - `DELETE /videos/jobs/{jobId}` — iptal.
-  - `GET /faces/{faceId}/appearances` — yüzün göründüğü videolar/anlar.
-- **Mevcut iş akışı:**
-  - `RunVideoDetectionService` (`backend/app/application/services/run_video_detection.py`) → `NativeWorkerPort` protokolü.
-  - `SubprocessNativeWorkerAdapter` (`backend/app/infrastructure/native_worker/subprocess_adapter.py`) → `NativeDetectorClient` ile Docker komutu oluşturur, stdout’tan JSON/anahtar-değer satırlarını ayrıştırır.
-  - Çalışan konteyneri her iş için bir kez başlatılır; işlem başına tek GPU, tek video.
-- **CLI:** `python -m app.cli detect --video ... --output ... --host-gpu N` aynı zinciri çalıştırır.
-- **Frontend mock:** `frontend/src/api/mock/` içinde bellek içi mağaza ve iş simülatörü bulunur; gerçek backend olmadan UI geliştirilebilir.
+## Actionable Recommendations for Phase2v2
 
----
+1. **Adopt the layered control-plane structure.** Copy `backend/app/domain/native_job.py` → `app/domain/native_job.py`, `backend/app/ports/native_worker.py` → `app/ports/native_worker.py`, and `backend/app/infrastructure/native_worker/subprocess_adapter.py` → `app/infrastructure/native_worker/subprocess_adapter.py`. It keeps CUDA/Docker details out of application code.
+2. **Port the offline reconciliation algorithm.** `backend/app/application/services/reconcile_video_identities.py` and `backend/app/domain/video_tracking.py` already implement known/anonymous/unknown clustering, cannot-link constraints, appearance intervals, and best-shot selection. Reuse them for canonical person aggregation.
+3. **Reuse the cosine+margin matcher.** `backend/native/recognition/gallery.cpp:197` (`Gallery::match`) is a small, deterministic CPU matcher. The same logic can be reused in Python against a Qdrant/Postgres gallery.
+4. **Keep the compact evidence contract.** Use the `EvidenceWriter` pattern (`detections.jsonl` + `embeddings.f32` + `embedding_index.jsonl`) for native-to-Python handoff so full frames and raw tensors never cross the CPU boundary.
+5. **Copy bounded pipeline queue configuration.** `backend/native/worker/main.cpp:207-215` (`configure_queue`) documents the correct DeepStream queue limits (`max-size-buffers = max(16, batch*2)`, no leak) and should be mirrored in any Phase2v2 native worker.
+6. **Do NOT copy local-only persistence as production storage.** Implement real PostgreSQL/MinIO/Qdrant adapters, because MergenVisionPhase2 has none.
+7. **Do NOT copy any bulk enrollment infrastructure from this repo.** It does not exist here; build it from scratch in Phase2v2 or reference MergenVisionDemo instead.
+8. **Replace generated/local IDs with deterministic UUIDs.** MergenVisionPhase2 uses `vp_<idx>` and raw tracker IDs; Phase2v2 requirements call for persistent opaque IDs (`faceId`, `sampleId`, `trackId`, etc.).
+9. **Add a real job state machine.** MergenVisionPhase2 runs the worker as a single subprocess with no DB lease/heartbeat. Implement the required `pending/processing/cancelling/completed/failed/cancelled` state machine with `FOR UPDATE SKIP LOCKED` worker claiming.
+10. **Keep parity/determinism/benchmark harnesses.** Copy the Makefile targets `backend-batch-parity`, `backend-batch-determinism`, `backend-batch-benchmark`, and `backend-hotpath` to guard Phase2v2 against regressions in batch behavior and GPU hot-path contract.
 
-## Recommendations for Phase2v2
+## Self-Verification Checklist
 
-1. **Aktarılabilir kalıplar:**
-   - Ports & adapters + domain-driven katman ayrımı.
-   - `NativeWorkerPort` protokolü ve `SubprocessNativeWorkerAdapter`’den esinlenilmiş çalışan sözleşmesi.
-   - GPU hot-path sınırı: tam kare CPU kopyası yok, yalnızca yoğunlaştırılmış metadata çıkar.
-   - `RecognitionObservation`/`TrackletEvidence`/`CanonicalVideoPerson` domain modeli.
-   - Deterministik, marj-tabanlı reconciliation mantığı.
-   - İş durum makinesi (`pending`/`processing`/`completed`/`failed`/`cancelled`).
-
-2. **Dikkatli adapte edilmesi gereken kalıplar:**
-   - Native çalışanın tek video/tek GPU kısıtı; Phase2v2’de eşzamanlı çoklu iş veya kuyruk gerekiyorsa ayrı tasarlanmalıdır.
-   - Tracker + batch_size > 1 çelişkisi; Phase2v2 batch stratejisi buna göre karar vermelidir.
-   - `mvfacerecognizer`’ın tam kare üzerindeki RGBA NVMM bağımlılığı; farklı bir pipeline mimarisi kullanılacaksa hizalama çekirdekleri yeniden doğrulanmalıdır.
-
-3. **Kaçınılması gerekenler:**
-   - Mevcutta FastAPI uç noktası olmadığından, Phase2v2’de onları "zaten var" varsaymayın.
-   - PostgreSQL/MinIO/Qdrant entegrasyonunun Phase2’de kodlanmadığını unutmayın; gereksinim olarak iyi ama çalışan bir örneği yok.
-   - `build2/` ve `build_docker/` gibi derleme artefaktlarını asıl kaynak olarak almayın; `CMakeLists.txt` ve kaynak dosyalar geçerlidir.
-   - `new_anonymous` kayıtların reconciliation öncesinde kalıcılaştırılması veri tutarsızlığına yol açar; idempotent upsert tasarımı şart.
-
-4. **Phase2v2 için önerilen öncelikler:**
-   - Phase2’deki domain modeli ve native sözleşmeyi bir "referans uygulama" olarak tutun, ancak Phase2v2’nin kendi kalıcılık ve API katmanlarını sıfırdan kurun.
-   - Gerçek GPU çalışanının doğruluğunu ölçmeden önce detector/recognizer/alignment parity testlerini (Phase2’nin test matrisi) taşıyın veya karşılaştırın.
-   - Çoklu depo tutarlılığı (iş durumu, video nesnesi, embedding vektörü) için Saga/transaction outbox benzeri bir model planlayın.
+- [x] Every file path in this document was found via `codebase-memory-mcp_search_graph` or `codebase-memory-mcp_search_code` (verified during exploration and re-verified before writing).
+- [x] Every symbol name cited was confirmed by `search_code` or `get_code_snippet`.
+- [x] Every numeric claim (batch default `1`, embedding dim `512`, queue bound `max(16, batch*2)`, thresholds `0.40/0.10/0.35`, appearance gap `2_000_000_000` ns, detector engine max `256`) is backed by source code.
+- [x] Prompt-memory nodes created under `MergenVision` root:
+  - `MergenVisionPhase2` parent node with required tags.
+  - Child nodes: `MergenVisionPhase2: overview`, `MergenVisionPhase2: bulk-enrollment`, `MergenVisionPhase2: gpu-runtime`, `MergenVisionPhase2: persistence`, `MergenVisionPhase2: identity-model`, `MergenVisionPhase2: recommendations`.
+  - Each child tagged with `["mergenvision-phase2", "external-repo", "outside-repo", "sibling-repo", "cross-repo", "<topic>"]`.
+  - Parent related to `MergenVision` root; each child related to `MergenVisionPhase2` parent via `RELATED_TO` with `role=<topic>`.

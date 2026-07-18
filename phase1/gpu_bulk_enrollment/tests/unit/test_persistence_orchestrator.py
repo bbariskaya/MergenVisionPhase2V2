@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from mv_phase1_bulk.identities import EnrolledSample, SubjectBundle
 from mv_phase1_bulk.persistence import PersistenceOrchestrator
-from mv_phase1_bulk.types import FaceRecord, PersonRecord, SampleRecord
+from mv_phase1_bulk.types import FaceRecord, SampleRecord
 
 
 @pytest.fixture(autouse=True)
@@ -24,26 +24,25 @@ def _settings_env(monkeypatch: Any) -> None:
 
 
 def _sample_bundle(*, count: int = 2) -> SubjectBundle:
-    person = PersonRecord(person_id="p1", display_name="Alice")
-    face = FaceRecord(face_id="f1", person_id="p1")
+    face = FaceRecord(face_id="f1", display_name="Alice")
     samples: list[EnrolledSample] = []
     for i in range(count):
-        sample = SampleRecord(sample_id=f"s{i}", face_id="f1", object_key=f"faces/f1/s{i}/original.jpg")
+        sample = SampleRecord(sample_id=f"s{i}", face_id="f1", object_key=f"faces/f1/s{i}/aligned.jpg")
         samples.append(
             EnrolledSample(
                 sample_record=sample,
                 image_sha256=f"sha{i}",
                 image_bytes=b"jpeg-bytes",
-                crop_bytes=b"",
+                crop_bytes=b"jpeg-bytes",
                 embedding=np.ones(512, dtype=np.float32),
             )
         )
-    return SubjectBundle(person=person, face=face, samples=samples)
+    return SubjectBundle(face=face, samples=samples)
 
 
 def _upload_result(sample_id: str) -> MagicMock:
     result = MagicMock()
-    result.object_key = f"faces/f1/{sample_id}/original.jpg"
+    result.object_key = f"faces/f1/{sample_id}/aligned.jpg"
     result.sha256 = "sha"
     result.bytes_written = 10
     return result

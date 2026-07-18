@@ -1,10 +1,10 @@
 """Deterministic/idempotent identifier generation for Phase 1 bulk enrollment.
 
 Phase 2 compatibility:
-- All IDs are string UUIDs so they fit ``PersonOrm.person_id``,
-  ``FaceIdentityOrm.face_id`` and ``FaceSampleOrm.sample_id``.
+- All IDs are string UUIDs so they fit ``FaceIdentityOrm.face_id`` and
+  ``FaceSampleOrm.sample_id``.
 - Object keys follow the Phase 2 contract:
-  ``faces/{face_id}/{sample_id}/original.jpg``.
+  ``faces/{face_id}/{sample_id}/aligned.jpg``.
 - Determinism guarantees idempotent re-runs.
 
 Privacy:
@@ -20,11 +20,9 @@ import os
 import uuid
 from typing import NewType
 
-_NS_PERSON = uuid.UUID("018f5e1a-7b00-7e0a-8f0c-7c3b8e1a5f00")
 _NS_FACE = uuid.UUID("018f5e1a-7b00-7e0a-8f0c-7c3b8e1a5f01")
 _NS_SAMPLE = uuid.UUID("018f5e1a-7b00-7e0a-8f0c-7c3b8e1a5f02")
 
-PersonId = NewType("PersonId", str)
 FaceId = NewType("FaceId", str)
 SampleId = NewType("SampleId", str)
 RunId = NewType("RunId", str)
@@ -60,23 +58,14 @@ def _uuid5(namespace: uuid.UUID, name: str) -> uuid.UUID:
     return uuid.uuid5(namespace, name)
 
 
-def make_person_id(
-    source_namespace: str,
-    external_subject_key: ExternalSubjectKey | str,
-) -> PersonId:
-    """Deterministic person id for an external subject."""
-    h = _identity_hmac(source_namespace, external_subject_key)
-    return PersonId(str(_uuid5(_NS_PERSON, h)))
-
-
 def make_face_id(
     source_namespace: str,
     external_subject_key: ExternalSubjectKey | str,
 ) -> FaceId:
     """Deterministic face identity id.
 
-    One person has exactly one face identity in Phase 1 bulk enrollment.
-    The face id is independent of model/preprocess version.
+    One external subject maps to exactly one known FaceIdentity in Phase 1 bulk
+    enrollment. The face id is independent of model/preprocess version.
     """
     h = _identity_hmac(source_namespace, external_subject_key)
     return FaceId(str(_uuid5(_NS_FACE, h)))
@@ -98,8 +87,8 @@ def make_sample_id(
 
 
 def make_object_key(face_id: FaceId | str, sample_id: SampleId | str) -> str:
-    """Phase 2 object key for the original input photo (JPEG)."""
-    return f"faces/{face_id}/{sample_id}/original.jpg"
+    """Phase 2 object key for the canonical aligned face crop (JPEG)."""
+    return f"faces/{face_id}/{sample_id}/aligned.jpg"
 
 
 def normalize_uuid(value: str) -> str:

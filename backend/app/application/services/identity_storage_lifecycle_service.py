@@ -14,7 +14,6 @@ from app.application.ports.unit_of_work import UnitOfWorkFactory
 from app.application.ports.vector_store import VectorCandidate, VectorStore
 from app.domain.entities.face_identity import FaceIdentity
 from app.domain.entities.face_sample import FaceSample
-from app.domain.entities.person import Person
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.entities.recognition_result import RecognitionResult
 from app.domain.errors import (
@@ -23,7 +22,7 @@ from app.domain.errors import (
     IdentityResolutionError,
     ValidationError,
 )
-from app.domain.value_objects import BoundingBox, FaceId, PersonId, ProcessId, ResultId, SampleId
+from app.domain.value_objects import BoundingBox, FaceId, ProcessId, ResultId, SampleId
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +290,6 @@ class IdentityStorageLifecycleService:
         display_name: str,
         metadata: dict[str, Any],
     ) -> FaceIdentity:
-        """Promote an anonymous face identity to known by creating a new Person."""
         process_id = self._new_process_id()
         process = ProcessRecord(
             process_id=process_id,
@@ -312,19 +310,9 @@ class IdentityStorageLifecycleService:
                     raise ValidationError("Face identity is not active")
                 if identity.status != "anonymous":
                     raise ValidationError("Only anonymous identities can be enrolled")
-                if identity.redirect_to_face_id is not None:
-                    raise ValidationError("Cannot enroll a redirected identity")
-
-                person_id = PersonId(self._id_generator.new_uuid7())
-                person = Person(
-                    person_id=person_id,
-                    display_name=display_name,
-                    person_metadata=metadata or {},
-                )
-                await uow.people.add(person)
 
                 expected_version = identity.version
-                identity.promote_to_known(person_id, display_name, metadata)
+                identity.promote_to_known(display_name, metadata)
                 updated = await uow.face_identities.update_with_expected_version(
                     identity,
                     expected_version,
@@ -333,10 +321,7 @@ class IdentityStorageLifecycleService:
                 process_loaded = await uow.processes.get_by_id(process_id)
                 if process_loaded is None:
                     raise IdentityResolutionError("Process disappeared during enrollment")
-                process_loaded.complete(
-                    face_count=1,
-                    details={"person_id": str(person_id)},
-                )
+                process_loaded.complete(face_count=1)
                 await uow.processes.update(process_loaded)
                 await uow.commit()
                 return updated
@@ -345,95 +330,6 @@ class IdentityStorageLifecycleService:
             if isinstance(exc, ValidationError | ConcurrentUpdateError):
                 raise
             raise IdentityResolutionError(f"Enrollment failed: {exc}") from exc
-
-    async def assign_identity_to_person(
-        self,
-        face_id: FaceId,
-        target_person_id: PersonId,
-    ) -> FaceIdentity:
-        """Merge a face identity into an existing person.
-
-        The source identity becomes inactive and redirects to the canonical
-        face identity of the target person. Historical snapshots remain
-        untouched.
-        """
-        process_id = self._new_process_id()
-        process = ProcessRecord(
-            process_id=process_id,
-            process_type="face_assign",
-            status="processing",
-        )
-
-        async with self._unit_of_work_factory() as uow:
-            await uow.processes.add(process)
-            await uow.commit()
-
-        try:
-            async with self._unit_of_work_factory() as uow:
-                source = await uow.face_identities.get_by_id(face_id)
-                if source is None:
-                    raise ValidationError("Face identity not found")
-                if not source.is_active:
-                    raise ValidationError("Face identity is not active")
-                if source.redirect_to_face_id is not None:
-                    raise ValidationError("Identity is already redirected")
-
-                target_person = await uow.people.get_active_by_id(target_person_id)
-                if target_person is None:
-                    raise ValidationError("Target person not found or inactive")
-
-                target_identities = await uow.face_identities.list_by_person_id(target_person_id)
-                canonical = next(
-                    (i for i in target_identities if i.is_active and i.status == "known"),
-                    None,
-                )
-                if canonical is None:
-                    raise ValidationError("Target person has no canonical known identity")
-
-                if source.face_id == canonical.face_id:
-                    raise ValidationError("Cannot assign an identity to itself")
-
-                expected_version = source.version
-                source.assign_to_person(target_person_id, canonical.face_id)
-                updated_source = await uow.face_identities.update_with_expected_version(
-                    source,
-                    expected_version,
-                )
-
-                samples = await uow.face_samples.list_active_by_face_id(face_id)
-                for sample in samples:
-                    sample.mark_inactive()
-                    await uow.face_samples.update(sample)
-
-                process_loaded = await uow.processes.get_by_id(process_id)
-                if process_loaded is None:
-                    raise IdentityResolutionError("Process disappeared during assignment")
-                process_loaded.complete(
-                    face_count=1,
-                    details={
-                        "person_id": str(target_person_id),
-                        "canonical_face_id": str(canonical.face_id),
-                    },
-                )
-                await uow.processes.update(process_loaded)
-                await uow.commit()
-
-            for sample in samples:
-                try:
-                    await self._vector_store.set_active(sample.sample_id, False)
-                except Exception as exc:
-                    logger.warning(
-                        "Qdrant deactivation cleanup warning for sample %s: %s",
-                        sample.sample_id,
-                        exc,
-                    )
-
-            return updated_source
-        except Exception as exc:
-            await self._fail_process(process_id, "assignment_failed")
-            if isinstance(exc, ValidationError | ConcurrentUpdateError):
-                raise
-            raise IdentityResolutionError(f"Assignment failed: {exc}") from exc
 
     async def deactivate_identity(self, face_id: FaceId) -> None:
         process_id = self._new_process_id()
@@ -768,115 +664,6 @@ class IdentityStorageLifecycleService:
             status="new_anonymous",
             bounding_box=bbox,
             match_confidence=match_confidence,
-        )
-
-    async def create_known_identity(
-        self,
-        process_id: ProcessId,
-        person_id: PersonId,
-        display_name: str,
-        metadata: dict[str, Any],
-        crop_bytes: bytes,
-        embedding: Sequence[float],
-        bbox: BoundingBox,
-    ) -> RecognitionOutcome:
-        """Create a new known face identity and its first sample for an existing person.
-
-        This is the bulk/video enrollment primitive: the Person row is assumed to
-        already exist, and we materialize a canonical FaceIdentity + FaceSample
-        that other recognition paths can match against.
-        """
-        self._validate_crop_bytes(crop_bytes)
-        self._validate_embedding(embedding)
-        self._validate_bounding_box(bbox)
-        if not display_name or not display_name.strip():
-            raise ValidationError("display_name is required for known identity")
-
-        face_id = self._new_face_id()
-        sample_id = self._new_sample_id()
-        identity = FaceIdentity(
-            face_id=face_id,
-            status="known",
-            is_active=True,
-            display_name=display_name.strip(),
-            identity_metadata=metadata or {},
-            person_id=person_id,
-        )
-        sample = FaceSample(sample_id=sample_id, face_id=face_id)
-        object_key = self._object_key(face_id, sample_id)
-
-        async with self._unit_of_work_factory() as uow:
-            await uow.face_identities.add(identity)
-            await uow.face_samples.add(sample)
-            await uow.commit()
-
-        try:
-            stat = await self._object_store.upload(object_key, crop_bytes, "image/webp")
-        except Exception as exc:
-            await self._persist_resolution_failure(
-                face_id=face_id,
-                sample_id=sample_id,
-                process_id=process_id,
-                error_code="minio_upload_failed",
-            )
-            raise IdentityResolutionError(f"MinIO upload failed: {exc}") from exc
-
-        try:
-            await self._vector_store.upsert(sample_id, face_id, embedding)
-        except Exception as exc:
-            await self._delete_object_best_effort(object_key)
-            await self._persist_resolution_failure(
-                face_id=face_id,
-                sample_id=sample_id,
-                process_id=process_id,
-                error_code="qdrant_upsert_failed",
-            )
-            raise IdentityResolutionError(f"Qdrant upsert failed: {exc}") from exc
-
-        try:
-            async with self._unit_of_work_factory() as uow:
-                loaded_sample = await uow.face_samples.get_by_id(sample_id)
-                if loaded_sample is None:
-                    raise IdentityResolutionError("Sample disappeared before activation")
-                loaded_sample.mark_active(stat.bucket, stat.key)
-                await uow.face_samples.update(loaded_sample)
-
-                result = RecognitionResult(
-                    result_id=self._new_result_id(),
-                    process_id=process_id,
-                    face_id=face_id,
-                    sample_id=sample_id,
-                    status="known",
-                    bounding_box=bbox,
-                    match_confidence=0.0,
-                )
-                await uow.recognition_results.add(result)
-
-                process = await uow.processes.get_by_id(process_id)
-                if process is None:
-                    raise IdentityResolutionError("Process disappeared before completion")
-                process.complete(face_count=1)
-                await uow.processes.update(process)
-                await uow.commit()
-        except Exception as exc:
-            await self._vector_store.delete(sample_id)
-            await self._delete_object_best_effort(object_key)
-            await self._persist_resolution_failure(
-                face_id=face_id,
-                sample_id=sample_id,
-                process_id=process_id,
-                error_code="finalization_failed",
-            )
-            raise IdentityResolutionError(f"Known identity finalization failed: {exc}") from exc
-
-        return RecognitionOutcome(
-            process_id=process_id,
-            face_id=face_id,
-            sample_id=sample_id,
-            result_id=result.result_id,
-            status="known",
-            bounding_box=bbox,
-            match_confidence=0.0,
         )
 
     # ------------------------------------------------------------------

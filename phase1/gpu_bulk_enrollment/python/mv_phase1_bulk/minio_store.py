@@ -1,7 +1,7 @@
 """MinIO store writing into Phase 2's existing object bucket.
 
 Uploads follow the Phase 2 contract:
-- Object key: ``faces/{face_id}/{sample_id}/original.jpg``
+- Object key: ``faces/{face_id}/{sample_id}/aligned.jpg``
 - Content type: ``image/jpeg``
 - Metadata: ``x-amz-meta-sha256`` = hex digest of payload
 - Existing objects are verified by size and SHA; conflicts fail-closed.
@@ -35,7 +35,7 @@ class UploadResult:
 
 
 class MinioStore:
-    """Bounded-concurrent MinIO uploader for original input JPEGs."""
+    """Bounded-concurrent MinIO uploader for aligned WebP face crops."""
 
     def __init__(
         self,
@@ -74,7 +74,7 @@ class MinioStore:
         await self._ensure_bucket_task
 
     def _object_key(self, face_id: str, sample_id: str) -> str:
-        return f"faces/{face_id}/{sample_id}/original.jpg"
+        return f"faces/{face_id}/{sample_id}/aligned.jpg"
 
     def _stat_sync(self, object_key: str) -> ObjectStat | None:
         try:

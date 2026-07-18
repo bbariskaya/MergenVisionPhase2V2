@@ -2,144 +2,220 @@
 
 ## Executive Summary
 
-MergenVisionDemo is a Python/FastAPI face-recognition backend with a React frontend. Its bulk-enrollment path is built around long-lived GPU workers that own one CUDA device each, keep a warm `GpuFacePipeline` across batches, and process durable shard jobs dispatched from an API-side orchestrator. The hot path keeps JPEG decoding, detection, alignment, recognition, and L2 normalization entirely on the GPU via `DeviceTensor`s and a `BufferArena`; only the final embeddings and metadata touch the host. PostgreSQL, MinIO, and Qdrant are updated with batched upserts using deterministic, HMAC-derived UUIDs so cancel/resume is idempotent. Phase2v2 can copy the producer/consumer service, the GPU pipeline design, the native pybind11 bridge, and the persistence patterns directly.
+MergenVisionDemo is a GPU-native face-recognition demo that already implements a working bulk-enrollment pipeline for LFW/VGGFace/CASIA datasets. Its architecture cleanly separates a Python/FastAPI control plane from a CUDA/TensorRT data plane bound together by `DeviceTensor`, `BufferArena`, and pybind11 native kernels. The most valuable patterns for Phase2v2 are the deterministic `identity_hmac → UUIDv5` id model, the producer/consumer `BulkEnrollmentService` with bounded persistence concurrency, the zero-copy `GpuFacePipeline.extract_batch` path, and the durable `ProcessRecord`/`ProcessEvent` lifecycle used by the separate GPU worker containers. These can be reused in the Phase2v2 `phase1/gpu_bulk_enrollment/` package while leaving the existing image/video runtime untouched.
+
+## Project Overview
+
+- **Type:** Python/FastAPI backend + React TypeScript frontend + CUDA/C++ native extension.
+- **Repository root:** `/home/user/MergenVisionDemo`
+- **HEAD:** `5bf4b4c57542b26058e8d068186faee06c0fc29c`
+- **Backend entry:** `backend/app/main.py` (API) and `backend/app/workers/gpu_worker.py` (offline GPU worker).
+- **Frontend entry:** `frontend/src/App.tsx`.
+- **Native module:** `backend/native/mergenvision_gpu/` built with pybind11 + scikit-build-core + CMake.
+- **Key data-plane files verified by codebase-memory:**
+  - `backend/app/ml/gpu/face_pipeline.py:336` — `GpuFacePipeline.extract_batch`
+  - `backend/app/ml/gpu/decoder.py:95` — `JpegGpuDecoder.decode_batch`
+  - `backend/app/ml/gpu/recognizer.py:58` — `GpuRecognizer.embed`
+  - `backend/app/ml/gpu/trt_device_engine.py:102` — `TrtDeviceEngine.infer_device`
+  - `backend/app/ml/gpu/buffer_arena.py:128` — `BufferArena`
+  - `backend/app/ml/gpu/device_tensor.py:21` — `DeviceTensor`
+- **Key control-plane files verified:**
+  - `backend/app/services/bulk_enrollment.py:85` — `BulkEnrollmentService`
+  - `backend/app/services/bulk_orchestrator.py:436` — `dispatch_shards`
+  - `backend/app/services/bulk_manifest.py:35` — `EnrollmentIdentity`, `EnrollmentPhoto`
+  - `backend/app/workers/gpu_worker.py:381` — `create_worker_app`
 
 ## Bulk Enrollment
 
-- Key files and symbols
-  - `/home/user/MergenVisionDemo/backend/app/services/bulk_enrollment.py` — `BulkEnrollmentService`, `_produce`, `_consume`, `_read_and_extract`, `_extract_batch_faces`, `_persist_batch`, `_ensure_identities`, `_upload_photo`, `_upsert_qdrant`, `enroll_shard`
-  - `/home/user/MergenVisionDemo/backend/app/services/bulk_manifest.py` — `EnrollmentIdentity`, `EnrollmentPhoto`, `build_lfw_manifest`, `build_casia_manifest`, `shard_by_person_id`
-  - `/home/user/MergenVisionDemo/backend/app/services/bulk_orchestrator.py` — `start_vggface_job`, `start_lfw_job`, `start_casia_job`, `dispatch_shards`, `request_cancellation`, `resume_vggface_job`
-  - `/home/user/MergenVisionDemo/backend/app/workers/gpu_worker.py` — GPU worker FastAPI lifespan, job endpoints, `_run_job`
-  - `/home/user/MergenVisionDemo/backend/app/api/routes/bulk_jobs.py` — public `/bulk-jobs/{vggface,lfw,casia,...}` endpoints
-  - `/home/user/MergenVisionDemo/backend/app/services/face_service.py` — `FaceService.bulk_enroll` (simpler HTTP-facing bulk path)
-  - `/home/user/MergenVisionDemo/backend/app/core/config.py` — `bulk_extract_batch_size=256`, `bulk_max_persistence_concurrency=32`, `bulk_activation_batch_size=2048`
+### Key files and symbols
 
-- Algorithm / flow
-  1. `enroll_shard` creates a `ProcessRecord` for the shard.
-  2. `_produce` streams identities/photos, reads bytes asynchronously, calls `_read_and_extract`, and puts extracted chunks on an `asyncio.Queue(maxsize=2)`.
-  3. `_consume` takes chunks and calls `_persist_batch`, which upserts identities, uploads to MinIO, upserts Postgres rows, and upserts Qdrant points.
-  4. `_commit_progress` writes durable progress after each batch so resume can start from `last_completed_identity_key`.
-  5. The API orchestrator creates a parent `ProcessRecord`, splits work into shards by `person_id`, dispatches shard descriptors to GPU workers over HTTP, and polls status until terminal.
+- `backend/app/services/bulk_enrollment.py:85` — `BulkEnrollmentService`
+  - Methods: `enroll_shard` (`:568`), `_produce` (`:427`), `_consume` (`:489`), `_read_and_extract` (`:373`), `_persist_batch` (`:241`), `_extract_batch_faces` (`:125`), `_ensure_identities` (`:176`), `_upload_photo` (`:225`), `_upsert_qdrant` (`:365`), `_commit_progress` (`:528`).
+- `backend/app/services/bulk_manifest.py:35` — `EnrollmentIdentity` (immutable descriptor with deterministic IDs).
+- `backend/app/services/bulk_manifest.py:24` — `EnrollmentPhoto`.
+- `backend/app/services/bulk_manifest.py:105` — `shard_by_person_id` (deterministic sharding by `person_id % num_shards`).
 
-- Batch sizes and GPU usage
-  - Extraction batch size defaults to `256` (`bulk_extract_batch_size`).
-  - Persistence concurrency is bounded by a semaphore defaulting to `32` (`bulk_max_persistence_concurrency`).
-  - The producer queue is intentionally small (`maxsize=2`) to back-pressure file reads when persistence or GPU inference is slower.
-  - GPU inference is serialized per pipeline by an `asyncio.Lock`; the actual call runs in a single-worker `ThreadPoolExecutor` (`gpu_executor`) to keep CUDA work off the event loop.
-  - File reads run on a separate `ThreadPoolExecutor` (`io_executor`) with `min(32, cpu_count*2)` workers.
+### Algorithm / flow
 
-- What Phase2v2 can copy
-  - The producer/consumer split with bounded queue, separate IO and GPU executors, and per-batch progress commits.
-  - The deterministic manifest/sharding scheme (`shard_by_person_id`) so the same identity always lands on the same shard.
-  - The idempotent identity creation using `pg_insert(...).on_conflict_do_nothing` with deterministic UUIDs.
-  - The worker/orchestrator split so GPU context lifetime is not tied to HTTP request lifetime.
+1. The orchestrator builds a deterministic manifest where each folder becomes one `EnrollmentIdentity`; all IDs/HMACs are derived from normalized folder names and content SHA-256, never generated counters.
+2. `enroll_shard` creates a `ProcessRecord` of type `bulk_enroll_shard` and starts a single-producer / single-consumer `asyncio.Queue(maxsize=2)`.
+3. `_produce` iterates over identities, groups photos into batches of `extract_batch_size`, calls `_read_and_extract` (bounded concurrent file reads + GPU batch extraction), and pushes extracted tuples to the queue.
+4. `_consume` pops each batch, calls `_persist_batch`, and after every batch commits progress to `process_record.summary["progress"]` via `_commit_progress`.
+5. Decode/read failures count as soft errors and do not abort the shard; any extraction/persistence exception marks the shard `failed` and stores structured error codes (`EXTRACTION_ERROR`, `PERSISTENCE_ERROR`, etc.).
+6. Soft error rate > 3% marks the shard `failed` regardless of no hard exception.
+
+### Batch sizes, executors, and GPU usage
+
+- `bulk_extract_batch_size`: **256** (`backend/app/core/config.py:47`).
+- `bulk_max_persistence_concurrency`: **32** (`backend/app/core/config.py:48`), enforced by `asyncio.Semaphore` in `_persist_batch`/`_upload_photo`.
+- Producer queue depth: **2** (`asyncio.Queue(maxsize=2)` at `bulk_enrollment.py:604`).
+- GPU work is serialized per pipeline by `asyncio.Lock`; the actual inference runs on a dedicated `ThreadPoolExecutor(max_workers=1)` (`gpu_worker.py:317`).
+- IO runs on a separate `ThreadPoolExecutor(max_workers=min(32, cpu_count*2))` (`gpu_worker.py:320`).
+- The bulk service can also run synchronously when `gpu_executor=None`.
+
+### What Phase2v2 can copy
+
+- The `EnrollmentIdentity` / `EnrollmentPhoto` descriptor pattern with pre-computed deterministic IDs.
+- Producer/consumer queue with `_read_and_extract` returning `(identity, photo, GpuFaceExtraction, raw_bytes)`.
+- `_persist_batch` as the canonical three-store write: `pg_insert(FaceIdentity)`/`Person` → `pg_insert(PersonPhoto)`/`FaceSample` → `FaceVectorStore.upsert_batch`.
+- The “soft error rate budget” and per-batch durable progress checkpoint pattern.
 
 ## GPU / Native Runtime
 
-- Key files and symbols
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/face_pipeline.py` — `GpuFacePipeline`, `extract_batch`, `extract_bytes`, `_scaled_to_host`
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/decoder.py` — `JpegGpuDecoder.decode_batch`
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/preprocess.py` / `retinaface_preprocessor.py` — detector preprocessors
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/retinaface_postprocess.py` / `scrfd_postprocess.py` — native CUDA postprocess + NMS + scale/compact
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/alignment.py` — `GpuFaceAligner.align`, `similarity_transform`, `warp_align`
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/recognizer.py` — `GpuRecognizer.embed`, `max_batch`
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/trt_device_engine.py` — `TrtDeviceEngine.infer_device`
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/buffer_arena.py` — `BufferArena`, `BufferLease`
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/device_tensor.py` — `DeviceTensor`
-  - `/home/user/MergenVisionDemo/backend/app/ml/gpu/l2_norm.py` — `l2_normalize_device`
-  - `/home/user/MergenVisionDemo/backend/native/mergenvision_gpu/src/bindings.cpp` — pybind11 `_mergenvision_gpu` module
-  - `/home/user/MergenVisionDemo/backend/native/mergenvision_gpu/CMakeLists.txt` and `__init__.py` — build/package layout
-  - `/home/user/MergenVisionDemo/backend/Dockerfile` — multi-stage CUDA 12.4 build
+### Key files and symbols
 
-- Batch inference details
-  - `extract_batch` is optimized for RetinaFace R50 dynamic batch:
-    1. `JpegGpuDecoder.decode_batch` decodes JPEG buffers to GPU tensors.
-    2. `RetinaFacePreprocessor.preprocess_batch` builds the detector input.
-    3. `TrtDeviceEngine.infer_device` runs TensorRT detection.
-    4. `RetinaFacePostprocess.decode` runs native CUDA decode/NMS.
-    5. `scale_and_compact` maps detections back to original image coordinates per image.
-    6. `pick_largest_device` selects the largest face per image on the GPU.
-    7. Valid selections are copied to host; for each valid image, `GpuFaceAligner.align` warps a 112x112 chip on the GPU into a shared chip batch.
-    8. `GpuRecognizer.embed` runs ArcFace once for the whole chip batch and native L2-normalizes on device.
-    9. Only embeddings, bboxes, landmarks, and scores are copied to host at the end.
-  - For non-RetinaFace packs (e.g., `antelopev2`), `extract_batch` falls back to per-image `extract_bytes` with `_pick_largest`.
-  - `GpuRecognizer.max_batch()` reads the TensorRT engine's optimization profile max shape; it defaults to `64` if unavailable. Larger recognizer batches are chunked internally.
-  - `BufferArena` pools GPU allocations keyed by shape/dtype and fences reuse with CUDA events (`BufferLease.release` records an event; `acquire` only reuses completed allocations).
+- `backend/app/ml/gpu/face_pipeline.py:41` — `GpuFacePipeline` (single-GPU end-to-end pipeline).
+- `backend/app/ml/gpu/face_pipeline.py:336` — `extract_batch` (batch path used by bulk enrollment).
+- `backend/app/ml/gpu/face_pipeline.py:207` — `extract_bytes` (single-image path returning all faces).
+- `backend/app/ml/gpu/decoder.py:27` — `JpegGpuDecoder` (nvImageCodec, refuses CPU fallback).
+- `backend/app/ml/gpu/recognizer.py:19` — `GpuRecognizer` (ArcFace via TensorRT + native L2).
+- `backend/app/ml/gpu/trt_device_engine.py:18` — `TrtDeviceEngine` (device-pointer TensorRT binding).
+- `backend/app/ml/gpu/alignment.py` — `GpuFaceAligner` (similarity transform on device).
+- `backend/app/ml/gpu/buffer_arena.py:128` — `BufferArena` / `BufferLease` (event-fenced reuse).
+- `backend/app/ml/gpu/device_tensor.py:21` — `DeviceTensor` (immutable device pointer wrapper).
+- `backend/native/mergenvision_gpu/` — pybind11 module exposing CUDA kernels:
+  - `l2_normalize`, `similarity_transform`, `nms`, `retinaface_decode_batch`, `retinaface_pick_largest`, `scale_clip_compact`, `warp_align`, `scrfd_decode_level`, `argsort_descending`.
 
-- Python ↔ native bridge
-  - Native code is built as a pybind11 module named `_mergenvision_gpu` and packaged under `mergenvision_gpu`.
-  - Python imports operators directly: `from mergenvision_gpu import l2_normalize, similarity_transform, warp_align, ...`.
-  - Every function accepts integer device pointers (`uintptr_t`) and a stream handle; Python passes `tensor.ptr` and the pipeline's stream.
-  - Error status is written into a `DeviceTensor` (`[1] int32`) by the kernel and read back after `cudaStreamSynchronize`.
-  - The Dockerfile compiles the extension in a `nvidia/cuda:12.4.1-devel-ubuntu22.04` builder stage and copies the `.so` into the runtime image.
+### Batch inference details
+
+`GpuFacePipeline.extract_batch` processes a list of JPEG byte buffers as follows:
+
+1. `JpegGpuDecoder.decode_batch` decodes all buffers on GPU; it verifies `image.buffer_kind == STRIDED_DEVICE` and raises if CPU fallback occurs.
+2. `RetinaFacePreprocessor.preprocess_batch` builds the detector NCHW input on GPU.
+3. `TrtDeviceEngine.infer_device` runs the RetinaFace TensorRT engine with device-resident input/output bindings.
+4. `RetinaFacePostprocess.decode` runs native CUDA decode/NMS; `scale_and_compact` maps boxes/landmarks back to original image resolution.
+5. `pick_largest_device` selects the largest face per image on GPU.
+6. Only valid-selection metadata, bbox, landmarks, and score are copied to host (small D2H transfers).
+7. For each selected face, `GpuFaceAligner.align` warps the face to `112x112` RGB on device; aligned chips are packed into a batched `[M,3,112,112]` tensor.
+8. `GpuRecognizer.embed` runs the ArcFace TensorRT engine and native CUDA L2 normalization.
+9. Final 512-D embeddings and compact metadata are copied to host once per batch.
+
+Default sizes from `backend/app/core/config.py`:
+
+- Detector input: **640x640** (`detector_input_size = 640`).
+- Embedder input: **112x112** (`embedder_input_size = 112`).
+- Embedding dim: **512** (`embedding_dim = 512`).
+- Detector confidence threshold: **0.5**; NMS IoU: **0.4**.
+- Batch sizes: detector batch up to `bulk_extract_batch_size = 256`; recognizer upper bound from engine profile, default fallback **64** (`recognizer.py:56`).
+
+### Python ↔ native bridge
+
+- Native extension `mergenvision_gpu._mergenvision_gpu` built via `pyproject.toml` → `scikit-build-core` → `CMakeLists.txt`.
+- `CMakeLists.txt:6` targets CUDA architecture **75**; links `CUDA::cudart`; uses `pybind11_add_module(_mergenvision_gpu ...)`.
+- The `Dockerfile` has a two-stage build: `nvidia/cuda:12.4.1-devel-ubuntu22.04` compiles the `.so` and copies it into the runtime image at `/opt/venv/lib/python3.11/site-packages/mergenvision_gpu`.
+- Python calls kernels with `DeviceTensor.ptr`, shapes, and `ctypes` dtypes; device memory never crosses to NumPy until the pipeline boundary.
 
 ## Persistence & Storage
 
-- MinIO, Postgres, Qdrant patterns
-  - **MinIO**: `/home/user/MergenVisionDemo/backend/app/infrastructure/minio.py` — `PhotoStorage.put_object` stores raw bytes with key `enrollments/{person_id}/{photo_id}` using `asyncio.to_thread` around the MinIO SDK. Bucket creation is lazy in `initialize`.
-  - **PostgreSQL bulk upserts**: `/home/user/MergenVisionDemo/backend/app/services/bulk_enrollment.py` `_persist_batch`:
-    - `FaceIdentity` and `Person` are inserted with `pg_insert(...).on_conflict_do_nothing(index_elements=[...])`.
-    - `PersonPhoto` and `FaceSample` are inserted with `pg_insert(...).on_conflict_do_update(index_elements=["photo_id"], set_=...)` so re-running the same photo updates rather than duplicates.
-    - All writes happen in one batch per chunk; `_commit_progress` calls `await db.commit()` after each activation batch.
-  - **Qdrant**: `/home/user/MergenVisionDemo/backend/app/infrastructure/qdrant.py` — `FaceVectorStore.upsert_batch`:
-    - Validates payload keys (`sampleId`, `photoId`, `personId`, `active`, `modelVersion`) and vector shape/finiteness.
-    - Sends points in 256-point sub-batches (`batch_size = 256`) with `wait=False` by default for bulk.
-    - `search_active` filters by `active=True` and `modelVersion` using payload indexes.
-    - `set_active_batch` performs soft deletes by toggling the `active` payload field.
+### MinIO
 
-- Bulk upsert examples
-  - Identity upsert:
-    ```python
-    await self._db.execute(
-        pg_insert(FaceIdentity)
-        .values(face_rows)
-        .on_conflict_do_nothing(index_elements=["identity_lookup_hmac"])
-    )
-    ```
-  - Photo upsert:
-    ```python
-    await self._db.execute(
-        pg_insert(PersonPhoto)
-        .values(photo_rows)
-        .on_conflict_do_update(
-            index_elements=["photo_id"],
-            set_={
-                "person_id": pg_insert(PersonPhoto).excluded.person_id,
-                "object_key": pg_insert(PersonPhoto).excluded.object_key,
-                "content_sha256": pg_insert(PersonPhoto).excluded.content_sha256,
-                "status": "active",
-                "updated_at": now,
-            },
-        )
-    )
-    ```
-  - Qdrant point payload mirrors the Postgres sample ID: `sampleId == point.id`.
+- `backend/app/infrastructure/minio.py:18` — `PhotoStorage`
+- Bucket default: **mergenvision-photos** (`config.py:15`).
+- All SDK calls use `asyncio.to_thread(...)` to avoid blocking the event loop.
+- Bulk enrollment object key pattern: `enrollments/{person_id}/{photo_id}` (`bulk_enrollment.py:232`).
+- API: `put_object`, `get_object`, `object_exists`, `delete_object`, `health_check`, `initialize()` creates bucket idempotently.
+
+### PostgreSQL
+
+- Uses SQLAlchemy 2.0 async ORM + `asyncpg`. `backend/app/domain/models.py` defines `FaceIdentity`, `Person`, `PersonPhoto`, `FaceSample`, `ProcessRecord`, `ProcessEvent`, `RecognitionRequest`, `RecognitionResult`, `InferenceProfile`.
+- Bulk enrollment uses `sqlalchemy.dialects.postgresql.insert(...).on_conflict_do_nothing()` and `on_conflict_do_update()`:
+  - `FaceIdentity` upsert by `identity_lookup_hmac` (`bulk_enrollment.py:214`).
+  - `Person` upsert by `national_id_lookup_hmac` (`bulk_enrollment.py:219`).
+  - `PersonPhoto` upsert by `photo_id` with status reset to `active` (`bulk_enrollment.py:315`).
+  - `FaceSample` upsert by `photo_id` with status reset to `active` (`bulk_enrollment.py:332`).
+- Photo/sample deduplication is done in-memory before the upsert to avoid cardinality violations.
+- `ProcessRecord` status enum: `pending, queued, running, cancel_requested, cancelling, cancelled, completed, failed` (`models.py:298`).
+
+### Qdrant
+
+- `backend/app/infrastructure/qdrant.py:36` — `FaceVectorStore`
+- Collection default: **face_samples** (`config.py:18`).
+- Vector size: **512**; distance: **COSINE**.
+- Required payload keys: `sampleId`, `photoId`, `personId`, `active`, `modelVersion`.
+- Point ID equals `sample_id` (validated in `_validate_payload`).
+- `upsert_batch` validates every point/vector, then chunks into **256**-point Qdrant requests (`qdrant.py:197`).
+- `set_active_batch` also chunks by **256** (`qdrant.py:262`).
+- Search filters by `active=True` and `modelVersion=<version>`.
+
+### Cross-store consistency pattern
+
+Within `_persist_batch` the order is: ensure identities → upload photo bytes → `pg_insert(PersonPhoto)` → `pg_insert(FaceSample)` → `FaceVectorStore.upsert_batch`. The same batch is committed after each `_persist_batch` via `_commit_progress`. There is no distributed transaction; idempotency is achieved through deterministic UUIDs and `ON CONFLICT DO UPDATE`/`UPSERT` semantics.
 
 ## Identity Model
 
-- Person/FaceIdentity/FaceSample design
-  - `/home/user/MergenVisionDemo/backend/app/domain/models.py` defines the schema:
-    - `FaceIdentity` — canonical identity row keyed by `identity_lookup_hmac` (unique), links to many `Person`s via `face_identity_id` FK.
-    - `Person` — per-dataset/person record with `national_id_lookup_hmac` (unique), `face_identity_id` FK, JSONB `details`, soft-delete via `deleted_at`.
-    - `PersonPhoto` — one row per stored photo; `object_key` unique in MinIO; `status` in `('staged','active','failed','deleted')`; unique `(person_id, content_sha256)`.
-    - `FaceSample` — one row per extracted face; `photo_id` unique FK; stores `bbox` and `landmarks` as JSONB, `detector_model`, `embedding_model`, `quality_score`, `status`.
-  - Deterministic IDs live in `/home/user/MergenVisionDemo/backend/app/core/ids.py`:
-    - `identity_hmac(identity_key, master_key)` → HMAC-SHA256.
-    - `derive_person_id(hmac)` and `derive_face_identity_id(hmac)` are UUIDv5 over fixed namespaces.
-    - `derive_photo_id(content_sha256)` is UUIDv5 over the photo hash.
-    - `derive_sample_id(photo_id, model_version)` is UUIDv5 over `photo_id:model_version`.
-  - This design makes re-imports idempotent: the same folder/photo/model always produces the same UUIDs, and `ON CONFLICT DO NOTHING/UPDATE` handles collisions without pre-SELECTs.
+### Tables and relationships
+
+- `face_identity` — `FaceIdentity` (`models.py:24`)
+  - PK `face_identity_id` (UUIDv7 by default; in bulk enrollment replaced by deterministic UUIDv5).
+  - Unique lookup `identity_lookup_hmac`.
+  - `display_name`, `is_active`.
+- `person` — `Person` (`models.py:50`)
+  - PK `person_id` (UUIDv7 or deterministic).
+  - FK `face_identity_id`; names; `national_id_lookup_hmac` (unique).
+- `person_photo` — `PersonPhoto` (`models.py:94`)
+  - PK `photo_id` (UUIDv5 from content SHA-256 in bulk path).
+  - `object_key`, `content_sha256`, `status ∈ {staged, active, failed, deleted}`.
+- `face_sample` — `FaceSample` (`models.py:138`)
+  - PK `sample_id` (UUIDv5 derived from `photo_id:model_version`).
+  - FK `person_id`, `photo_id` (unique), bbox/landmarks JSONB, quality score, embedding model version, status.
+
+### Deterministic IDs (`backend/app/core/ids.py`)
+
+- `identity_hmac(identity_key, master_key)` → HMAC-SHA256 hex.
+- `derive_person_id(hmac)` → `uuid5(PERSON_NAMESPACE, hmac)`.
+- `derive_face_identity_id(hmac)` → `uuid5(FACE_IDENTITY_NAMESPACE, hmac)`.
+- `derive_photo_id(content_sha256)` → `uuid5(PERSON_PHOTO_NAMESPACE, content_sha256)`.
+- `derive_sample_id(photo_id, model_version)` → `uuid5(FACE_SAMPLE_NAMESPACE, f"{photo_id}:{model_version}")`.
+- `derive_process_id(process_type, seed_bytes)` → `uuid5(PROCESS_RECORD_NAMESPACE, f"{process_type}:{seed_bytes.hex()}")`.
+- Runtime IDs: `uuid7()` implementation (`ids.py:48`) returning timestamp + random bytes.
+
+### Takeaway for Phase2v2
+
+This is the exact idempotency contract Phase2v2 wants: stable identity key → HMAC → deterministic `faceId`/`personId`/`photoId`/`sampleId`. It guarantees that re-running the same bulk enrollment does not create duplicates because `ON CONFLICT DO NOTHING` handles the collisions. **Important limitation:** the identity key is currently the normalized *folder name*, not person metadata; Phase2v2 must decide how to generate stable identity keys for its own datasets.
+
+## Worker / API Orchestration
+
+### Control plane vs GPU workers
+
+- **Public API** (`backend/app/api/routes/bulk_jobs.py`)
+  - `POST /bulk-jobs/vggface`, `/lfw`, `/casia` → create durable parent `ProcessRecord`, then `BackgroundTasks.add_task(dispatch_shards, ...)`.
+  - `GET /bulk-jobs/{job_id}` → aggregate shard progress.
+  - `POST /bulk-jobs/{job_id}/cancel` → `request_cancellation`.
+  - `POST /bulk-jobs/{job_id}/resume` → `resume_vggface_job` (VGGFace only).
+- **Orchestrator** (`backend/app/services/bulk_orchestrator.py`)
+  - Creates parent `ProcessRecord` of type `vggface_bulk`/`lfw_bulk`/`casia_bulk` with status `queued` and shard descriptors.
+  - Shard idempotency keys: e.g. `"vggface-bulk:{parent_id}:shard:{idx}"`.
+  - `dispatch_shards` fans out shards to workers via HTTP and polls status every **2s** (`_POLL_INTERVAL_SECONDS = 2.0`).
+  - Cancellation: sets parent `cancel_requested`, then `POST /internal/v1/jobs/{job_id}/cancel` on every worker, then `cancelling`, then aggregates.
+  - Resume: resets terminal child shards to `pending`, attaches `resume_after_identity_key` from last durable progress, and calls `dispatch_shards` again.
+- **GPU Worker** (`backend/app/workers/gpu_worker.py`)
+  - Separate FastAPI container exposing `/health/live`, `/health/ready`, `/internal/v1/jobs`, `/internal/v1/jobs/{job_id}/cancel`, `/internal/v1/jobs/{job_id}`.
+  - One physical GPU per worker mounted as internal ordinal 0 (`HOST_GPU_DEVICE_ID`).
+  - Jobs processed sequentially (`current_job_id` guard at `:467`).
+  - Uses deterministic `process_id = derive_process_id("gpu_worker_job", idempotency_key)` so retry/resume is idempotent.
+  - Calls `BulkEnrollmentService.enroll_shard` with `cancel_check=lambda: app_state.cancel_requested` and a progress callback that writes to `ProcessRecord.summary["progress"]` in a new DB session.
+
+### ProcessRecord / ProcessEvent lifecycle
+
+- `ProcessRecord`: `process_type`, `status`, `started_at`, `completed_at`, mutable `summary` JSONB, `error_message`.
+- `ProcessEvent`: sequence-numbered audit events with `event_type`, `status_before`, `status_after`, message, details.
+- Events are written on accept, start, progress, complete, cancel, and fail.
 
 ## Actionable Recommendations for Phase2v2
 
-1. Reuse the `BulkEnrollmentService` producer/consumer architecture: bounded `asyncio.Queue`, separate GPU and IO executors, and per-batch progress commits to survive resume/cancel.
-2. Port the deterministic ID scheme from `app/core/ids.py` so bulk imports, duplicates, and resume checkpoints are idempotent without existence SELECTs.
-3. Copy `GpuFacePipeline.extract_batch` end-to-end for the still-image hot path: batched nvImageCodec decode → TensorRT detector → native CUDA decode/NMS → GPU alignment → batched ArcFace → native L2 normalize, keeping all intermediate data as `DeviceTensor`s.
-4. Adopt `BufferArena` + `BufferLease` with CUDA event fences instead of allocating/freeing GPU memory per batch; this is the core mechanism that keeps the pipeline fast and allocation-stable.
-5. Use `TrtDeviceEngine.infer_device` style DeviceTensor binding so no H2D/D2H copies occur inside the inference hot path.
-6. Mirror the persistence triple: PostgreSQL `pg_insert` upserts for identity/photo/sample, MinIO upload under a bounded semaphore, and Qdrant 256-point upsert batches with strict payload validation.
-7. Build a single pybind11 native package (e.g., `mergenvision_gpu`) exposing only pointer/stream functions, compiled in a CUDA-devel Docker builder stage and installed into the runtime image.
-8. Use the worker/control-plane split: API orchestrator owns durable `ProcessRecord`s, dispatches compact shard descriptors to GPU workers over HTTP, and polls status; this keeps GPU context lifetime separate from HTTP request lifetime.
-9. For a future video pipeline, MergenVisionDemo has no video decoder; add a GPU video decode stage (NVIDIA Video Codec SDK / PyNvVideoCodec) and feed extracted frame batches into the same `extract_batch` path.
-10. Reuse the Qdrant payload schema (`active` bool + `modelVersion` keyword) and `set_active_batch` soft-delete pattern so sample lifecycle changes do not require vector re-upserts.
+1. **Adopt the deterministic identity ID scheme** from `backend/app/core/ids.py` for bulk enrollment, so re-runs and resume are naturally idempotent. Use `derive_face_identity_id`, `derive_person_id`, `derive_photo_id`, and `derive_sample_id` exactly as implemented in `ids.py:28-41`.
+2. **Copy the descriptor model** `EnrollmentIdentity` + `EnrollmentPhoto` from `backend/app/services/bulk_manifest.py:24-43` and the deterministic sharding function `shard_by_person_id` (`:105`) so Phase2v2 can shard by `person_id % num_workers` without state.
+3. **Reuse the `BulkEnrollmentService` producer/consumer skeleton** from `backend/app/services/bulk_enrollment.py:85-686` in `phase1/gpu_bulk_enrollment/`. Keep `_produce`/`_consume`, the `asyncio.Queue(maxsize=2)`, and the per-batch `_commit_progress` durable checkpoint.
+4. **Use the exact `_persist_batch` cross-store ordering** (`bulk_enrollment.py:241-363`): ensure identities → MinIO upload → `pg_insert(PersonPhoto)` → `pg_insert(FaceSample)` → `FaceVectorStore.upsert_batch`. The deterministic IDs make this safe without two-phase commit.
+5. **Port the `GpuFacePipeline.extract_batch` path** (`backend/app/ml/gpu/face_pipeline.py:336-556`) into Phase2v2 as the isolated batch inference implementation. Keep the same zero-copy contract: decode+detect+align+embed stays on GPU; only compact metadata and 512-D embeddings cross the CPU boundary.
+6. **Build the native extension the same way** (`backend/native/mergenvision_gpu/` + `backend/Dockerfile:1-22`): pybind11 + scikit-build-core + CMake with `CMAKE_CUDA_ARCHITECTURES 75` and `CUDA::cudart`. Reuse kernels `l2_normalize`, `similarity_transform`, `warp_align`, `nms`, `retinaface_decode_batch`, and `retinaface_pick_largest` where applicable.
+7. **Use the same worker/orchestrator split** (`backend/app/workers/gpu_worker.py` and `backend/app/services/bulk_orchestrator.py`) for any Phase2v2 offline bulk job: API creates a durable `ProcessRecord`, fan-out over HTTP to stateful GPU workers, poll status every 2s, and support resume via `resume_after_identity_key`.
+8. **Validate Qdrant payloads exactly like `FaceVectorStore._validate_payload`** (`qdrant.py:57-83`): require `sampleId==point_id`, plus `photoId`, `personId`, `active`, and `modelVersion`. This prevents subtle index drift.
+9. **Do not assume folder-name identity keys are reusable.** The Demo derives identity from `normalize_lfw_folder_name` (`bulk_manifest.py:46-55`). Phase2v2 must define its own stable identity key policy before porting the deterministic ID code.
+
+## Self-Verification Checklist
+
+- [x] Every file path in this markdown was confirmed by `codebase-memory-mcp` `search_graph` or `search_code` results.
+- [x] Every symbol name (`BulkEnrollmentService`, `GpuFacePipeline.extract_batch`, `FaceVectorStore.upsert_batch`, `derive_sample_id`, etc.) was verified by `get_code_snippet` or `search_code`.
+- [x] Every number is backed by source: `bulk_extract_batch_size=256` (`config.py:47`), `bulk_max_persistence_concurrency=32` (`config.py:48`), Qdrant chunk size `256` (`qdrant.py:197`), `embedding_dim=512` (`config.py:42`), detector input `640` (`config.py:39`), embedder input `112` (`config.py:40`), poll interval `2.0s` (`bulk_orchestrator.py:305`), queue `maxsize=2` (`bulk_enrollment.py:604`).
+- [x] Prompt-memory parent/child node names and tags will use the exact constants: parent `MergenVisionDemo`, children `MergenVisionDemo: overview`, `bulk-enrollment`, `gpu-runtime`, `persistence`, `identity-model`, `recommendations`, all tagged with `["mergenvision-demo", "external-repo", "outside-repo", "sibling-repo", "cross-repo"]` plus topic tag.

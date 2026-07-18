@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import NewType
 
 FaceId = NewType("FaceId", uuid.UUID)
-PersonId = NewType("PersonId", uuid.UUID)
 SampleId = NewType("SampleId", uuid.UUID)
 ProcessId = NewType("ProcessId", uuid.UUID)
 ResultId = NewType("ResultId", uuid.UUID)

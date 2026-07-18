@@ -1,11 +1,9 @@
 """PostgreSQL persistence store for Phase 2's existing tables.
 
 This store connects to the running Phase 2 PostgreSQL and writes directly into
-``person``, ``face_identity`` and ``face_sample`` using SQLAlchemy Core. No new
-tables or migrations are created by Phase 1.
-
-The schema is an exact mirror of the live Phase 2 ORM at HEAD so the contract
-never drifts. Broad fallback to a guessed schema is forbidden.
+``face_identity`` and ``face_sample`` using SQLAlchemy Core. No new tables or
+migrations are created by Phase 1, and Person/redirect semantics are intentionally
+absent: the single source of truth for identity is ``face_identity``.
 """
 
 from __future__ import annotations
@@ -32,22 +30,9 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
-from mv_phase1_bulk.types import FaceRecord, PersonRecord, SampleRecord
+from mv_phase1_bulk.types import FaceRecord, SampleRecord
 
 metadata = MetaData()
-
-person_table = Table(
-    "person",
-    metadata,
-    Column("person_id", UUID(as_uuid=True), primary_key=True),
-    Column("display_name", String(255), nullable=False),
-    Column("person_metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
-    Column("is_active", Boolean, nullable=False, default=True),
-    Column("version", Integer, nullable=False, default=1),
-    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
-    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
-    Column("deleted_at", DateTime(timezone=True), nullable=True),
-)
 
 face_identity_table = Table(
     "face_identity",
@@ -57,18 +42,6 @@ face_identity_table = Table(
     Column("is_active", Boolean, nullable=False, default=True),
     Column("display_name", String(255), nullable=True),
     Column("identity_metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
-    Column(
-        "person_id",
-        UUID(as_uuid=True),
-        ForeignKey("person.person_id", ondelete="RESTRICT"),
-        nullable=True,
-    ),
-    Column(
-        "redirect_to_face_id",
-        UUID(as_uuid=True),
-        ForeignKey("face_identity.face_id", ondelete="RESTRICT"),
-        nullable=True,
-    ),
     Column("version", Integer, nullable=False, default=1),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
@@ -126,32 +99,10 @@ class PostgresStore:
     # ------------------------------------------------------------------
     # Conflict-safe reads
     # ------------------------------------------------------------------
-    async def get_person(self, conn: AsyncConnection, person_id: str) -> PersonRecord | None:
-        row = await conn.execute(
-            select(
-                person_table.c.person_id,
-                person_table.c.display_name,
-                person_table.c.person_metadata,
-                person_table.c.is_active,
-                person_table.c.version,
-            ).where(person_table.c.person_id == person_id)
-        )
-        r = row.mappings().first()
-        if r is None:
-            return None
-        return PersonRecord(
-            person_id=str(r.person_id),
-            display_name=r.display_name,
-            is_active=r.is_active,
-            person_metadata=dict(r.person_metadata or {}),
-            version=r.version,
-        )
-
     async def get_face_identity(self, conn: AsyncConnection, face_id: str) -> FaceRecord | None:
         row = await conn.execute(
             select(
                 face_identity_table.c.face_id,
-                face_identity_table.c.person_id,
                 face_identity_table.c.status,
                 face_identity_table.c.is_active,
                 face_identity_table.c.display_name,
@@ -164,7 +115,6 @@ class PostgresStore:
             return None
         return FaceRecord(
             face_id=str(r.face_id),
-            person_id=str(r.person_id) if r.person_id else "",
             status=r.status,
             is_active=r.is_active,
             display_name=r.display_name or "",
@@ -204,27 +154,6 @@ class PostgresStore:
     # ------------------------------------------------------------------
     # Bulk upsert helpers
     # ------------------------------------------------------------------
-    async def upsert_people(
-        self,
-        conn: AsyncConnection,
-        people: Sequence[PersonRecord],
-    ) -> None:
-        if not people:
-            return
-        rows = [
-            {
-                "person_id": p.person_id,
-                "display_name": p.display_name,
-                "person_metadata": p.person_metadata,
-                "is_active": p.is_active,
-                "version": p.version,
-            }
-            for p in people
-        ]
-        stmt = pg_insert(person_table).values(rows)
-        stmt = stmt.on_conflict_do_nothing(index_elements=["person_id"])
-        await conn.execute(stmt)
-
     async def upsert_faces(
         self,
         conn: AsyncConnection,
@@ -239,7 +168,6 @@ class PostgresStore:
                 "is_active": f.is_active,
                 "display_name": f.display_name,
                 "identity_metadata": f.identity_metadata,
-                "person_id": f.person_id or None,
                 "version": f.version,
             }
             for f in faces
@@ -361,17 +289,15 @@ class PostgresStore:
     # ------------------------------------------------------------------
     async def prepare_enrollment(
         self,
-        people: Sequence[PersonRecord],
         faces: Sequence[FaceRecord],
         samples: Sequence[SampleRecord],
     ) -> None:
-        """Write pending person/face/sample rows inside one transaction.
+        """Write pending face/sample rows inside one transaction.
 
         Existing rows are left untouched; create-if-absent semantics keep bulk
         enrollment idempotent.
         """
         async with self._engine.begin() as conn:  # type: ignore[union-attr]
-            await self.upsert_people(conn, people)
             await self.upsert_faces(conn, faces)
             await self.upsert_samples_pending(conn, samples)
 

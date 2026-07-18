@@ -1,0 +1,2 @@
+[   10.4s] subjects=100/5749 images=47/13233 fps=  4.50 enrolled_subjects=0 failed_images=1 errors=0
+[   26.0s] subjects=200/5749 images=159/13233 fps=  6.12 enrolled_subjects=0 failed_images=3 errors=0

@@ -22,7 +22,7 @@ from app.application.services.image_recognition_service import (
     RecognizeResult,
 )
 from app.domain.entities.process_record import ProcessRecord
-from app.domain.value_objects import BoundingBox, FaceId, PersonId, ProcessId, SampleId
+from app.domain.value_objects import BoundingBox, FaceId, ProcessId, SampleId
 
 
 def _valid_jpeg_header(width: int = 64, height: int = 64) -> bytes:
@@ -99,7 +99,6 @@ class _FakeImageRecognitionService:
                 self.status = "known"
                 self.display_name = display_name
                 self.identity_metadata = metadata
-                self.person_id = None
         return _Identity(face_id, display_name, metadata)
 
     async def get_identity_detail(self, face_id: FaceId) -> Any:
@@ -115,7 +114,6 @@ class _FakeImageRecognitionService:
                 self.identity_metadata = metadata
                 self.created_at = None
                 self.updated_at = None
-                self.person_id = None
         return _Identity(face_id, status, name, metadata)
 
     async def delete_identity(self, face_id: FaceId) -> bool:
@@ -195,24 +193,6 @@ class _FakeImageRecognitionService:
 
     async def delete_face_sample(self, face_id: FaceId, sample_id: SampleId) -> None:
         pass
-
-    async def assign_face_to_person(
-        self,
-        face_id: FaceId,
-        target_person_id: PersonId,
-    ) -> Any:
-        if face_id in self.deleted:
-            raise ValueError("Face identity not found")
-        name, metadata = self.known_identities.get(face_id, (None, {}))
-        class _Identity:
-            def __init__(self, face_id: FaceId, person_id: PersonId) -> None:
-                self.face_id = face_id
-                self.status = "known"
-                self.display_name = name or ""
-                self.identity_metadata = metadata
-                self.person_id = person_id
-                self.redirect_to_face_id = None
-        return _Identity(face_id, target_person_id)
 
 
 @pytest.fixture
@@ -439,23 +419,3 @@ def test_add_face_sample_returns_new_sample(client: TestClient, fake_controller:
     assert data["faceId"] == face_id
     assert data["state"] == "active"
     assert "/image" in data["imageUrl"]
-
-
-def test_assign_face_to_existing_person_returns_known(client: TestClient, fake_controller: FaceController) -> None:
-    fake_controller._service.next_detections = [
-        _FakeDetection(bbox=BoundingBox(x=1, y=2, width=3, height=4), confidence=0.9),
-    ]
-    recognized = client.post("/api/v1/faces/recognize", files={"image": ("x.jpg", BytesIO(_valid_jpeg_header()), "image/jpeg")})
-    face_id = recognized.json()["faces"][0]["faceId"]
-    person_id = "018f0000-0000-7000-8000-000000000001"
-
-    response = client.post(
-        f"/api/v1/faces/{face_id}/assign",
-        json={"personId": person_id},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["faceId"] == face_id
-    assert data["status"] == "known"
-    assert data["personId"] == person_id
-    assert "requestId" in data

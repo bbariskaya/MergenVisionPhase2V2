@@ -106,6 +106,14 @@ extern "C" int mergenvision_warp_align(
     const float* d_dst,
     cudaStream_t stream);
 
+extern "C" int mergenvision_convert_nchw_float_to_hwc_uint8(
+    const float* d_src,
+    uint8_t* d_dst,
+    int n,
+    int h,
+    int w,
+    cudaStream_t stream);
+
 extern "C" int mergenvision_spin_wait_cycles(
     unsigned long long cycles,
     cudaStream_t stream);
@@ -285,6 +293,18 @@ PYBIND11_MODULE(_mv_phase1_bulk_native, m) {
     }, py::arg("src_ptr"), py::arg("h"), py::arg("w"),
        py::arg("matrices_ptr"), py::arg("n"),
        py::arg("dst_ptr"), py::arg("stream_ptr") = 0);
+
+    m.def("nchw_float_to_hwc_uint8", [](uintptr_t src_ptr, uintptr_t dst_ptr,
+                                        int n, int h, int w,
+                                        uintptr_t stream_ptr) {
+        check(mergenvision_convert_nchw_float_to_hwc_uint8(
+            reinterpret_cast<const float*>(src_ptr),
+            reinterpret_cast<uint8_t*>(dst_ptr),
+            n, h, w,
+            int_to_stream(stream_ptr)), "nchw_float_to_hwc_uint8");
+    }, py::arg("src_ptr"), py::arg("dst_ptr"),
+       py::arg("n"), py::arg("h"), py::arg("w"),
+       py::arg("stream_ptr") = 0);
 
     m.def("spin_wait_cycles", [](unsigned long long cycles, uintptr_t stream_ptr) {
         check(mergenvision_spin_wait_cycles(

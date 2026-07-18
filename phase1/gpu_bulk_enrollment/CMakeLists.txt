@@ -21,6 +21,7 @@ set(MV_PHASE1_BULK_NATIVE_SOURCES
     native/src/similarity_transform.cu
     native/src/warp_align.cu
     native/src/test_helpers.cu
+    native/src/convert_nchw_float_to_hwc_uint8.cu
 )
 
 pybind11_add_module(_mv_phase1_bulk_native ${MV_PHASE1_BULK_NATIVE_SOURCES})

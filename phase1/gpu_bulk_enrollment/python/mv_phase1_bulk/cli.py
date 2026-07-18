@@ -240,8 +240,7 @@ async def _run_enrollment(
             errors = [f"{sid}:{code}" for sid, code in persisted.failed + rejected]
             outcomes.append(
                 EnrollmentOutcome(
-                    external_subject_key=bundle.person.display_name,
-                    person_id=bundle.person.person_id,
+                    external_subject_key=bundle.face.display_name,
                     face_id=bundle.face.face_id,
                     persisted_sample_ids=sorted(persisted_ids),
                     failed_sample_ids=sorted(failed_ids),
@@ -249,7 +248,7 @@ async def _run_enrollment(
                 )
             )
             typer.echo(
-                f"enrolled {bundle.person.display_name}: persisted={len(persisted.persisted)} failed={len(failed_ids)}"
+                f"enrolled {bundle.face.display_name}: persisted={len(persisted.persisted)} failed={len(failed_ids)}"
             )
         return outcomes
     finally:

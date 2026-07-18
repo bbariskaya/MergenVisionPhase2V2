@@ -1,9 +1,9 @@
 """Build enrollment bundles from a validated manifest.
 
-A bundle ties together one deterministic ``Person``, one deterministic
-``FaceIdentity``, and the set of ``FaceSample`` rows derived from that
-subject's images.  It intentionally keeps the raw ``external_subject_key``
-inside this module; downstream stores only see UUIDs and object keys.
+A bundle ties together one deterministic known ``FaceIdentity`` and the set of
+``FaceSample`` rows derived from that subject's images.  It intentionally keeps
+the raw ``external_subject_key`` inside this module; downstream stores only see
+UUIDs and object keys.
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ from typing import Any
 
 import numpy as np
 
-from mv_phase1_bulk.ids import make_face_id, make_object_key, make_person_id, make_sample_id
+from mv_phase1_bulk.ids import make_face_id, make_object_key, make_sample_id
 from mv_phase1_bulk.manifest import EnrollmentManifest
-from mv_phase1_bulk.types import FaceRecord, PersonRecord, SampleRecord
+from mv_phase1_bulk.types import FaceRecord, SampleRecord
 
 
 @dataclass
@@ -39,7 +39,6 @@ class EnrolledSample:
 class SubjectBundle:
     """Everything needed to persist one subject across PG/MinIO/Qdrant."""
 
-    person: PersonRecord
     face: FaceRecord
     samples: list[EnrolledSample] = field(default_factory=list)
 
@@ -65,21 +64,17 @@ def build_subject_bundles(
 
     ``crop_bytes`` and ``embedding`` are left empty; the extraction stage
     fills them via ``EnrolledSample.set_extraction``.
+
+    TODO: stream manifest records and read image bytes lazily to avoid loading
+    the entire dataset into RAM.
     """
     bundles: list[SubjectBundle] = []
     for record in manifest:
-        person_id = make_person_id(source_namespace, record.subject_key)
         face_id = make_face_id(source_namespace, record.subject_key)
         display_name = _display_name(record.subject_key)
 
-        person = PersonRecord(
-            person_id=person_id,
-            display_name=display_name,
-            person_metadata=_metadata(source_namespace),
-        )
         face = FaceRecord(
             face_id=face_id,
-            person_id=person_id,
             status="known",
             is_active=True,
             display_name=display_name,
@@ -106,6 +101,6 @@ def build_subject_bundles(
                 )
             )
 
-        bundles.append(SubjectBundle(person=person, face=face, samples=enrolled_samples))
+        bundles.append(SubjectBundle(face=face, samples=enrolled_samples))
 
     return bundles

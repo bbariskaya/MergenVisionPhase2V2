@@ -8,7 +8,6 @@ from collections.abc import Sequence
 
 from app.domain.entities.face_identity import FaceIdentity
 from app.domain.entities.face_sample import FaceSample
-from app.domain.entities.person import Person
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.entities.recognition_result import RecognitionResult
 from app.domain.entities.video_timeline_chunk import VideoTimelineChunk
@@ -18,7 +17,7 @@ from app.domain.entities.video_track import (
     VideoTracklet,
     VideoTrackSample,
 )
-from app.domain.value_objects import FaceId, JobId, PersonId, ProcessId, SampleId
+from app.domain.value_objects import FaceId, JobId, ProcessId, SampleId
 
 
 class FaceIdentityRepository(ABC):
@@ -30,12 +29,6 @@ class FaceIdentityRepository(ABC):
 
     @abstractmethod
     async def get_active_by_id(self, face_id: FaceId) -> FaceIdentity | None: ...
-
-    @abstractmethod
-    async def get_canonical_by_id(self, face_id: FaceId) -> FaceIdentity | None: ...
-
-    @abstractmethod
-    async def list_by_person_id(self, person_id: PersonId) -> Sequence[FaceIdentity]: ...
 
     @abstractmethod
     async def update(self, identity: FaceIdentity) -> None: ...
@@ -57,40 +50,6 @@ class FaceIdentityRepository(ABC):
         status: str | None = None,
         is_active: bool = True,
     ) -> Sequence[FaceIdentity]: ...
-
-
-class PersonRepository(ABC):
-    @abstractmethod
-    async def add(self, person: Person) -> None: ...
-
-    @abstractmethod
-    async def add_many(self, people: Sequence[Person]) -> None: ...
-
-    @abstractmethod
-    async def get_by_id(self, person_id: PersonId) -> Person | None: ...
-
-    @abstractmethod
-    async def get_active_by_id(self, person_id: PersonId) -> Person | None: ...
-
-    @abstractmethod
-    async def update(self, person: Person) -> None: ...
-
-    @abstractmethod
-    async def update_with_expected_version(
-        self,
-        person: Person,
-        expected_version: int,
-    ) -> Person: ...
-
-    @abstractmethod
-    async def list_all(self) -> Sequence[Person]: ...
-
-    @abstractmethod
-    async def search(
-        self,
-        query: str | None = None,
-        is_active: bool = True,
-    ) -> Sequence[Person]: ...
 
 
 class FaceSampleRepository(ABC):

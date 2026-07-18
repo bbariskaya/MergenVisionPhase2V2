@@ -11,7 +11,6 @@ from app.application.ports.unit_of_work import UnitOfWork
 from app.infrastructure.persistence.sqlalchemy.repositories import (
     SqlAlchemyFaceIdentityRepository,
     SqlAlchemyFaceSampleRepository,
-    SqlAlchemyPersonRepository,
     SqlAlchemyProcessRepository,
     SqlAlchemyRecognitionResultRepository,
 )
@@ -46,7 +45,6 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         await self._session.begin()
         self.face_identities = SqlAlchemyFaceIdentityRepository(self._session)  # type: ignore[assignment]
         self.face_samples = SqlAlchemyFaceSampleRepository(self._session)  # type: ignore[assignment]
-        self.people = SqlAlchemyPersonRepository(self._session)  # type: ignore[assignment]
         self.processes = SqlAlchemyProcessRepository(self._session)  # type: ignore[assignment]
         self.recognition_results = SqlAlchemyRecognitionResultRepository(self._session)  # type: ignore[assignment]
         self.video_assets = SqlAlchemyVideoAssetRepository(self._session)

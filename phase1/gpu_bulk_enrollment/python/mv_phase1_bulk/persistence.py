@@ -2,8 +2,8 @@
 
 Lifecycle per sample:
 
-1. PostgreSQL: person/face rows + ``face_sample`` in ``pending`` state.
-2. MinIO: upload the original input JPEG, verifying size/SHA idempotency.
+1. PostgreSQL: face_identity row + ``face_sample`` in ``pending`` state.
+2. MinIO: upload the canonical 112×112 aligned WebP crop, verifying size/SHA.
 3. Qdrant: upsert the 512-D embedding with the required payload.
 4. PostgreSQL: move ``face_sample`` to ``active``.
 
@@ -37,7 +37,6 @@ class PersistedSample:
 
 @dataclass(frozen=True)
 class PersistedSubject:
-    person_id: str
     face_id: str
     persisted: list[PersistedSample]
     failed: list[tuple[str, str]]
@@ -73,21 +72,23 @@ class PersistenceOrchestrator:
         Returns a summary of which samples succeeded and which failed.
         """
         sample_records = [s.sample_record for s in bundle.samples]
-        await self._postgres.prepare_enrollment([bundle.person], [bundle.face], sample_records)
+        await self._postgres.prepare_enrollment([bundle.face], sample_records)
         rejected = rejected or []
 
         if not bundle.samples:
             if rejected:
                 await self._postgres.fail_samples_tx(rejected)
             return PersistedSubject(
-                person_id=bundle.person.person_id,
                 face_id=bundle.face.face_id,
                 persisted=[],
                 failed=rejected,
             )
 
-        # 2. MinIO upload of the original input JPEG (idempotent, conflict-detecting).
-        upload_items = [(bundle.face.face_id, s.sample_record.sample_id, s.image_bytes) for s in bundle.samples]
+        # 2. MinIO upload of the aligned WebP crop (idempotent, conflict-detecting).
+        upload_items = [
+            (bundle.face.face_id, s.sample_record.sample_id, s.crop_bytes)
+            for s in bundle.samples
+        ]
         upload_results = await self._minio.upload_many(upload_items, content_type="image/jpeg")
 
         successful: list[tuple[EnrolledSample, str]] = []
@@ -103,7 +104,6 @@ class PersistenceOrchestrator:
         if not successful:
             await self._postgres.fail_samples_tx(failed)
             return PersistedSubject(
-                person_id=bundle.person.person_id,
                 face_id=bundle.face.face_id,
                 persisted=[],
                 failed=failed,
@@ -124,7 +124,6 @@ class PersistenceOrchestrator:
                     await self._minio.delete_best_effort(object_key)
             await self._postgres.fail_samples_tx(failed)
             return PersistedSubject(
-                person_id=bundle.person.person_id,
                 face_id=bundle.face.face_id,
                 persisted=[],
                 failed=failed,
@@ -146,7 +145,6 @@ class PersistenceOrchestrator:
                     await self._qdrant.delete_best_effort(sample.sample_record.sample_id)
             await self._postgres.fail_samples_tx(failed)
             return PersistedSubject(
-                person_id=bundle.person.person_id,
                 face_id=bundle.face.face_id,
                 persisted=[],
                 failed=failed,
@@ -166,7 +164,6 @@ class PersistenceOrchestrator:
             await self._postgres.fail_samples_tx(all_failed)
 
         return PersistedSubject(
-            person_id=bundle.person.person_id,
             face_id=bundle.face.face_id,
             persisted=persisted,
             failed=all_failed,

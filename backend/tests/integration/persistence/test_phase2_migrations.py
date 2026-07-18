@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.infrastructure.uuid7 import generate_uuid7
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(scope="session")
 
 
 def _pg_url() -> str:

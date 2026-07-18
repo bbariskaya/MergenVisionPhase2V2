@@ -8,7 +8,6 @@ from app.api.controllers.face_controller import FaceController, RecognizeRequest
 from app.api.routes.common import raise_not_found
 from app.api.routes.dependencies import get_face_controller
 from app.api.schemas import (
-    AssignFaceToPersonRequest,
     EnrollByFaceIdRequest,
     EnrollResponse,
     FaceHistoryResponse,
@@ -77,20 +76,6 @@ async def enroll_face(
         face_id=face_id,
         display_name=body.name,
         metadata=body.metadata or {},
-    )
-
-
-@router.post("/{face_id}/assign", response_model=EnrollResponse)
-async def assign_face_to_person(
-    request: Request,
-    face_id: str,
-    body: AssignFaceToPersonRequest,
-    controller: FaceController = Depends(get_face_controller),
-) -> EnrollResponse:
-    return await controller.assign_to_person(
-        request_id=str(request.state.request_id),
-        face_id_str=face_id,
-        person_id_str=body.person_id,
     )
 
 

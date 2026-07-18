@@ -55,7 +55,7 @@ Phase 1 bulk creates one canonical `known` `FaceIdentity` per subject, linked to
 | `face_id` | UUID NOT NULL | FK to `face_identity.face_id`. |
 | `state` | VARCHAR(16) NOT NULL | `pending`, `active`, `failed`, `inactive`. Correct column name is `state`, not `status`. |
 | `bucket` | VARCHAR(255) nullable | Required when `state='active'`. |
-| `object_key` | VARCHAR(1024) nullable | Required when `state='active'`; technical key `faces/{face_id}/{sample_id}/aligned.webp`. |
+| `object_key` | VARCHAR(1024) nullable | Required when `state='active'`; technical key `faces/{face_id}/{sample_id}/aligned.jpg`. |
 | `failure_code` | VARCHAR(64) nullable | Required when `state='failed'`. |
 | `is_active` | BOOLEAN NOT NULL default false | `true` only for `state='active'`. |
 | `created_at` | TIMESTAMPTZ | ORM default. |
@@ -74,8 +74,8 @@ Phase 1 writes `state='pending'`, then uploads to MinIO, upserts Qdrant, then up
 ## MinIO
 
 - Bucket: configured via `MV_MINIO_BUCKET_NAME`; no dangerous default.
-- Object key format: `faces/{face_id}/{sample_id}/aligned.webp`.
-- Content type: `image/webp`.
+- Object key format: `faces/{face_id}/{sample_id}/aligned.jpg`.
+- Content type: `image/jpeg`.
 - User metadata: `sha256` = SHA-256 of object bytes.
 - Idempotency: if same key exists, verify size and SHA match; reject conflict.
 - Only accepted aligned 112×112 face crops are written. Raw dataset JPEG must never be stored under this key.

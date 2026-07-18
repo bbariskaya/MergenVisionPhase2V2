@@ -5,9 +5,9 @@ from __future__ import annotations
 import sys
 
 from mv_phase1_bulk._untouched_gate import (
+    HEAD_ADVANCED,
     MISSING_BASELINE,
     VIOLATION,
-    HEAD_ADVANCED,
     classify,
     git_diff_paths,
     git_head,

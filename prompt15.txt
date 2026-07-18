@@ -1,0 +1,438 @@
+Doğru karar şu: Phase 1’de aligned.jpg + image/jpeg kalabilir; PIL tamamen yasak. Crop GPU’da align edilecek, JPEG GPU-accelerated nvImageCodec/nvJPEG encoder ile batch encode edilecek; CPU’ya yalnız sıkıştırılmış JPEG bitstream çıkacak. MinIO zaten GPU pointer kabul etmediği için bu son compact transfer kaçınılmaz.
+
+nvImageCodec doğrudan CUDA-array/DLPack girdilerini ve image listelerini aynı CUDA stream üzerinde encode edebiliyor. Ayrıca OpenCV encoder fallback’i bulunduğundan backend açıkça nvjpeg_cuda_encoder/uygunsa nvjpeg_hw_encoder ile sınırlandırılmalı. https://docs.nvidia.com/cuda/nvimagecodec/py_api.html?utm_source=chatgpt.com https://docs.nvidia.com/cuda/nvimagecodec/codec_options.html?utm_source=chatgpt.com https://docs.nvidia.com/cuda/archive/12.4.1/nvjpeg/index.html?utm_source=chatgpt.com
+
+PLAN KARARI — JPEG KALACAK, PIL YASAK, GPU JPEG ENCODE ZORUNLU
+
+Son kullanıcı kararı:
+
+- Phase 1 aligned artifact formatı JPEG olacak.
+- Object key:
+  faces/{face_id}/{sample_id}/aligned.jpg
+- Content-Type:
+  image/jpeg
+- JPEG quality başlangıç değeri 95.
+- `.webp` key altında JPEG yazılmayacak.
+- PIL/Pillow, OpenCV ve FFmpeg production hot path’te kullanılmayacak.
+- Phase 2 source değiştirilmeden bu contract’ın mevcut object_key tabanlı lifecycle
+  ile uyumu integration testle doğrulanacak.
+
+============================================================
+1. HOT-PATH SINIRI
+============================================================
+
+Zorunlu akış:
+
+encoded JPEG batch
+  → nvImageCodec GPU decode
+  → device RGB images
+  → GPU RetinaFace preprocess
+  → TensorRT RetinaFace
+  → CUDA decode/NMS/landmarks
+  → CUDA five-point alignment
+  → device-side uint8 RGB 112×112 aligned crop batch
+  → TensorRT GlintR100 preprocess/inference
+  → CUDA L2 normalization
+  → nvImageCodec/nvJPEG GPU-accelerated JPEG encode
+  → compressed JPEG bitstreams
+  → bounded batch persistence
+  → PostgreSQL / MinIO / Qdrant
+
+Full decoded source frame CPU’ya dönmeyecek.
+
+CPU boundary’de yalnız şunlar olabilir:
+
+- bbox
+- landmarks
+- score/rejection reason
+- 512-D normalized embedding
+- sıkıştırılmış aligned JPEG bytes
+- IDs ve teknik metadata
+
+MinIO GPU device pointer kabul etmediği için sıkıştırılmış bitstream’in host’a
+alınması normal ve izinlidir. Raw 112×112 RGB crop veya full frame’i Python
+PIL/OpenCV’ye taşımak yasaktır.
+
+============================================================
+2. DEMO REFERANSINI DOĞRU KULLAN
+============================================================
+
+Local `/home/user/Workspace/MergenVisionDemo` yok. Ardından başka sibling
+repository’leri okumaya başlamışsın:
+
+- MergenVisionProd
+- MergenVisionCleanVersion
+
+Bunlar bu görev için approved source değildir. Oradan kod kopyalama.
+
+GitHub exact reference:
+
+  bbariskaya/MergenVisionDemo
+  commit:
+  5bf4b4c57542b26058e8d068186faee06c0fc29c
+
+Demo’dan doğrulanacak/adapte edilecekler:
+
+- batch nvImageCodec decode
+- device tensor ownership
+- RetinaFace batching
+- alignment
+- GlintR100 batching
+- buffer arena
+- process-per-GPU
+- bounded producer/consumer
+- stable subject sharding
+
+Önemli: Demo’nun GPU JPEG crop encode yaptığını varsayma. Demo daha çok decode ve
+inference batching referansıdır. Output JPEG encode için official nvImageCodec ve
+nvJPEG API’sini esas al.
+
+============================================================
+3. GPU JPEG ENCODER TASARIMI
+============================================================
+
+Öncelikli çözüm:
+
+  nvidia.nvimgcodec.Encoder
+
+Girdi:
+
+- GPU device memory
+- contiguous HWC
+- uint8
+- RGB
+- shape B×112×112×3
+- `__cuda_array_interface__` veya DLPack üzerinden
+- mevcut CUDA stream ownership korunarak
+
+Encoder:
+
+- device_id worker GPU
+- batch/list encode
+- codec=`jpeg`
+- quality=95
+- cuda_stream=current pipeline stream
+
+Backend explicit sınırlandırılmalı:
+
+1. Runtime destekliyorsa `nvjpeg_hw_encoder`.
+2. Değilse `nvjpeg_cuda_encoder`.
+3. `opencv_jpeg_encoder` kesinlikle yasak.
+4. CPU/PIL fallback kesinlikle yasak.
+5. Requested NVIDIA backend yoksa startup:
+   `BLOCKED_GPU_JPEG_ENCODER_UNAVAILABLE`
+   dönmeli.
+
+Backend seçimini varsayma. Runtime smoke ile gerçekten kullanılan encoder
+backend’ini ve version’ı kaydet.
+
+Eğer Python nvImageCodec wrapper mevcut DeviceTensor’ı güvenli biçimde kabul
+etmiyorsa:
+
+- PIL’e dönme.
+- Raw crop’u NumPy’ya indirme.
+- `_mv_phase1_bulk_native` içine native `NvJpegBatchEncoder` binding ekle.
+- Binding device pointer + pitch + batch + stream kabul etsin.
+- nvJPEG encoder state/params reusable olsun.
+- Her crop için handle/state create-destroy yapma.
+- Pinned host bitstream buffer pool kullan.
+- Encode tamamlandıktan sonra compressed byte’ları batch halinde Python’a çıkar.
+
+============================================================
+4. CROP LAYOUT
+============================================================
+
+Recognizer input ve artifact crop aynı şey değildir.
+
+Artifact encoder için gerekli crop:
+
+  uint8 RGB HWC 112×112
+
+GlintR100 input:
+
+  FP32 NCHW 112×112
+  model profile normalization contract’ına uygun
+
+Alignment aşamasında mümkünse bir canonical uint8 RGB crop batch üret.
+
+Ardından GPU kernel:
+
+  uint8 HWC aligned crop
+    → GlintR100 normalized FP32 NCHW
+
+dönüşümünü yapsın.
+
+Böylece:
+
+- artifact JPEG aynı canonical alignment’tan gelir
+- recognizer aynı pixel source’u kullanır
+- ikinci alignment yapılmaz
+- CPU pixel conversion yapılmaz
+- crop/embedding association kaybolmaz
+
+============================================================
+5. BATCH ENCODE / IO
+============================================================
+
+Encode photo-by-photo Python loop şeklinde blocking yapılmayacak.
+
+İstenen aşamalar:
+
+GPU worker:
+
+- detector batch
+- selected crops
+- recognizer chunks
+- JPEG encode batch
+- compact result batch
+
+Persistence worker:
+
+- compressed JPEG byte batches
+- PostgreSQL batched pending reserve
+- MinIO bounded concurrent put
+- Qdrant chunked upsert wait=True
+- PostgreSQL batched active finalize
+
+Queue’lar bounded olacak. Persistence yavaşsa GPU tarafında sınırsız RAM
+birikmeyecek.
+
+MinIO SDK tek gerçek “batch put” sağlamıyorsa bounded async concurrency kullan:
+
+- explicit concurrency limit
+- byte/count based chunk limit
+- per-object idempotent key
+- retry/backoff
+- previous successful object’i silmeme
+
+============================================================
+6. PHASE 2 UYUMU
+============================================================
+
+Latest kullanıcı kararı Phase 1 crop artifact’ini JPEG yapmıştır.
+
+Doğru contract:
+
+  faces/{face_id}/{sample_id}/aligned.jpg
+  image/jpeg
+
+Değiştirilecek yalnız Phase 1 package source:
+
+- `pipeline.py`
+- `ids.py`
+- `minio_store.py`
+- `persistence.py`
+- package tests/docs/config
+
+Phase 2 source değiştirme.
+
+Önce read-only inspect et:
+
+- Phase 2 object reader extension hardcode ediyor mu?
+- Phase 2 content type’ı WebP varsayıyor mu?
+- Recognition/video identity yalnız PG/Qdrant kullanıyor mu?
+- MinIO object retrieval DB’deki object_key’i aynen kullanıyor mu?
+
+Phase 2 yalnız stored object_key/content type üzerinden çalışıyorsa JPEG compatible
+kabul edilir.
+
+Phase 2 `.webp` hardcode ediyorsa onu gizlice değiştirme. Exact failing path/test ile:
+
+  BLOCKED_PHASE2_ARTIFACT_FORMAT_CONTRACT
+
+raporla. JPEG’i `.webp` adı altında saklama.
+
+============================================================
+7. VENV / RUNTIME
+============================================================
+
+Sistem Python’a global paket kurma.
+
+Package-local environment:
+
+  phase1/gpu_bulk_enrollment/
+    .artifacts/phase1_gpu_bulk_enrollment/venv
+
+Ancak doğrudan `pip install -e ...` çalıştırmadan önce:
+
+1. Python version
+2. CUDA runtime
+3. TensorRT engine version
+4. nvImageCodec wheel/runtime compatibility
+5. SM75 support
+6. existing engine manifest/profile
+
+doğrula.
+
+Existing engines:
+
+  phase1/artifacts/engines/default/
+
+için:
+
+- engine SHA
+- TensorRT version
+- CUDA
+- input/output tensor names
+- min/opt/max profiles
+- target SM/runtime
+
+doğrulanmadan deserialize etme.
+
+Engine başka TensorRT minor ile build edildiyse host venv’i eğip bükme. Aynı pinned
+container/runtime içinde package-local engine rebuild et; mevcut engine’i overwrite
+etme.
+
+============================================================
+8. LFW SMOKE DATASET
+============================================================
+
+Küçük subset otomatik fakat deterministic seçilecek.
+
+Kurallar:
+
+- en az 2 resmi olan 3–5 subject
+- mümkünse local test videosunda görünen bir subject dahil
+- `Jennifer_Aniston` klasörü ve yeterli fotoğraf varsa continuity subject olarak
+  dahil et
+- subject başına en az bir enrollment image
+- en az bir held-out recognition image
+- held-out image enrollment’a dahil edilmez
+- dataset read-only
+- dataset Git’e eklenmez
+- raw subject/path public log’a yazılmaz
+
+Manifest:
+
+  .artifacts/phase1_gpu_bulk_enrollment/lfw_manifest.jsonl
+
+Selection manifestte açıkça kaydedilsin; filesystem order’a bağlı olmasın.
+
+============================================================
+9. ACCEPTANCE SIRASI
+============================================================
+
+A. Static/unit
+
+- object key `.jpg`
+- content type `image/jpeg`
+- JPEG magic bytes `FF D8 FF`
+- decoded dimensions 112×112
+- PersonRecord kalıntısı yok
+- no PIL/OpenCV/FFmpeg production import
+- no `.webp` contract kalıntısı
+
+B. GPU JPEG encoder smoke
+
+- device crop input
+- explicit NVIDIA encoder backend
+- quality=95
+- batch size >1
+- valid JPEG output
+- no OpenCV encoder fallback
+- no raw crop D2H
+- GPU memory released after close
+
+C. Full GPU batch
+
+- multiple subjects same detector batch
+- source association preserved
+- embeddings 512-D finite norm≈1
+- aligned JPEGs valid
+- no silent face drop
+
+D. Real stores
+
+- PG known FaceIdentity
+- active FaceSamples
+- MinIO `aligned.jpg`
+- `image/jpeg`
+- Qdrant point ID == sample_id
+- correct face_id/active/model_version
+- reconcile PASS
+
+E. Held-out image
+
+Held-out LFW JPEG:
+
+  POST /api/v1/faces/recognize
+
+Expected:
+
+- known
+- exact same face_id
+- enrollment image’iyle aynı persistent identity
+
+Bu doğrulama optional değildir.
+
+F. Video continuity
+
+Local videoda test subject varsa gerçek video job çalıştır:
+
+- bulk enrollment face_id
+- video known face_id
+
+birebir aynı olmalı.
+
+============================================================
+10. TEST EDİLMESİ GEREKEN PERFORMANS SINIRI
+============================================================
+
+Ayrı ölç:
+
+1. decode+detect+align+embed
+2. GPU JPEG encode
+3. compressed bitstream D2H
+4. PG/MinIO/Qdrant persistence
+5. full E2E
+
+Matrix:
+
+  batch 1, 2, 4, 8, 16
+
+Record:
+
+- image/s
+- encode crop/s
+- JPEG average bytes
+- GPU memory
+- D2H bytes
+- persistence queue depth
+- p50/p95/p99
+- accepted/rejected counts
+
+PIL’e göre hızlı olduğunu iddia etmek için PIL benchmarkı production code’a
+eklenmez; gerekirse isolated reference benchmark yapılır.
+
+============================================================
+11. PLAN KARARLARI
+============================================================
+
+Açık soruların cevapları:
+
+1. Crop formatı:
+   `aligned.jpg + image/jpeg`.
+   `.webp` key altında JPEG kesinlikle yok.
+
+2. Dataset:
+   Deterministic 3–5 LFW subject otomatik seç.
+   Mümkünse video continuity için Jennifer Aniston dahil et.
+   Her subject için held-out image ayır.
+
+3. Phase 2 recognize:
+   Zorunlu acceptance gate.
+
+4. PIL:
+   Yasak.
+
+5. JPEG encoder:
+   Explicit nvImageCodec/nvJPEG GPU backend.
+   OpenCV/PIL fallback yok.
+
+6. Final storage:
+   GPU pipeline tamamlandıktan sonra compressed JPEG bytes bounded batch/concurrency
+   ile IO’ya girer.
+
+Şimdi planı bu kararlarla güncelle. Tekrar format/model/runtime seçimi sorma.
+Plan onayı için durmadan native build ve GPU JPEG encoder capability gate ile
+Build Mode’a başla.

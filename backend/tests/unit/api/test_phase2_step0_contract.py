@@ -78,7 +78,6 @@ class _FakeContractService:
                 self.status = "known"
                 self.display_name = display_name
                 self.identity_metadata = {}
-                self.person_id = None
         return _Identity(face_id, display_name)
 
     async def get_identity_detail(self, face_id: FaceId) -> Any:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -25,7 +24,6 @@ MATCH_THRESHOLD = 0.95
 
 REPO_ROOT = Path(__file__).parents[4]
 COMPOSE_FILE = REPO_ROOT / "docker-compose.test.yml"
-COMPOSE_PROJECT = os.environ.get("MERGENVISION_TEST_COMPOSE_PROJECT", "mergenvision-p2-test")
 
 
 def _uow_factory() -> SqlAlchemyUnitOfWork:
@@ -42,7 +40,7 @@ def _compose(args: list[str]) -> None:
         "docker",
         "compose",
         "-p",
-        COMPOSE_PROJECT,
+        "mergenvision-s01-test",
         "-f",
         str(COMPOSE_FILE),
         *args,

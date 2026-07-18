@@ -19,10 +19,9 @@ from app.application.services.identity_storage_lifecycle_service import (
 from app.application.services.image_recognition_service import ImageRecognitionService
 from app.domain.entities.face_identity import FaceIdentity
 from app.domain.entities.face_sample import FaceSample
-from app.domain.entities.person import Person
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.entities.recognition_result import RecognitionResult
-from app.domain.value_objects import BoundingBox, FaceId, PersonId, ProcessId, ResultId, SampleId
+from app.domain.value_objects import BoundingBox, FaceId, ProcessId, ResultId, SampleId
 from app.infrastructure.persistence.sqlalchemy.session import async_session_maker
 from app.infrastructure.persistence.sqlalchemy.unit_of_work import SqlAlchemyUnitOfWork
 from app.infrastructure.storage.minio_adapter import MinIOObjectStore
@@ -77,20 +76,9 @@ async def test_delete_faces_and_history_preserved(
     sample_id = SampleId(UUID("018f1000-0000-7b0e-8000-000000000002"))
     process_id = ProcessId(UUID("018f1000-0000-7b0e-8000-000000000003"))
     recognition_id = UUID("018f1000-0000-7b0e-8000-000000000004")
-    person_id = PersonId(UUID("018f1000-0000-7b0e-8000-000000000005"))
 
     # Seed active identity and sample.
-    person = Person(
-        person_id=person_id,
-        display_name="Ada",
-        person_metadata={},
-    )
-    identity = FaceIdentity(
-        face_id=face_id,
-        status="known",
-        display_name="Ada",
-        person_id=person_id,
-    )
+    identity = FaceIdentity(face_id=face_id, status="known", display_name="Ada")
     sample = FaceSample(
         sample_id=sample_id,
         face_id=face_id,
@@ -121,8 +109,6 @@ async def test_delete_faces_and_history_preserved(
         metadata={},
     )
 
-    await uow.people.add(person)
-    await uow.flush()
     await uow.face_identities.add(identity)
     await uow.face_samples.add(sample)
     await uow.processes.add(process)

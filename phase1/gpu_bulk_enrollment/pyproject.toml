@@ -22,6 +22,8 @@ dependencies = [
     "structlog>=24.0",
     # GPU inference / decode stack (pinned to MergenVisionDemo reference)
     "tensorrt==10.3.0",
+    "tensorrt-cu12-bindings==10.3.0",
+    "tensorrt-cu12-libs==10.3.0",
     "cuda-python>=13.0",
     "cvcuda-cu12==0.16.0",
     "nvidia-nvimgcodec-cu12==0.8.0.22",
@@ -29,6 +31,8 @@ dependencies = [
     "nvidia-nvtiff-cu12>=0.2.0",
     "onnx>=1.16.0",
     "httpx>=0.27.0",
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +66,7 @@ per-file-ignores = { "python/mv_phase1_bulk/cli.py" = ["B008"] }
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

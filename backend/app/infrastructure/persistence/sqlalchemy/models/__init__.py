@@ -7,7 +7,6 @@ from app.infrastructure.persistence.sqlalchemy.models.face_identity import FaceI
 from app.infrastructure.persistence.sqlalchemy.models.face_sample import FaceSampleOrm
 from app.infrastructure.persistence.sqlalchemy.models.idempotency_record import IdempotencyRecordOrm
 from app.infrastructure.persistence.sqlalchemy.models.outbox_event import OutboxEventOrm
-from app.infrastructure.persistence.sqlalchemy.models.person import PersonOrm
 from app.infrastructure.persistence.sqlalchemy.models.process_event import ProcessEventOrm
 from app.infrastructure.persistence.sqlalchemy.models.process_record import ProcessRecordOrm
 from app.infrastructure.persistence.sqlalchemy.models.recognition_result import RecognitionResultOrm
@@ -25,7 +24,6 @@ __all__ = [
     "FaceIdentityOrm",
     "FaceSampleOrm",
     "IdempotencyRecordOrm",
-    "PersonOrm",
     "OutboxEventOrm",
     "ProcessEventOrm",
     "ProcessRecordOrm",

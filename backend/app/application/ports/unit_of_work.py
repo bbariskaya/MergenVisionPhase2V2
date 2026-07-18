@@ -9,7 +9,6 @@ from typing import Any, Protocol, Self
 from app.application.ports.repositories import (
     FaceIdentityRepository,
     FaceSampleRepository,
-    PersonRepository,
     ProcessRepository,
     RecognitionResultRepository,
     VideoAppearanceIntervalRepository,
@@ -23,7 +22,6 @@ from app.application.ports.repositories import (
 class UnitOfWork(ABC):
     face_identities: FaceIdentityRepository
     face_samples: FaceSampleRepository
-    people: PersonRepository
     processes: ProcessRepository
     recognition_results: RecognitionResultRepository
     video_assets: Any

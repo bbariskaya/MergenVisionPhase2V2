@@ -7,15 +7,28 @@ implementation so the adapted Python code requires minimal changes.
 
 from __future__ import annotations
 
-from mv_phase1_bulk import _mv_phase1_bulk_native as _native  # type: ignore[attr-defined]
+from mv_phase1_bulk._mv_phase1_bulk_native import (
+    argsort_descending,
+    l2_normalize,
+    nchw_float_to_hwc_uint8,
+    nms,
+    retinaface_decode_batch,
+    retinaface_pick_largest,
+    scale_clip_compact,
+    scale_clip_compact_xy,
+    similarity_transform,
+    warp_align,
+)
 
-l2_normalize = _native.l2_normalize
-similarity_transform = _native.similarity_transform
-nms = _native.nms
-scale_clip_compact = _native.scale_clip_compact
-scale_clip_compact_xy = _native.scale_clip_compact_xy
-retinaface_decode_batch = _native.retinaface_decode_batch
-retinaface_pick_largest = _native.retinaface_pick_largest
-argsort_descending = _native.argsort_descending
-warp_align = _native.warp_align
-spin_wait_cycles = _native.spin_wait_cycles
+__all__ = [
+    "argsort_descending",
+    "l2_normalize",
+    "nchw_float_to_hwc_uint8",
+    "nms",
+    "retinaface_decode_batch",
+    "retinaface_pick_largest",
+    "scale_clip_compact",
+    "scale_clip_compact_xy",
+    "similarity_transform",
+    "warp_align",
+]
