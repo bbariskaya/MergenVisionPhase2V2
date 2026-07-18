@@ -1,0 +1,70 @@
+[build-system]
+requires = ["scikit-build-core>=0.9", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "mv-phase1-bulk"
+version = "0.1.0"
+description = "Phase 1 isolated native GPU bulk enrollment for MergenVision"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+readme = "README.md"
+dependencies = [
+    "numpy>=1.26",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "sqlalchemy[asyncpg]>=2.0",
+    "minio>=7.2",
+    "qdrant-client>=1.9",
+    "uuid_extensions>=0.1.0",
+    "typer>=0.12",
+    "python-json-logger>=2.0",
+    "structlog>=24.0",
+    # GPU inference / decode stack (pinned to MergenVisionDemo reference)
+    "tensorrt==10.3.0",
+    "cuda-python>=13.0",
+    "cvcuda-cu12==0.16.0",
+    "nvidia-nvimgcodec-cu12==0.8.0.22",
+    "nvidia-nvjpeg2k-cu12>=0.3.0",
+    "nvidia-nvtiff-cu12>=0.2.0",
+    "opencv-python-headless>=4.9.0",
+    "onnx>=1.16.0",
+    "httpx>=0.27.0",
+    "pillow>=10.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+mv-phase1-bulk = "mv_phase1_bulk.cli:app"
+
+[tool.scikit-build]
+minimum-version = "0.9"
+build-dir = "build/{wheel_tag}"
+cmake.verbose = true
+
+[tool.scikit-build.cmake.define]
+CMAKE_CUDA_ARCHITECTURES = "75;80;86;89"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+per-file-ignores = { "python/mv_phase1_bulk/cli.py" = ["B008"] }
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

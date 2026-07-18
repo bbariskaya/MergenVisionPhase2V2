@@ -1,0 +1,211 @@
+{
+  "schema_version": "1.0.0",
+  "model_version": "retinaface_r50_glintr100_v1",
+  "preprocess_version": "v1",
+  "detector": {
+    "name": "retinaface_r50",
+    "input_layout": "NCHW",
+    "color_order": "BGR",
+    "input_tensor_name": "input",
+    "input_dtype": "float32",
+    "input_shape": [
+      1,
+      3,
+      640,
+      640
+    ],
+    "dynamic_profile": {
+      "min": [
+        1,
+        3,
+        640,
+        640
+      ],
+      "opt": [
+        16,
+        3,
+        640,
+        640
+      ],
+      "max": [
+        256,
+        3,
+        640,
+        640
+      ]
+    },
+    "output_tensors": {
+      "location": "loc",
+      "confidence": "conf",
+      "landmarks": "landms"
+    },
+    "confidence_threshold": 0.5,
+    "nms_threshold": 0.4,
+    "max_candidates": 300,
+    "anchor_strides": [
+      8,
+      16,
+      32,
+      64,
+      128
+    ],
+    "anchor_sizes": [
+      [
+        16,
+        32
+      ],
+      [
+        64,
+        128
+      ],
+      [
+        256,
+        512
+      ]
+    ],
+    "anchor_ratios": [
+      1.0
+    ],
+    "variances": [
+      0.1,
+      0.2
+    ],
+    "landmark_order": [
+      "left_eye",
+      "right_eye",
+      "nose",
+      "left_mouth",
+      "right_mouth"
+    ]
+  },
+  "recognizer": {
+    "name": "glintr100",
+    "input_layout": "NCHW",
+    "color_order": "RGB",
+    "input_tensor_name": "input.1",
+    "input_dtype": "float32",
+    "input_shape": [
+      1,
+      3,
+      112,
+      112
+    ],
+    "dynamic_profile": {
+      "min": [
+        1,
+        3,
+        112,
+        112
+      ],
+      "opt": [
+        16,
+        3,
+        112,
+        112
+      ],
+      "max": [
+        256,
+        3,
+        112,
+        112
+      ]
+    },
+    "output_tensors": {
+      "embedding": "1333"
+    },
+    "embedding_dim": 512,
+    "normalize": "l2"
+  },
+  "alignment": {
+    "template": [
+      [
+        38.2946,
+        51.6963
+      ],
+      [
+        73.5318,
+        51.5014
+      ],
+      [
+        56.0252,
+        71.7366
+      ],
+      [
+        41.5493,
+        92.3655
+      ],
+      [
+        70.7299,
+        92.2041
+      ]
+    ],
+    "crop_size": [
+      112,
+      112
+    ]
+  },
+  "models": {
+    "retinaface_r50_dynamic": {
+      "onnx_path": "/home/user/Workspace/MergenVisionPhase2v2/backend/artifacts/models/retinaface_r50_dynamic.onnx",
+      "onnx_sha256": "fd8a87a6f2837d425604e0f88efca91e661947dbc3707f54da53ec27a8dc9a8a"
+    },
+    "glintr100": {
+      "onnx_path": "/home/user/Workspace/MergenVisionPhase2v2/backend/artifacts/models/glintr100.onnx",
+      "onnx_sha256": "4ab1d6435d639628a6f3e5008dd4f929edf4c4124b1a7169e1048f9fef534cdf"
+    }
+  },
+  "engine_manifest": {
+    "retinaface_r50_dynamic": {
+      "engine_path": "artifacts/engines/default/retinaface_r50_dynamic.bs1.opt16.max256.fp16.engine",
+      "engine_sha256": "ca25c6894abdba0c922a7b4888afd6fb144cb00fdf0894d93081c7fc8fc7335c",
+      "profile": {
+        "min": [
+          1,
+          3,
+          640,
+          640
+        ],
+        "opt": [
+          16,
+          3,
+          640,
+          640
+        ],
+        "max": [
+          256,
+          3,
+          640,
+          640
+        ]
+      },
+      "precision": "fp16"
+    },
+    "glintr100": {
+      "engine_path": "artifacts/engines/default/glintr100.bs1.opt16.max256.fp16.engine",
+      "engine_sha256": "428b3c63c89cc0651e770621c5cac198941f8259df08a6821bb6be4227b71395",
+      "profile": {
+        "min": [
+          1,
+          3,
+          112,
+          112
+        ],
+        "opt": [
+          16,
+          3,
+          112,
+          112
+        ],
+        "max": [
+          256,
+          3,
+          112,
+          112
+        ]
+      },
+      "precision": "fp16"
+    },
+    "tensorrt_version": "10.3.0",
+    "build_timestamp": ""
+  }
+}

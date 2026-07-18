@@ -1,0 +1,1473 @@
+Aynen abi. Bu prompt Phase 2 source’unu dokunulmaz ilan ediyor; yeni bulk enrollment sistemi tamamen ayrı phase1/gpu_bulk_enrollment/ altında kuruluyor ve MergenVisionDemo referansını gerçekten incelemeyi zorunlu tutuyor.
+CODE AGENT — BUILD MODE
+
+PHASE 1 ISOLATED NATIVE GPU BULK ENROLLMENT & BENCHMARK
+
+Bu prompt bağlayıcıdır. Önce tamamını oku, sonra Build Mode’da uygula. Plan hazırlayıp kullanıcıdan yeniden onay isteme. Gerçek external blocker dışında mikro-onay istemeden ilerle.
+
+======================================================================
+0. GÖREVİN TEK CÜMLELİK ÖZETİ
+======================================================================
+
+Mevcut MergenVisionPhase2v2 image/video source’una hiçbir değişiklik yapmadan, MergenVisionDemo repository’sindeki daha önce çalışan native GPU batch enrollment mimarisini gerçek source üzerinden incele ve Phase 1 için tamamen ayrı:
+
+  phase1/gpu_bulk_enrollment/
+
+paketi altında yeniden kullan/adapte et.
+
+Hedef:
+
+read-only mounted dataset
+→ bounded producer queues
+→ native multi-image GPU batch decode/detect/align/embed/L2
+→ yalnız compact final outputs CPU boundary
+→ quality/admission
+→ PostgreSQL bulk upsert
+→ MinIO bounded concurrent upload
+→ Qdrant batch upsert
+→ resumable/idempotent enrollment
+→ compute/E2E/three-GPU benchmark
+
+Mevcut Phase 2 image runtime’a `infer_jpeg_batch` ekleme.
+
+Mevcut Phase 2 video pipeline’a dokunma.
+
+Mevcut online bulk enrollment scaffold’ını değiştirme.
+
+Yeni sistem ayrı engine, ayrı package, ayrı Docker image, ayrı CLI ve ayrı test/benchmark altyapısı olarak çalışmalıdır.
+
+======================================================================
+1. AKTİF VE REFERANS REPOSITORY
+======================================================================
+
+Aktif writable repository:
+
+  /home/user/Workspace/MergenVisionPhase2v2
+
+GitHub:
+
+  https://github.com/bbariskaya/MergenVisionPhase2V2
+
+Read-only referans repository:
+
+  /home/user/Workspace/MergenVisionDemo
+
+Eğer reference path farklıysa şu yollar altında yalnız read-only ara:
+
+  /home/user/Workspace/
+  /workspace/
+
+MergenVisionDemo bulunamazsa kullanıcıya sormadan önce:
+
+- codebase-memory-mcp
+- prompt-memory-mcp
+- git repository discovery
+- rg --files
+
+ile doğrula.
+
+MergenVisionDemo reference repository’sini değiştirme, formatlama, build artifact ekleme veya commit etme.
+
+======================================================================
+2. PHASE 2 KORUMA KURALI — EN ÖNEMLİ KURAL
+======================================================================
+
+Source değişiklikleri yalnız şu prefix altında olabilir:
+
+  phase1/gpu_bulk_enrollment/**
+
+Runtime-generated artifact’ler yalnız:
+
+  .artifacts/phase1_gpu_bulk_enrollment/**
+  veya package içindeki gitignored artifacts/
+
+altında olabilir.
+
+Aşağıdaki yollar READ-ONLY / PROTECTED’tır:
+
+- backend/**
+- frontend/**
+- research/video_reference_lab/**
+- research/gpu_video_lab/**
+- requirements/**
+- docs/**
+- migrations/**
+- docker-compose.gpu.yml
+- root Makefile
+- mevcut Dockerfile’lar
+- mevcut pyproject/requirements/lock dosyaları
+- mevcut tests/**
+- MergenVisionDemo repository’sinin tamamı
+
+Özellikle dokunma:
+
+- backend/native/image_runtime/**
+- backend/native/video_worker/**
+- backend/app/application/services/bulk_enrollment_service.py
+- backend/app/application/services/identity_storage_lifecycle_service.py
+- backend/app/api/**
+- backend/app/infrastructure/**
+- mevcut Phase 2 TensorRT engine build kodu
+- mevcut video worker
+- mevcut Qdrant adapter
+- mevcut frontend UI
+
+Mevcut scaffold hatalı/yavaş olsa bile değiştirme. Bu sprint onun yerine bağımsız Phase 1 bulk tool üretir.
+
+Bir protected dosyada değişiklik gerekirmiş gibi görünürse:
+
+1. Değişiklik yapma.
+2. Ayrı adapter/implementation’ı `phase1/gpu_bulk_enrollment/` altında oluştur.
+3. Gerçekten imkânsızsa exact blocker ve nedenini raporla.
+
+======================================================================
+3. KORUMA MEKANİZMASI
+======================================================================
+
+Implementation başlamadan önce:
+
+- `git status --short`
+- `git diff --name-only`
+- protected tracked files SHA manifest
+- untracked file listesi
+
+kaydedilsin.
+
+Package içinde şu benzeri bir gate oluştur:
+
+  phase1/gpu_bulk_enrollment/scripts/check_phase2_untouched.sh
+
+Bu gate:
+
+- Çalışma başlangıcındaki protected tree SHA manifestini okur.
+- Phase 2 protected path’lerinde tracked content değişmediğini doğrular.
+- `git diff --name-only` içindeki bütün yeni/değişen source yollarının allowlist altında olduğunu doğrular.
+- İzin verilen tek source prefix:
+    phase1/gpu_bulk_enrollment/
+- Violation varsa non-zero exit verir.
+
+Bu gate her önemli adım sonunda çalıştırılır.
+
+Final PASS için:
+
+  make -C phase1/gpu_bulk_enrollment phase2-untouched-gate
+
+green olmalıdır.
+
+Kullanıcıdan önce var olan dirty değişiklikleri sahiplenme. Baseline manifestte onları ayır; kendi yaptığın değişiklik olarak raporlama.
+
+======================================================================
+4. ÜRÜN BAĞLAMI
+======================================================================
+
+MergenVision global persistent identity sistemidir.
+
+Storage ownership:
+
+PostgreSQL:
+
+- Person
+- FaceIdentity
+- FaceSample lifecycle
+- Process/job metadata
+- Business source of truth
+
+MinIO:
+
+- accepted aligned face crop binary
+- teknik UUID object key
+
+Qdrant:
+
+- 512-D normalized GlintR100 embeddings
+- rebuildable vector index
+
+Video recognition’ın bulk-enrolled kişiyi tanıyabilmesi için yeni Phase 1 tool:
+
+- Mevcut PostgreSQL schema/contract ile uyumlu kayıt üretmeli.
+- Mevcut MinIO object-key contract’ına uymalı.
+- Mevcut Qdrant collection’ı kullanmalı.
+- Mevcut video pipeline ile aynı model_version/preprocess_version kullanmalı.
+- Qdrant point ID tam olarak `face_sample.sample_id` olmalı.
+- Person/FaceIdentity continuity’yi korumalı.
+
+Yeni ve uyumsuz identity namespace veya Qdrant collection oluşturma.
+
+Separate engine demek separate identity/vector space demek değildir.
+
+======================================================================
+5. DONDURULMUŞ MODELLER
+======================================================================
+
+Detector:
+
+  backend/artifacts/models/retinaface_r50_dynamic.onnx
+
+Recognizer:
+
+  backend/artifacts/models/glintr100.onnx
+
+Başka model kullanma.
+
+Model indirme yok.
+
+SCRFD’ye geçme.
+
+Model dosyaları read-only mount edilir.
+
+Yeni Phase 1 engine’ler ayrı runtime artifact olarak oluşturulur:
+
+  .artifacts/phase1_gpu_bulk_enrollment/engines/
+    <runtime-fingerprint>/
+      retinaface_batch_fp16.engine
+      glintr100_batch_fp16.engine
+      manifest.json
+
+Phase 2 engine dosyalarını overwrite etme.
+
+Engine manifest:
+
+- ONNX SHA-256
+- engine SHA-256
+- tensor names
+- tensor shapes
+- profiles
+- precision
+- TensorRT/CUDA
+- GPU UUID/compute capability
+- container digest
+- build command
+- model_version
+- preprocess_version
+
+içermeli.
+
+Dynamic profile değerlerini hafızadan uydurma. Önce:
+
+1. MergenVisionDemo exact implementation/profile.
+2. Current ONNX tensor contract.
+3. Current Phase 2 model profile.
+4. Actual TensorRT engine build result.
+
+incelensin.
+
+======================================================================
+6. GPU HOT-PATH CONTRACT
+======================================================================
+
+Production-like bulk compute path:
+
+encoded JPEG bytes
+→ GPU decode
+→ CUDA preprocess
+→ batched TensorRT RetinaFace
+→ GPU decode/NMS/landmarks
+→ GPU quality primitives
+→ CUDA five-point alignment
+→ batched TensorRT GlintR100
+→ GPU L2 normalization
+→ compact extraction results
+
+CPU boundary’de izin verilen:
+
+- Input encoded JPEG bytes
+- File/manifest metadata
+- Original image dimensions
+- bbox
+- landmarks
+- detector score
+- quality primitives
+- 512-D normalized embedding
+- compact encoded aligned crop
+- status/rejection reason
+- timings
+
+Yasak:
+
+- Production batch path’te PIL/OpenCV full-frame decode
+- Full decoded image D2H
+- Detector input/output tensor’larını CPU’ya taşıma
+- CPU NMS/postprocess
+- CPU model inference fallback
+- Fotoğraf başına ayrı Python→GPU inference çağrısı
+- Fotoğraf başına zorunlu CUDA synchronize
+- Sessiz sample truncation
+
+“Hiç GPU’dan inmeden” iddiasını teknik olarak dürüst kullan:
+
+- Encoded dosya byte’ları başlangıçta CPU’dadır.
+- Persistence için compact sonuçların CPU boundary’ye çıkması gerekir.
+- İddia: decoded full image ve intermediate inference tensor’ları GPU hot path’ten çıkmaz.
+
+======================================================================
+7. REFERENCE-FIRST ZORUNLULUĞU
+======================================================================
+
+Yeni pipeline’ı hafızadan yeniden tasarlama.
+
+MergenVisionDemo içinde gerçek source’u bul:
+
+Önce:
+
+  rg -n "GpuFacePipeline|extract_batch|infer_batch|batch_size|producer|consumer|Qdrant|MinIO|bulk|enroll" \
+    /home/user/Workspace/MergenVisionDemo
+
+Ardından en az şunları çıkar:
+
+- `GpuFacePipeline`
+- `extract_batch`
+- native/CUDA/TensorRT engine wrapper
+- decode path
+- detector batch association
+- recognizer batch/chunk association
+- Python/native boundary
+- queue/backpressure
+- multi-GPU worker model
+- person sharding
+- persistence batching
+- deterministic IDs/idempotency
+- benchmark CLI
+- config/profile
+- Docker/CMake/pybind build
+
+Her adapted/copied source için kaydet:
+
+- Original repository path
+- Original commit SHA
+- Original symbol
+- License/provenance
+- Aynen kopyalanan bölüm
+- Değiştirilen bölüm
+- Değişiklik gerekçesi
+
+MergenVisionDemo içindeki çalışan kod uygunsa yeniden icat etme. In-scope kodun kopyalanması/adapte edilmesi açıkça yetkilidir.
+
+Fakat eski kodu körlemesine taşımadan önce şunları doğrula:
+
+- Model SHA aynı mı?
+- Preprocess aynı mı?
+- Landmark order aynı mı?
+- ArcFace template aynı mı?
+- Tensor names/shapes aynı mı?
+- Qdrant schema aynı mı?
+- PostgreSQL schema aynı mı?
+- MinIO key contract aynı mı?
+- CUDA/TensorRT version uyumlu mu?
+
+======================================================================
+8. TOOL VE MCP ZORUNLULUĞU
+======================================================================
+
+prompt-memory-mcp zorunlu kullanılır.
+
+Sprint başlangıcında:
+
+1. MergenVision/MergenVisionDemo geçmiş kararlarını ara.
+2. Bulk enrollment, GpuFacePipeline, extract_batch, multi-GPU, Qdrant, MinIO ve benchmark memory’lerini yükle.
+3. Bulunan doğrulanmış kararları kısa bir çalışma context’i olarak kaydet.
+
+Her major gate sonunda prompt-memory-mcp’ye checkpoint yaz:
+
+- Reference source map complete
+- Engine contract complete
+- Native batch parity complete
+- Persistence E2E complete
+- Benchmark complete
+- Final verdict
+
+Final raporda:
+
+- kullanılan memory kayıtları
+- yazılan checkpoint isimleri
+- memory’nin hangi kararı etkilediği
+
+yazılmalıdır.
+
+MCP çağrılmadıysa `used` deme.
+
+codebase-memory-mcp zorunlu:
+
+- aktif repo source graph
+- MergenVisionDemo source graph
+- current PG/MinIO/Qdrant contract
+- current model/version contract
+- current video recognition gallery contract
+
+context7 zorunlu, version-sensitive alanlarda:
+
+- TensorRT 10.x dynamic shapes
+- CUDA streams/events
+- nvJPEG
+- pybind11
+- CMake CUDA
+- PostgreSQL/SQLAlchemy bulk upsert
+- MinIO Python SDK
+- Qdrant batch upsert
+
+deepwiki zorunlu:
+
+- MergenVisionDemo/upstream architecture GitHub’da erişilebiliyorsa
+- TensorRT/NVIDIA sample pattern’i adapte ediliyorsa
+
+exa:
+
+- Context7/deepwiki eksik kalırsa yalnız official/upstream kaynak bulmak için
+
+postman:
+
+- Bu görev API sprinti değildir; default `skipped_not_relevant`
+- Phase 1 CLI tool için zorla kullanma
+
+playwright:
+
+- UI sprinti değildir; `skipped_not_relevant`
+
+21st:
+
+- FORBIDDEN_NOT_USED
+
+Ruflo:
+
+- FORBIDDEN_NOT_USED
+
+Her tool’u göstermelik çağırma. Fakat prompt-memory-mcp, codebase-memory-mcp ve gerekli version-sensitive docs gerçekten kullanılmadan implementation’a başlama.
+
+======================================================================
+9. YENİ PACKAGE LAYOUT
+======================================================================
+
+Bütün yeni source:
+
+phase1/gpu_bulk_enrollment/
+  README.md
+  Makefile
+  pyproject.toml
+  CMakeLists.txt
+  Dockerfile.gpu
+  docker-compose.gpu.yml
+  .gitignore
+
+  config/
+    model_profile.schema.json
+    model_profile.json
+    enrollment.schema.json
+    benchmark.schema.json
+
+  native/
+    include/mv_phase1_bulk/
+      types.hpp
+      engine.hpp
+      pipeline.hpp
+      batch_contract.hpp
+    src/
+      engine.cpp
+      pipeline.cpp
+      jpeg_batch_decoder.cpp
+      detector_preprocess.cu
+      detector_postprocess.cu
+      alignment.cu
+      recognizer_preprocess.cu
+      l2_normalize.cu
+      bindings.cpp
+    tests/
+
+  python/
+    mv_phase1_bulk/
+      __init__.py
+      cli.py
+      config.py
+      manifest.py
+      pipeline.py
+      queues.py
+      sharding.py
+      admission.py
+      identities.py
+      persistence.py
+      postgres_store.py
+      minio_store.py
+      qdrant_store.py
+      reconciliation.py
+      benchmark.py
+      reporting.py
+
+  scripts/
+    inspect_reference.sh
+    build_engines.sh
+    check_phase2_untouched.sh
+    run_small_fixture.sh
+    run_benchmark.sh
+
+  tests/
+    unit/
+    contract/
+    integration/
+    gpu/
+    acceptance/
+
+  docs/
+    REFERENCE_SOURCE_MAP.md
+    IMPLEMENTATION_DETAILS.md
+    CODE_REVIEW_PACKAGE.md
+
+  fixtures/
+    manifests/
+    # gerçek görüntüler Git’e girmez
+
+  artifacts/
+    # gitignored
+
+Folder isimleri mevcut repo conventions’a göre küçükçe uyarlanabilir; fakat bütün yeni dosyalar aynı Phase 1 prefix altında kalmalıdır.
+
+======================================================================
+10. PUBLIC NATIVE API
+======================================================================
+
+Yeni Phase 1 runtime en az şu semantics’i sağlamalı:
+
+```python
+pipeline = GpuFacePipeline(...)
+
+results = pipeline.extract_batch(
+    image_bytes_list,
+    source_keys=source_keys,
+)
+Her input için sonuç:
+
+ImageExtractionResult
+  source_index
+  source_key
+  original_width
+  original_height
+  status
+  rejection_reason
+  faces[]
+
+Her face:
+
+FaceExtraction
+  source_index
+  detection_ordinal
+  bbox_original
+  landmarks_original
+  detector_score
+  quality_primitives
+  embedding[512]
+  embedding_norm
+  crop_bytes
+  model_version
+  preprocess_version
+
+Batch association kaybolmamalı.
+
+Her input için sonuç olmalı:
+
+no-face
+rejected
+accepted
+decode-error
+inference-error
+
+Bir görüntü hata verdiğinde bütün batch sessizce kaybolmamalı.
+
+Multi-face durumunda target selection policy açık olmalı:
+
+default quarantine/reject
+rastgele en büyük yüz seçme
+policy config’ten belirlenir
+benchmark sonucu ile admission sonucu ayrıdır
+======================================================================
+11. SELF-TESTING 30 ADIMLIK UYGULAMA PLANI
+
+Aşağıdaki sırayı uygula. Her adım sonunda targeted test ve protected-tree gate çalıştır.
+
+ADIM 1 — Repository baseline
+Aktif root/branch/HEAD/status kaydet.
+Existing dirty changes’i kaydet.
+Protected tree hash manifest üret.
+Phase 1 allowlist gate’i çalıştır.
+prompt-memory-mcp başlangıç context’ini yükle.
+
+Çıkış kriteri:
+
+Baseline manifest var.
+Protected tree gate green.
+ADIM 2 — Reference repository doğrulama
+MergenVisionDemo root/HEAD/status bul.
+Repository’ye yazma.
+İlgili source dosyalarını listele.
+GpuFacePipeline/extract_batch çağrı graph’ını çıkar.
+codebase-memory-mcp ile graph oluştur.
+
+Çıkış kriteri:
+
+docs/REFERENCE_SOURCE_MAP.md ilk source map’i içeriyor.
+ADIM 3 — Exact reference flow
+
+Adım adım çıkar:
+
+dataset reader
+→ batch assembler
+→ GPU pipeline
+→ extraction result
+→ admission
+→ persistence
+→ reporting
+
+Hangi buffer nerede allocate/free ediliyor kaydet.
+
+Çıkış kriteri:
+
+Tahmine dayalı symbol/path kalmamış olmalı.
+ADIM 4 — Current target contracts
+
+Read-only incele:
+
+Current Person
+FaceIdentity
+FaceSample
+PostgreSQL constraints
+MinIO key format
+Qdrant collection/vector size/metric/payload
+model_version
+preprocess_version
+current video identity query filter
+
+Çıkış kriteri:
+
+Yeni tool’un üreteceği records mevcut video pipeline tarafından aranabilir.
+ADIM 5 — Phase 1 package scaffold
+
+Yalnız yeni prefix altında:
+
+Build
+Python package
+Native package
+Config
+Tests
+Docker
+Docs
+
+oluştur.
+
+Henüz production davranışı claim etme.
+
+Çıkış kriteri:
+
+Empty package static/import tests green.
+Protected-tree gate green.
+ADIM 6 — Reference code adaptation
+
+MergenVisionDemo’dan gerekli source’u taşı/adapte et.
+
+Copy source paths kaydedilir.
+Unused legacy bölümler taşınmaz.
+License/provenance kaydedilir.
+Phase 2 source’a import/back-reference eklenmez.
+
+Çıkış kriteri:
+
+New package standalone configure edilebilir.
+ADIM 7 — Model contract inspection
+
+Gerçek ONNX’leri inspect et:
+
+input/output names
+dynamic dimensions
+dtypes
+opset
+SHA
+detector anchors/strides/variances
+recognizer 512-D contract
+
+Model profile oluştur.
+
+Çıkış kriteri:
+
+Schema-valid model profile.
+SHA mismatch fail-fast.
+ADIM 8 — Separate engine builder
+
+Pinned GPU container içinde Phase 1 engine’leri build et.
+
+Host engine build yok.
+Phase 2 engine overwrite yok.
+Separate artifact path.
+Build manifest.
+Runtime deserialize smoke.
+
+Çıkış kriteri:
+
+Her iki engine deserialize ve inference yapabiliyor.
+ADIM 9 — Batched JPEG decode
+
+Reference implementasyona uygun multi-image decode ekle.
+
+Bounded batch
+Decode status per image
+Width/height association
+Full decoded image CPU’ya dönmez
+Corrupt JPEG bir reason code üretir
+
+Test:
+
+valid images
+corrupt image
+mixed-size images
+no-face image
+ADIM 10 — Batched RetinaFace
+
+Birden fazla source image aynı detector execution batch’ine girer.
+
+Korunur:
+
+source_index
+original dimensions
+letterbox transform
+detection ordinal
+reverse coordinate mapping
+
+Test:
+
+batch=1 vs batch=N bbox/landmark parity
+mixed aspect ratio
+no-face + face mixed batch
+partial batch
+ADIM 11 — GPU detector postprocess
+Decode/NMS/landmarks GPU’da
+Raw detector tensors CPU’ya taşınmaz
+Deterministic ordering
+Invalid bbox/landmark filtered with reason
+
+Test:
+
+batch parity
+deterministic repeated run
+original-coordinate bounds
+ADIM 12 — Batched alignment
+Exact five landmarks
+Exact canonical ArcFace template
+Correct similarity transform direction
+112×112 crop
+Source/detection association preserved
+
+Test:
+
+reference crop parity
+alignment residual finite
+batch=1/N parity
+ADIM 13 — Batched GlintR100
+
+Bütün accepted face crop’ları deterministic order ile recognizer batch/chunks’a koy.
+
+Source mapping korunur
+
+max batch deterministic chunks
+
+Face sessizce düşmez
+512-D finite
+GPU L2
+Norm yaklaşık 1
+
+Test:
+
+batch=1/N embedding cosine parity
+chunk boundary
+mixed face counts
+zero-face images
+ADIM 14 — Full extract_batch native contract
+
+Decode→detect→align→embed tek batch çağrısında birleşir.
+
+Test:
+
+N input → N image result
+input ordering
+per-image error isolation
+multi-face quarantine
+no missing source keys
+
+Prompt-memory checkpoint:
+
+phase1_native_batch_contract_complete
+ADIM 15 — Scalar reference parity
+
+Aynı fixture’ları:
+
+MergenVisionDemo reference
+yeni Phase 1 batch runtime batch=1
+yeni Phase 1 batch runtime batch=N
+mümkünse current Phase 2 image runtime read-only oracle
+
+ile karşılaştır.
+
+Ölç:
+
+face count
+bbox IoU
+landmark error
+crop difference
+embedding cosine
+L2 norm
+
+Tolerance’ları source/reference evidence ile belirle.
+
+ADIM 16 — Dataset manifest reader
+
+Input modu:
+
+read-only filesystem bind mount
+manifest paths dataset root’a relative
+path traversal koruması
+file-size limit
+SHA validation
+stable source subject key
+
+JSON+base64 bulk API kullanma.
+
+Dataset’i önce MinIO’ya upload etme.
+
+ADIM 17 — Bounded producer/consumer
+
+Ayrı bounded stages:
+
+manifest reader
+encoded-file reader
+GPU extraction
+admission/grouping
+persistence
+reporting
+
+Her queue bounded.
+
+Persistence yavaşsa GPU producer backpressure alır.
+
+Unbounded list/RAM accumulation yok.
+
+Test:
+
+queue saturation
+slow persistence
+cancellation
+producer failure
+consumer failure
+ADIM 18 — Multi-GPU worker ownership
+
+MergenVisionDemo pattern’ini adapte et.
+
+Worker başına tek physical GPU
+Host GPU UUID kaydı
+Container local device index kaydı
+Stable subject sharding
+Aynı subject’ın bütün görüntüleri aynı worker
+Python hash() yasak
+Worker crash isolation
+Bounded per-GPU queues
+
+Önce 1 GPU functional gate; sonra 3 GPU scale gate.
+
+ADIM 19 — Admission ve quality
+
+Admission ayrı reason codes üretir:
+
+accepted
+no_face
+multi_face
+decode_failed
+face_too_small
+invalid_landmarks
+poor_alignment
+non_finite_embedding
+duplicate_sha
+near_duplicate
+subject_outlier
+low_quality
+persistence_failed
+
+Tek opaque quality score’a güvenme.
+
+Subject içi duplicate/outlier ve diversity selection uygula.
+
+ADIM 20 — Deterministic identity mapping
+
+Her manifest subject:
+
+Bir global Person
+Bir canonical FaceIdentity
+Çok sayıda FaceSample
+
+üretir.
+
+Idempotency:
+
+source_namespace + external_subject_key
+image SHA
+model_version
+
+üzerinden sağlanır.
+
+Python hash() kullanma.
+
+ID strategy mevcut schema ile uyumlu olmalı:
+
+deterministic UUID namespace
+veya
+durable reservation/checkpoint
+
+Random yeni IDs ile her retry’da duplicate üretme.
+
+ADIM 21 — PostgreSQL bulk persistence
+
+Mevcut tabloları değiştirmeden:
+
+bulk insert/upsert
+bounded transaction size
+existing Person/Identity reuse
+conflict validation
+pending/active lifecycle
+retry-safe state
+
+uygula.
+
+Doğrudan SQL kullanılıyorsa:
+
+schema constraints gerçek migration source’dan doğrulanır
+SQL injection yok
+transaction rollback test edilir
+ADIM 22 — MinIO persistence
+
+MinIO gerçek bulk API sunmuyorsa “bulk upload” diye false claim yapma.
+
+Kullan:
+
+bounded concurrent object puts
+deterministic technical key
+compact aligned crop
+no name/folder/PII in key
+content type
+existence/stat verification
+
+Failure:
+
+sample active olmaz
+reconciliation/compensation evidence oluşur
+ADIM 23 — Qdrant batch upsert
+Existing production collection
+512-D
+Current metric
+Same model_version
+Batch upsert
+point ID = sample_id
+minimal payload
+no name/metadata/path
+active lifecycle
+
+Person başına çok sample olduğunda downstream retrieval aggregation contract’ını doğrula.
+
+ADIM 24 — Cross-store finalization
+
+Sıra:
+
+IDs reserved
+PG pending
+MinIO upload/stat
+Qdrant batch upsert
+PG active/finalize
+report/checkpoint
+
+Partial failure tests:
+
+PG fails
+MinIO fails
+Qdrant fails
+final PG commit fails
+process killed between stages
+
+Retry orphan/duplicate üretmemeli.
+
+Prompt-memory checkpoint:
+
+phase1_bulk_cross_store_complete
+ADIM 25 — Small real E2E fixture
+
+Rights-cleared local fixture:
+
+en az 2 person
+person başına birden fazla image
+no-face
+corrupt
+duplicate
+multi-face quarantine
+holdout image
+
+Dataset Git’e eklenmez.
+
+Gerçek:
+
+GPU
+PostgreSQL
+MinIO
+Qdrant
+
+ile çalıştır.
+
+Kanıt:
+
+counts
+object keys
+Qdrant point IDs
+model versions
+holdout retrieval
+ADIM 26 — Phase 1 → Phase 2 continuity
+
+Phase 2 code’a dokunmadan black-box acceptance yap:
+
+Yeni Phase 1 tool ile person enroll et.
+Existing image API’de holdout image query et.
+Existing video pipeline’da o person’ın bulunduğu rights-cleared video/clip çalıştır.
+Existing Phase 2 result aynı canonical face_id/person_id döndürüyor mu doğrula.
+
+Phase 2 source değişikliği yapma.
+
+Başarısızsa:
+
+model/preprocess mismatch
+collection/filter mismatch
+lifecycle mismatch
+threshold/margin
+data admission
+
+kategorisinde root cause raporla.
+
+ADIM 27 — Benchmark matrix
+
+Ayrı benchmark modları:
+
+A. GPU compute-only
+
+decode
+detect
+align
+embed
+L2
+
+B. One-GPU E2E enrollment
+
+filesystem read
+compute
+PG
+MinIO
+Qdrant
+
+C. Three-GPU E2E enrollment
+
+D. Scalar baseline
+
+mevcut scaffold per-image loop
+veya
+new runtime batch=1
+
+Batch matrix MergenVisionDemo contract’a göre:
+
+batch 1
+batch 2
+batch 4
+batch 8
+batch 16
+uygun ve destekleniyorsa 32/64
+
+Rapor:
+
+images/sec
+faces/sec
+accepted/sec
+p50/p95 batch latency
+detector time
+recognizer time
+persistence time
+queue wait/backpressure
+peak RSS
+peak VRAM/GPU
+GPU utilization
+PG/MinIO/Qdrant rates
+rejection counts
+exact hardware/runtime
+
+“3× scaling” veya “GPU fully utilized” gerçek ölçüm olmadan deme.
+
+ADIM 28 — Long-run, retry ve cleanup
+
+Test:
+
+büyük manifest veya tekrarlanan fixture
+process exit
+CUDA buffers freed
+child process yok
+container cleanup
+GPU memory baseline
+temp files cleanup
+restart resume
+same manifest second run
+no duplicate person/identity/sample/vector
+
+Stale Docker container memory’sini code leak sanma; process/container listesini kanıtla.
+
+ADIM 29 — Fresh checkout/container reproducibility
+
+Yeni Phase 1 Docker image:
+
+pinned base digest
+source’tan native build
+source’tan wheel/package build
+host build artifact copy yok
+model/engine artifact contract
+read-only dataset mount
+explicit GPU assignment
+health/smoke command
+
+Fresh build acceptance:
+
+empty build directory
+engine build/load
+small fixture
+E2E persistence
+ADIM 30 — Final full acceptance ve review
+
+Çalıştır:
+
+make -C phase1/gpu_bulk_enrollment static
+make -C phase1/gpu_bulk_enrollment unit
+make -C phase1/gpu_bulk_enrollment contract
+make -C phase1/gpu_bulk_enrollment build
+make -C phase1/gpu_bulk_enrollment gpu-smoke
+make -C phase1/gpu_bulk_enrollment batch-parity
+make -C phase1/gpu_bulk_enrollment integration
+make -C phase1/gpu_bulk_enrollment e2e
+make -C phase1/gpu_bulk_enrollment benchmark
+make -C phase1/gpu_bulk_enrollment retry-acceptance
+make -C phase1/gpu_bulk_enrollment phase2-continuity
+make -C phase1/gpu_bulk_enrollment phase2-untouched-gate
+make -C phase1/gpu_bulk_enrollment acceptance
+
+Final prompt-memory checkpoint:
+
+phase1_isolated_gpu_bulk_enrollment_final
+======================================================================
+12. CLI CONTRACT
+
+Önerilen CLI:
+
+mv-phase1-bulk inspect-models \
+  --profile config/model_profile.json
+
+mv-phase1-bulk build-engines \
+  --profile config/model_profile.json
+
+mv-phase1-bulk validate-manifest \
+  --dataset-root /dataset \
+  --manifest /dataset/manifest.jsonl
+
+mv-phase1-bulk enroll \
+  --dataset-root /dataset \
+  --manifest /dataset/manifest.jsonl \
+  --workers 1 \
+  --gpu-devices 0 \
+  --batch-size 16 \
+  --resume
+
+mv-phase1-bulk benchmark \
+  --dataset-root /dataset \
+  --manifest /dataset/benchmark.jsonl \
+  --gpu-devices 0,1,2 \
+  --batch-matrix 1,2,4,8,16 \
+  --runs 3
+
+mv-phase1-bulk reconcile \
+  --run-id <run-id>
+
+mv-phase1-bulk report \
+  --run-id <run-id>
+
+Path’ler hardcode edilmez.
+
+Dataset root container içinde read-only:
+
+/dataset:ro
+
+Runtime artifacts:
+
+/artifacts
+======================================================================
+13. TEST MATRİSİ
+
+Unit:
+
+manifest validation
+source key normalization
+stable sharding
+ID reservation
+admission reasons
+duplicate detection
+queue backpressure
+report aggregation
+
+Native contract:
+
+source index preservation
+batch=1/N parity
+partial batch
+mixed-size input
+no-face
+corrupt JPEG
+multiple faces
+
+recognizer max crops
+
+finite normalized embedding
+deterministic ordering
+
+Integration:
+
+real PostgreSQL
+real MinIO
+real Qdrant
+pending→active
+partial failure
+retry
+resume
+conflict
+
+GPU:
+
+real TensorRT
+real model artifacts
+real batch >1
+no CPU fallback
+memory cleanup
+multiple runs
+
+Acceptance:
+
+import
+holdout recognition
+current Phase 2 image lookup
+current Phase 2 video lookup
+one/three GPU benchmark
+protected tree unchanged
+======================================================================
+14. PERFORMANCE VE CORRECTNESS ÖNCELİĞİ
+
+Önce parity ve data correctness.
+
+Sonra throughput.
+
+Performans artırmak için:
+
+Fotoğraf atma
+Resolution keyfi düşürme
+Detection threshold artırarak workload gizleme
+Person başına sample sayısını sessizce azaltma
+Quality gate’i aşırı sıkılaştırıp throughput şişirme
+
+yasaktır.
+
+Benchmark her batch için aynı input ve aynı admission config’i kullanmalı.
+
+Scalar ve batch sonuçlarında:
+
+input count
+face count
+accepted/rejected count
+Person count
+Sample count
+
+aynı olmalıdır veya fark reason-coded açıklanmalıdır.
+
+======================================================================
+15. FAILURE SEMANTİĞİ
+
+Sahte completed yok.
+
+Decode fail → item rejected/failed
+GPU fail → batch/job failed veya bounded retry
+Invalid tensor → fail
+MinIO fail → sample active değil
+Qdrant fail → sample indexed/ready değil
+PG fail → completed değil
+Worker crash → resumable state
+Model SHA mismatch → hard blocker
+Dynamic batch unsupported → exact blocker
+Reference parity fail → benchmark PASS yok
+
+CPU fallback yok.
+
+======================================================================
+16. DOCUMENTATION
+
+Yalnız package içindeki docs’u değiştir:
+
+phase1/gpu_bulk_enrollment/docs/REFERENCE_SOURCE_MAP.md
+phase1/gpu_bulk_enrollment/docs/IMPLEMENTATION_DETAILS.md
+phase1/gpu_bulk_enrollment/docs/CODE_REVIEW_PACKAGE.md
+
+REFERENCE_SOURCE_MAP:
+
+MergenVisionDemo HEAD
+exact paths/symbols
+copied/adapted code
+license
+changes
+
+IMPLEMENTATION_DETAILS:
+
+architecture
+runtime
+queues
+GPU batching
+persistence
+idempotency
+tests
+limitations
+
+CODE_REVIEW_PACKAGE:
+
+base/current HEAD
+changed file map
+full new source/diff evidence
+model/engine hashes
+runtime versions
+exact test output
+benchmark tables
+Phase 2 untouched evidence
+risks
+next recommendation
+
+Mevcut root docs’a dokunma.
+
+======================================================================
+17. HARD STOPS
+
+Kesinlikle yapma:
+
+Phase 2 source modification
+backend/native/image_runtime değişikliği
+ExecutionSlot::infer_jpeg_batch ekleme
+Existing online BulkEnrollmentService değişikliği
+Existing API/frontend değişikliği
+Existing migration değişikliği
+Root Makefile değişikliği
+Existing Docker/Compose değişikliği
+MergenVisionDemo modification
+SCRFD/model değişimi
+CPU inference fallback
+OpenCV/PIL production decode
+Base64 büyük dataset API
+Dataset’i önce MinIO’ya kopyalama
+Dataset/model/engine Git commit
+Absolute user-specific runtime paths
+Unbounded queue/RAM
+Python hash() sharding
+Person başına image’ları farklı GPU’lara dağıtma
+Random retry IDs
+Name-based uniqueness
+Qdrant payload PII
+PostgreSQL embedding
+Raw exception response/log
+git add/commit/push
+destructive Docker/volume cleanup
+system CUDA/driver modification
+false performance/PASS claim
+======================================================================
+18. GERÇEK BLOCKER’LAR
+
+Yalnız şu durumlarda dur:
+
+Active repository yanlış.
+Protected user changes ile çakışma.
+MergenVisionDemo bulunamıyor ve memory/code search de sonuç vermiyor.
+Reference code license/provenance kullanımına engel.
+Model artifact eksik/SHA yanlış.
+ONNX gerçekten detector batch >1 desteklemiyor.
+Pinned GPU container/driver çalışmıyor.
+Existing DB schema Phase 1 tool’un gerekli continuity kayıtlarını yazmasına izin vermiyor.
+Dataset/fixture path hiç verilmemiş ve real E2E aşamasına gelindi.
+Secret/credential gerekiyor.
+System dependency/driver değişikliği gerekiyor.
+
+Fixture eksikliği source implementation’ı durdurmaz; yalnız real acceptance BLOCKED olur.
+
+======================================================================
+19. FINAL RAPOR FORMATI
+
+Final verdict:
+
+PASS
+PARTIAL
+BLOCKED
+NOT_TESTED
+
+Rapor sırası:
+
+Kullanıcı açısından çalışan sonuç.
+Phase 2 untouched kanıtı.
+MergenVisionDemo’dan kullanılan exact source.
+New Phase 1 package file map.
+Model/engine/tensor profiles.
+Native batch contract.
+Batch=1/N parity.
+Producer/consumer/backpressure.
+Multi-GPU ownership/sharding.
+PostgreSQL/MinIO/Qdrant consistency.
+Idempotency/retry/resume.
+Phase 1→Phase 2 identity continuity.
+Compute-only benchmark.
+One-GPU E2E benchmark.
+Three-GPU scale benchmark.
+Peak GPU/RAM ve cleanup.
+Exact commands/raw summaries.
+Çalıştırılmayan testler.
+Known limitations.
+MCP/skill accountability.
+prompt-memory checkpoint isimleri.
+Tek önerilen sonraki çalışma.
+
+Kanıt olmadan:
+
+fully optimized
+GPU-only E2E
+linear three-GPU scaling
+production-ready
+10M-ready
+accuracy verified
+
+deme.
+
+======================================================================
+20. ŞİMDİ BAŞLA
+
+İlk eylemler:
+
+Active repo baseline.
+Protected tree SHA manifest.
+prompt-memory-mcp context search.
+codebase-memory-mcp ile iki repo graph.
+MergenVisionDemo GpuFacePipeline.extract_batch exact source map.
+Current target storage/model contract.
+phase1/gpu_bulk_enrollment/ scaffold.
+Protected-tree gate.
+İlk failing batch-parity test.
+Reference code adaptation.
+
+Kullanıcıdan “Phase 2’ye batch API ekleyeyim mi?” diye tekrar sorma.
+
+Cevap verilmiştir:
+
+PHASE 2’YE DOKUNMA.
+
+Phase 1 için ayrı engine’ler ve ayrı bulk enrollment runtime oluştur.
+
+MergenVisionDemo’daki daha önce çalışan uygulamayı gerçek source üzerinden reuse/adapt et.
+
+Şimdi Build Mode’da kesintisiz ilerle.
+
+
+Buradaki en kritik koruma, agentın her aşamada `phase2-untouched-gate` çalıştırması. Böylece yine gidip mevcu

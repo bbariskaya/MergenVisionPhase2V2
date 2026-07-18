@@ -1,0 +1,64 @@
+# Pinned NVIDIA CUDA base for Phase 1 bulk enrollment.
+# Builder stage compiles the native CUDA/pybind11 extension;
+# runtime stage installs Python deps and the built extension.
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS native-builder
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-dev python3.11-venv cmake ninja-build g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3.11 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir -U pip pybind11
+
+COPY native /build/native
+COPY CMakeLists.txt /build/CMakeLists.txt
+WORKDIR /build
+RUN cmake -S . -B build -GNinja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DPYTHON_EXECUTABLE=/opt/venv/bin/python3.11 \
+        -Dpybind11_DIR=/opt/venv/lib/python3.11/site-packages/pybind11/share/cmake/pybind11 \
+        -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89" && \
+    cmake --build build && \
+    mkdir -p /out/mv_phase1_bulk && \
+    cp build/_mv_phase1_bulk_native*.so /out/mv_phase1_bulk/
+
+# ---- Runtime stage ----
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    WORKDIR=/workspace/phase1/gpu_bulk_enrollment \
+    PATH=/opt/venv/bin:$PATH
+
+WORKDIR /workspace/phase1/gpu_bulk_enrollment
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv curl ca-certificates libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3.11 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir -U pip
+
+COPY pyproject.toml /workspace/phase1/gpu_bulk_enrollment/
+RUN /opt/venv/bin/pip install --no-cache-dir -e ".[dev]"
+
+COPY --from=native-builder /out/mv_phase1_bulk /opt/venv/lib/python3.11/site-packages/mv_phase1_bulk
+
+COPY . /workspace/phase1/gpu_bulk_enrollment
+
+# Read-only dataset mount expected at /dataset
+# Runtime artifacts written to /artifacts
+VOLUME ["/dataset", "/artifacts"]
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD mv-phase1-bulk inspect-models --profile config/model_profile.json || exit 1
+
+ENTRYPOINT ["mv-phase1-bulk"]
+CMD ["--help"]

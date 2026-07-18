@@ -1,0 +1,24 @@
+services:
+  phase1-bulk-enroll:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: mv-phase1-bulk:latest
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0,1,2
+      - CUDA_VISIBLE_DEVICES=0,1,2
+    volumes:
+      - /path/to/dataset:/dataset:ro
+      - /path/to/artifacts:/artifacts
+      - ../../backend/artifacts/models:/models:ro
+    command:
+      - enroll
+      - --dataset-root
+      - /dataset
+      - --manifest
+      - /dataset/manifest.jsonl
+      - --gpu-devices
+      - "0,1,2"
+      - --batch-size
+      - "16"

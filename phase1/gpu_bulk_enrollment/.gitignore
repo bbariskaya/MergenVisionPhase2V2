@@ -1,0 +1,47 @@
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.so
+*.wheel
+*.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Native build
+native/build/
+native/**/*.o
+native/**/*.a
+
+# Runtime artifacts (large or generated)
+artifacts/
+.artifacts/
+*.engine
+*.onnx
+*.trt
+*.plan
+*.pb
+
+# Logs/reports
+*.log
+reports/
+benchmark_results/
+
+# Fixtures with real images (must never be committed)
+fixtures/images/
+fixtures/crops/
+
+# LFW dataset images (large; keep CSV metadata and downloader script)
+lfw/**/*.jpg
+lfw/**/*.jpeg
+lfw/**/*.png
+
+# Local env
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/

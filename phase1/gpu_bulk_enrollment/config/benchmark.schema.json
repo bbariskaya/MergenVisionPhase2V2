@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Phase 1 Bulk Enrollment Benchmark Manifest",
+  "type": "object",
+  "required": ["schema_version", "source_namespace", "subjects"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "source_namespace": { "type": "string" },
+    "subjects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["external_subject_key", "display_name", "images"],
+        "properties": {
+          "external_subject_key": { "type": "string" },
+          "display_name": { "type": "string" },
+          "images": {
+            "type": "array",
+            "items": { "type": "object" }
+          }
+        }
+      }
+    },
+    "batch_matrix": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 1 }
+    },
+    "runs": { "type": "integer", "minimum": 1 }
+  }
+}

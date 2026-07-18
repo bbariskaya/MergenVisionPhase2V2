@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Phase 1 Bulk Enrollment Model Profile",
+  "type": "object",
+  "required": ["schema_version", "model_version", "preprocess_version", "detector", "recognizer", "alignment", "models"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "model_version": { "type": "string" },
+    "preprocess_version": { "type": "string" },
+    "detector": { "type": "object" },
+    "recognizer": { "type": "object" },
+    "alignment": { "type": "object" },
+    "models": { "type": "object" },
+    "engine_manifest": { "type": "object" }
+  }
+}
