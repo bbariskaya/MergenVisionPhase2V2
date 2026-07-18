@@ -141,6 +141,12 @@ class _FakeFaceIdentityRepo(FaceIdentityRepository):
     async def get_by_id(self, face_id: FaceId) -> Any:
         return None
 
+    async def get_canonical_by_id(self, face_id: FaceId) -> Any:
+        return None
+
+    async def list_by_person_id(self, person_id: Any) -> Any:
+        return []
+
     async def list_all(self) -> Any:
         return []
 

@@ -1,0 +1,1799 @@
+Abi bunu yeni agenta aynen at. Hem ürün bağlamını hem mevcut durumu hem identity düzeltmesini, bulk dataset enrollment’ı ve izole GPU Video Lab’i kapsıyor.
+QWEN / CODE AGENT — BUILD MODE
+
+MERGENVISION GLOBAL IDENTITY, BULK ENROLLMENT VE GPU VIDEO LAB
+
+Bu prompt yeni context’tir. Önceki konuşmaları bildiğini varsayma. Buradaki ürün bağlamını tamamen oku, mevcut repository source’u ile doğrula ve ardından Build Mode’da uygula.
+
+Plan yazıp kullanıcı onayı bekleme. Önce repository keşfi yap, gerçek source durumunu çıkar, sonra aşağıdaki sırayla implementasyona devam et. Normal implementation, test ve debugging adımlarında mikro-onay isteme.
+
+======================================================================
+0. AKTİF REPOSITORY
+======================================================================
+
+GitHub:
+
+https://github.com/bbariskaya/MergenVisionPhase2V2
+
+Bilinen local path:
+
+/home/user/Workspace/MergenVisionPhase2v2
+
+Önce doğrula:
+
+1. pwd
+2. git rev-parse --show-toplevel
+3. git branch --show-current
+4. git rev-parse HEAD
+5. git status --short
+6. git log -5 --oneline
+
+Son incelenen GitHub HEAD:
+
+2cfde196795a2b783e4494d879bbc48fe3361f69
+
+Ancak local repository daha ileride olabilir. HEAD’i geri alma, resetleme veya eski commit’e checkout yapma. Mevcut kullanıcı değişikliklerini koru.
+
+Aşağıdakileri tamamen oku:
+
+- AGENTS.md varsa
+- docs/implementation/CURRENT_SPRINT.md
+- docs/implementation/IMPLEMENTATION_DETAILS.md
+- docs/implementation/REFERENCE_DECISION_LOG.md
+- requirements/ProjectRequirements.md veya repository’deki gerçek karşılığı
+- requirements/videorequirements.md veya repository’deki gerçek karşılığı
+- mevcut migrations
+- identity/image/video API source
+- worker source
+- native source
+- frontend source
+- testler
+- Makefile
+- Docker/Compose dosyaları
+
+Dokümanlar source ile çelişiyorsa source davranışını ve gerçek runtime kanıtını esas al; çelişkiyi daha sonra düzelt.
+
+======================================================================
+1. MERGENVISION NEDİR?
+======================================================================
+
+MergenVision yalnız yüz bounding box üreten veya cosine score gösteren bir demo değildir.
+
+Ürün şu soruyu cevaplar:
+
+“Bu görüntüde veya videoda kimler var, onları daha önce gördük mü ve aynı kalıcı kimliği farklı fotoğraf/video/job’larda koruyabiliyor muyuz?”
+
+Sistem şunları sağlar:
+
+- Kalıcı global identity
+- Fotoğraf tanıma
+- Video upload ve async processing
+- Face detection
+- Face embedding
+- Tracking
+- Track reconciliation
+- Known/anonymous lifecycle
+- Enrollment
+- PostgreSQL history/source of truth
+- MinIO binary ownership
+- Qdrant vector search
+- FastAPI
+- React UI
+- Original video üzerine client-side metadata overlay
+
+Track ID ve face ID aynı şey değildir:
+
+- track_id: yalnız bir video/job içindeki görünüm zinciri
+- face_id: fotoğraf ve videolar arasında kalıcı global biyometrik identity
+- person_id: isimli business subject; yeni unified modelde global kişi
+
+Video için ikinci bir bağımsız identity namespace oluşturma.
+
+======================================================================
+2. DONDURULMUŞ MODEL VE HOT PATH
+======================================================================
+
+Detector:
+
+backend/artifacts/models/retinaface_r50_dynamic.onnx
+
+Recognizer:
+
+backend/artifacts/models/glintr100.onnx
+
+Başka modele geçme.
+
+Yasak:
+
+- SCRFD’ye geçmek
+- Model indirmek
+- CPU inference fallback
+- OpenCV/PIL ile production full-frame decode
+- FFmpeg ile ikinci production face crop/decode yolu
+- Raw TensorRT output’unu NumPy CPU postprocess’e taşımak
+- Annotated MP4 üretmek
+- NVENC eklemek
+- Labı production dependency yapmak
+
+Image hot path:
+
+JPEG
+→ nvJPEG
+→ CUDA preprocess
+→ TensorRT RetinaFace
+→ CUDA decode/NMS/landmarks
+→ CUDA five-point alignment
+→ TensorRT GlintR100
+→ CUDA L2-normalized 512-D embedding
+
+Video hot path:
+
+MP4
+→ GStreamer
+→ NVDEC
+→ NVMM CUDA device surfaces
+→ sequential frame batches
+→ aynı RetinaFace/alignment/GlintR100 çekirdeği
+→ native observation/tracking output
+
+Bağlayıcı varsayılanlar:
+
+- Detector video batch default: 16
+- Recognizer crop batch: dynamic, tipik max 32
+- Partial final batch desteklenir
+- PTS/timebase korunur
+- Frame/detection/embedding association kaybolmaz
+
+======================================================================
+3. ŞİMDİYE KADAR YAPILANLAR
+======================================================================
+
+Phase 1 image identity vertical slice çalışmaktadır:
+
+- No-face image success
+- Single-face recognition
+- Multi-face recognition
+- new_anonymous → anonymous → known lifecycle
+- Aynı face_id korunması
+- Enrollment
+- History/process
+- PostgreSQL
+- MinIO
+- Qdrant
+- Restart persistence
+- FastAPI
+- React UI
+
+Phase 2 video tarafında mevcut olanlar:
+
+- Video upload
+- video_asset/video_job
+- Async job control plane
+- Idempotency
+- Status/progress
+- Cancel/retry endpoint’leri
+- PostgreSQL lease/claim altyapısı
+- Native NVDEC/NVMM pipeline
+- RetinaFace
+- Five-point alignment
+- GlintR100
+- L2 embedding
+- Native tracking
+- Observation/template/crop artifacts
+- Python worker
+- Video tracking/reconciliation services
+- Identity resolution
+- Video track/appearance persistence
+- Result/timeline/playback API
+- React original-video canvas overlay
+- Track panel
+- Appearance timeline
+
+Gerçek Friends.mp4 native runtime kanıtı:
+
+- 6,665 processed frames
+- 9,020 detections
+- 9,020 embeddings
+- 512-D finite L2 embeddings
+- 150 raw tracks
+- Full native observation pipeline yaklaşık 385.5 FPS
+- Detector/raw-tracking batch-16 yaklaşık 529 FPS
+- Batch 1/2/4/8/16 sonuçları frame/detection/track bakımından invariant
+- Batch 16 sweet spot
+- Temiz process exit sonrası GPU memory baseline’a dönüyor
+
+Kullanıcı completed video UI overlay akışını manuel olarak görmüş ve doğrulamıştır.
+
+UI’ı veya native pipeline’ı baştan yazma.
+
+======================================================================
+4. ŞİMDİKİ İKİ ANA ÜRÜN PROBLEMİ
+======================================================================
+
+Problem A — Enrollment/global identity kullanıcı açısından bozuk veya stale görünüyor.
+
+Problem B — Tracker/quality/best-shot/reconciliation kararlarının gerçekten en iyi yaklaşım olup olmadığını sistematik ölçebileceğimiz bağımsız GPU laboratuvarı yok.
+
+Bunların yanında büyük celebrity/identity fotoğraf dataset’i diskte bulunuyor fakat sisteme bulk enrollment yapılmadığı için video recognition gallery’sine hiçbir katkısı yok.
+
+Çalışma sırası:
+
+1. Global Identity & Enrollment Unification
+2. Bulk Dataset Enrollment
+3. Isolated GPU Video Lab
+4. Kazanan lab adaylarının kontrollü production promotion’ı
+5. Full E2E/reproducibility hardening
+
+======================================================================
+5. KRİTİK SOURCE GERÇEĞİ — VIDEO PERSON AYRI KİŞİ DEĞİL
+======================================================================
+
+Mevcut source audit’inde:
+
+- VideoIdentityResolutionService aynı IdentityStorageLifecycleService’i kullanıyor.
+- video_track.face_id aynı global face_identity.face_id alanına bağlı.
+- VideoPersonSummary ayrı persisted Person değildir.
+- Repository’nin mevcut halinde gerçek bir person domain/table bulunmayabilir.
+- “VideoPerson” yanlış/şaşırtıcı isimlendirilmiş bir per-job read DTO’dur.
+
+Bu nedenle ikinci bir video_person identity sistemi oluşturma.
+
+Hedef:
+
+Person
+  └── FaceIdentity
+        └── FaceSample × N
+
+VideoJob
+  └── VideoTrack
+        └── face_id → global FaceIdentity
+
+======================================================================
+6. MILESTONE A — GLOBAL IDENTITY & ENROLLMENT UNIFICATION
+======================================================================
+
+Önce enrollment’ın gerçek nedenini belirle.
+
+Mevcut source’ta muhtemel problemler:
+
+1. Video UI’daki track `/enroll/{face_id}` sayfasına gidiyor.
+2. EnrollPage global `/faces/{face_id}/enroll` endpoint’ini çağırıyor.
+3. Enrollment aynı face_id’yi known yapabiliyor.
+4. Fakat VideoResultService eski:
+   - status_at_processing
+   - name_at_processing
+   snapshot’larını döndürüyor olabilir.
+5. Enrollment başarılı olsa bile video UI hâlâ Anonymous gösterebilir.
+6. Enrollment mutation video people/timeline/overlay query’lerini invalidate etmiyor olabilir.
+7. Backend error envelope:
+   {
+     "error": {
+       "code": "...",
+       "message": "..."
+     }
+   }
+   biçimindeyken frontend yalnız body.detail okuyup gerçek hatayı gizliyor olabilir.
+
+Önce failing test/reproducer oluştur:
+
+- Video job içinde anonymous track.
+- GET face identity.
+- POST enroll.
+- Global identity known oluyor mu?
+- Aynı video result tekrar çağrıldığında neden eski anonymous dönüyor?
+- UI hangi cache/read model’i kullanıyor?
+- Gerçek backend hatası client’ta görünür mü?
+
+----------------------------------------------------------------------
+6.1 Snapshot ile güncel identity’yi ayır
+----------------------------------------------------------------------
+
+Historical snapshot immutable kalmalı.
+
+Video result response şu ikisini birlikte taşımalı:
+
+- statusAtProcessing
+- nameAtProcessing
+- matchConfidenceAtProcessing
+
+ve:
+
+- currentStatus
+- currentName
+- currentPersonId
+- currentIdentityActive
+
+UI varsayılan olarak currentStatus/currentName göstersin.
+
+İstenirse audit detail’de:
+
+“Bu job işlenirken anonymous idi; daha sonra Jennifer Aniston olarak enroll edildi.”
+
+gösterilebilir.
+
+Eski recognition/video result snapshot’larını rewrite etme.
+
+----------------------------------------------------------------------
+6.2 Frontend error contract’ını düzelt
+----------------------------------------------------------------------
+
+Frontend API error parser sırasıyla şunları okuyabilmeli:
+
+1. body.error.message
+2. body.error.code
+3. body.detail
+4. HTTP status fallback
+
+Raw exception client’a dönmesin.
+
+Enrollment neden başarısızsa kullanıcı gerçek sanitized mesajı görsün.
+
+----------------------------------------------------------------------
+6.3 Query invalidation/refetch
+----------------------------------------------------------------------
+
+Enrollment veya assignment sonrası invalidate/refetch:
+
+- face detail
+- face list
+- face history
+- video people
+- video appearances
+- timeline
+- overlay frames
+- video job result
+
+UI refresh olmadan güncel ismi gösterebilmeli.
+
+----------------------------------------------------------------------
+6.4 Video UI assignment modalı
+----------------------------------------------------------------------
+
+Anonim video track için yalnız “Adlandır” linki bırakma.
+
+Modal iki seçenek sunsun:
+
+A. Yeni kişi oluştur
+
+- display_name
+- metadata
+- mevcut face_id korunur
+- FaceIdentity known olur
+- yeni Person ile bağlanır
+
+B. Var olan kişiye bağla
+
+- Searchable Person picker
+- Existing person/face identity seçilir
+- Track/canonical occurrence mevcut global identity’ye bağlanır
+- Yeni duplicate Jennifer identity oluşturulmaz
+- Best representative samples gerekiyorsa mevcut identity’ye controlled biçimde eklenir
+
+Ek düzeltme aksiyonları:
+
+- Yanlış kişi eşleşmesi
+- Track’leri aynı kişi olarak birleştir
+- Track’leri farklı kişi olarak işaretle
+- False detection
+- Best shot kötü
+- Unresolved bırak
+
+Bunlar audit event üretmeli ve daha sonra GPU lab label export’una dönüşebilmeli.
+
+----------------------------------------------------------------------
+6.5 Person domain’i
+----------------------------------------------------------------------
+
+Mevcut repository’de Person yoksa yeni published migration ekle; eski migrations’ı rewrite etme.
+
+Minimum Person:
+
+- person_id UUID7
+- display_name
+- metadata JSONB
+- source_namespace nullable
+- external_subject_key nullable
+- active
+- created_at
+- updated_at
+- version
+
+Uniqueness:
+
+- İsim tek başına unique değildir.
+- `(source_namespace, external_subject_key)` varsa unique/idempotent olabilir.
+- Aynı isimli farklı kişiler desteklenir.
+
+FaceIdentity:
+
+- mevcut face_id korunur
+- person_id nullable FK
+- anonymous iken person_id null olabilir
+- known iken active Person’a bağlı olmalı
+- başlangıçta Person başına en fazla bir active canonical FaceIdentity
+- eski display_name/metadata alanları compatibility projection olarak bir süre korunabilir
+
+Mevcut known FaceIdentity’ler:
+
+- Person’a backfill edilir
+- face_id değişmez
+- face_sample ve Qdrant point ID’leri değişmez
+- history snapshot’ları değişmez
+
+Video tablolarını ikinci identity model için yeniden kurma.
+
+----------------------------------------------------------------------
+6.6 Assign/merge semantiği
+----------------------------------------------------------------------
+
+Enrollment:
+
+anonymous face_id=A
+→ Person oluştur
+→ A known olur
+→ face_id A kalır
+
+Assignment:
+
+video track face_id=A
+ama gerçek kişi existing Person/FaceIdentity B
+→ track current resolution B’ye bağlanır
+→ eski at-processing snapshot A olarak audit edilebilir
+→ A’nın samples’ı explicit reviewed merge/admission ile B’ye taşınabilir
+→ A inactive/merged alias olabilir
+→ historical recognition snapshot rewrite edilmez
+
+Silent destructive merge yapma.
+
+Alias/merge/event mekanizması yoksa minimal ama audit edilebilir bir tane oluştur.
+
+----------------------------------------------------------------------
+6.7 DTO naming
+----------------------------------------------------------------------
+
+VideoPersonSummary gibi isimleri compatibility korunarak aşamalı olarak:
+
+VideoTrackIdentitySummary
+
+veya eşdeğer net bir isme geçir.
+
+Public contract’ı bir anda kırma. Alias/deprecation uygulanabilir.
+
+----------------------------------------------------------------------
+6.8 Milestone A acceptance
+----------------------------------------------------------------------
+
+Zorunlu senaryolar:
+
+1. Video anonymous track UI’da görülür.
+2. “Yeni kişi oluştur” ile enroll edilir.
+3. Aynı face_id korunur.
+4. Global identity known olur.
+5. Video sayfası refresh olmadan currentName gösterir.
+6. statusAtProcessing anonymous kalır.
+7. “Var olan kişiye bağla” çalışır.
+8. Duplicate Person/FaceIdentity oluşmaz.
+9. Backend structured error UI’da doğru gösterilir.
+10. Restart sonrası assignment/enrollment kalır.
+11. Image recognition aynı identity’yi döndürür.
+12. Video recognition aynı identity’yi döndürür.
+
+Önerilen target:
+
+make global-identity-enrollment-acceptance
+
+======================================================================
+7. MILESTONE B — BULK DATASET ENROLLMENT
+======================================================================
+
+Kullanıcının büyük identity/celebrity fotoğraf dataset’i local olarak mevcuttur.
+
+Dataset’i indirmek sistemi otomatik olarak eğitmez veya gallery’ye eklemez.
+
+Dataset/model indirme yapma. Dataset’i Git’e ekleme.
+
+İlk önce küçük rights-cleared fixture ile vertical slice yap:
+
+- 2–10 person
+- kişi başına birkaç fotoğraf
+- en az bir holdout fotoğraf/video
+- sonra büyük dataset’e ölçekle
+
+----------------------------------------------------------------------
+7.1 Dataset manifest
+----------------------------------------------------------------------
+
+Manifest alanları:
+
+- source_namespace
+- external_subject_key
+- display_name
+- image_uri veya local relative path
+- sha256
+- provenance
+- license
+- split:
+  - enrollment
+  - development
+  - holdout
+- optional metadata
+
+Dataset folder/name bilgisi public object key veya Qdrant payload’a girmez.
+
+----------------------------------------------------------------------
+7.2 Ingestion lifecycle
+----------------------------------------------------------------------
+
+Her subject:
+
+1. Person reserve/upsert
+2. Canonical FaceIdentity reserve/upsert
+3. PersonPhoto/enrollment item pending
+4. GPU inference
+5. Admission decision
+6. FaceSample pending
+7. MinIO crop upload
+8. Qdrant vector upsert
+9. PostgreSQL active/finalized
+10. Progress/report
+
+PostgreSQL → MinIO → Qdrant tek transaction değildir.
+
+Bu nedenle:
+
+- deterministic IDs
+- idempotent retry
+- pending/active/rejected/quarantined state
+- compensation/reconciliation
+- no orphan normalizasyonu
+- restart resume
+- duplicate prevention
+
+zorunludur.
+
+----------------------------------------------------------------------
+7.3 GPU path
+----------------------------------------------------------------------
+
+Aynı production model contract’ı kullan:
+
+- RetinaFace R50
+- exact five-point alignment
+- GlintR100
+- 512-D L2
+- exact model_version
+- aynı Qdrant collection/model filter
+
+CPU fallback yok.
+
+Büyük dataset için:
+
+- bounded queues
+- bounded memory
+- detector/recognizer batching
+- multi-GPU destekleniyorsa subject bazlı stable sharding
+- aynı Person’ın bütün fotoğrafları aynı worker’a
+- Python built-in hash() kullanma
+- stable hash(source_subject_key) mod worker_count
+- worker başına tek fiziksel GPU
+- host GPU UUID ve container GPU index ayrı kaydedilir
+
+----------------------------------------------------------------------
+7.4 Admission/quality
+----------------------------------------------------------------------
+
+No-face:
+
+- reject
+
+Multi-face:
+
+- hedef yüz açıkça belirlenemiyorsa quarantine
+- folder adı var diye rastgele en büyük yüzü production identity’ye yazma
+
+Kontroller:
+
+- minimum face resolution
+- detector confidence
+- landmark validity
+- alignment residual
+- blur/sharpness
+- under/over exposure
+- border clipping
+- pose proxy
+- finite/norm embedding
+- duplicate SHA
+- embedding near-duplicate
+- person içi embedding outlier
+- source/pose diversity
+
+Bütün fotoğrafları indexleme.
+
+Person başına quality ve diversity bakımından yeterli active sample set seç.
+
+----------------------------------------------------------------------
+7.5 Gallery search aggregation
+----------------------------------------------------------------------
+
+Qdrant point:
+
+- point ID = sample_id
+- vector = normalized GlintR100 embedding
+- payload:
+  - sample_id
+  - face_id
+  - active
+  - model_version
+  - gerekiyorsa non-PII person grouping ID
+
+Qdrant’a yazılmayacak:
+
+- display name
+- metadata
+- dataset folder name
+- MinIO key
+- provenance text
+
+Search:
+
+sample candidates
+→ face_id/person_id group
+→ max veya top-M consensus
+→ top1/top2 person margin
+→ PostgreSQL active lifecycle validation
+→ final identity decision
+
+Çok fotoğrafı olan bir Person top-K’yı tek başına doldurmamalı.
+
+----------------------------------------------------------------------
+7.6 Evaluation leakage
+----------------------------------------------------------------------
+
+Enrollment/gallery ile probe/holdout aynı exact image olmamalı.
+
+SHA duplicate ve near-duplicate kontrolü yap.
+
+Dataset GlintR100 eğitiminde kullanılmış olabilir. Böyle bir dataset:
+
+- importer/gallery functionality kanıtı olabilir
+- bağımsız generalization/accuracy kanıtı olamaz
+
+Bu limitation raporlanmalı.
+
+----------------------------------------------------------------------
+7.7 Bulk enrollment API/UI
+----------------------------------------------------------------------
+
+Mevcut job infrastructure uygunsa reuse et; duplicate queue/state machine yazma.
+
+Gerekli minimum contract:
+
+- POST /api/v1/enrollment-jobs
+- GET /api/v1/enrollment-jobs/{jobId}
+- POST cancel/retry
+- result/rejection summary
+
+veya mevcut bulk job contract’ına uyumlu eşdeğer endpoint’ler.
+
+UI minimum:
+
+- Manifest/dataset source seçimi
+- Job progress
+- Person/image counts
+- accepted/rejected/quarantined
+- rejection reasons
+- resume/retry
+- küçük result preview
+
+İlk vertical slice gerçek küçük fixture ile çalışmalı.
+
+----------------------------------------------------------------------
+7.8 Milestone B acceptance
+----------------------------------------------------------------------
+
+1. Küçük dataset import edilir.
+2. Bir Person + bir canonical FaceIdentity/person oluşur.
+3. Çok sayıda FaceSample oluşur.
+4. MinIO/Qdrant/PG tutarlı.
+5. Retry duplicate üretmez.
+6. Quarantine/reject reason görünür.
+7. Gallery image’den farklı holdout image tanınır.
+8. Dataset’ten import edilen kişi gerçek videoda aynı face_id/person_id ile tanınır.
+9. Video track mevcut Person’a bağlanabilir.
+10. Restart resume çalışır.
+11. Dataset/artifacts Git’e girmez.
+
+Önerilen target:
+
+make bulk-enrollment-e2e
+
+======================================================================
+8. MILESTONE C — İZOLE GPU VIDEO LAB
+======================================================================
+
+Yeni folder:
+
+research/gpu_video_lab/
+
+Mevcut research/video_reference_lab varsa:
+
+- silme
+- değiştirme
+- production dependency yapma
+- yeni lab ile karıştırma
+
+GPU Video Lab’in amacı production’ı tekrar yazmak değildir.
+
+Ana model:
+
+capture
+→ replay
+→ sweep
+→ compare
+→ report
+→ promote candidate
+→ production E2E validation
+
+----------------------------------------------------------------------
+8.1 Dependency boundary
+----------------------------------------------------------------------
+
+İzin verilen:
+
+research/gpu_video_lab
+→ production native binary
+→ canonical observation contract
+
+Yasak:
+
+backend/production
+→ research/gpu_video_lab import
+
+Lab:
+
+- Production PostgreSQL’e yazmaz
+- Production MinIO’ya yazmaz
+- Production Qdrant’a yazmaz
+- face_id/person_id oluşturmaz
+- Production job finalize etmez
+- Production secret kullanmaz
+- Production worker tarafından import edilmez
+- Lab sonucu otomatik production config’e taşımaz
+
+Boundary test:
+
+- backend/** içinde research.gpu_video_lab import’u yasak
+- lab klasörü silinse production build/test çalışmalı
+
+----------------------------------------------------------------------
+8.2 Önerilen klasör
+----------------------------------------------------------------------
+
+research/gpu_video_lab/
+  README.md
+  pyproject.toml
+  Dockerfile.gpu-lab
+  docker-compose.gpu-lab.yml
+
+  configs/
+    capture/
+    baselines/
+    experiments/
+    schemas/
+
+  src/mv_gpu_video_lab/
+    cli.py
+    bundle.py
+    registry.py
+    hashing.py
+
+    strategies/
+      tracker/
+      quality/
+      template/
+      best_shot/
+      reconciliation/
+
+    evaluation/
+      structural.py
+      labeled.py
+      retrieval.py
+      performance.py
+
+    reports/
+      contact_sheet.py
+      timeline.py
+      comparison.py
+      failure_gallery.py
+      html_report.py
+
+  contracts/
+    experiment_result_v1.proto
+    promotion_candidate_v1.schema.json
+
+  tests/
+    unit/
+    contract/
+    integration/
+    gpu/
+
+  fixtures/
+    manifests/
+
+  artifacts/
+    # tamamı gitignored
+
+Canonical production observation protobuf’unu lab içinde fork etme.
+
+Lab yalnız deney sonucu/report contract’ını sahiplenebilir.
+
+----------------------------------------------------------------------
+8.3 Capture once
+----------------------------------------------------------------------
+
+Gerçek production hot path videoyu bir kez işler.
+
+Capture bundle tracker-independent olmalı. Mevcut baseline track ID yalnız optional reference alanıdır.
+
+Header:
+
+- schema version
+- video SHA-256
+- dimensions/rotation
+- time base
+- duration
+- Git SHA/dirty state
+- model/preprocess version
+- ONNX/engine SHA
+- container digest
+- CUDA/TensorRT/DeepStream
+- GPU UUID
+- detector/recognizer batch
+- capture config hash
+- seed
+
+Frame:
+
+- presentation_index
+- decode_index
+- PTS ns
+- duration ns
+- scene segment
+- dimensions
+- detection count
+
+Detection:
+
+- stable detection key
+- presentation index + ordinal
+- original bbox
+- five landmarks
+- detector score
+- 512-D normalized embedding
+- alignment residual
+- crop reference
+- recognition eligibility
+- raw quality primitives
+- optional production baseline track key
+
+Footer:
+
+- decoded/processed count
+- detection/embedding/crop count
+- first/last PTS
+- semantic hash
+- artifact SHA/size
+- stage timing
+- peak RSS/VRAM
+
+Full frame varsayılan olarak artifact’e yazılmasın.
+
+Embedding biyometrik veridir:
+
+- Git’e girmez
+- artifact directory restricted permissions
+- retention/delete command
+- public HTML report embedding içermez
+- production object store’a otomatik publish olmaz
+
+----------------------------------------------------------------------
+8.4 Replay/sweep
+----------------------------------------------------------------------
+
+RetinaFace/GlintR100’ü her threshold denemesinde yeniden çalıştırma.
+
+Frozen capture üzerinde:
+
+- tracker
+- quality
+- best shot
+- template
+- reconciliation
+
+varyantlarını hızlı replay et.
+
+Bu replay Python veya küçük native modül kullanabilir; production hot path değildir.
+
+Detector/preprocess/alignment/TensorRT/CUDA değişirse full GPU capture/rerun gerekir.
+
+----------------------------------------------------------------------
+8.5 Tracker strategies
+----------------------------------------------------------------------
+
+Strategy interface:
+
+reset(context)
+update(frame, detections)
+finalize()
+→ deterministic raw tracks + evidence
+
+Karşılaştır:
+
+- Current production tracker
+- IoU-only baseline
+- IoU + Kalman
+- ByteTrack high/low score
+- Hybrid motion + IoU + quality-gated embedding
+- Scene-cut reset
+- Lost-track resurrection variants
+
+Kurallar:
+
+- Raw motion track hard scene cut’ta resetlenir.
+- Aynı kişi sonraki sahnede canonical reconciliation ile yeniden birleşebilir.
+- Düşük kaliteli embedding association’ı ele geçirmez.
+- Spatial/motion gating olmadan salt cosine merge yapma.
+- Uncertain durumda ayrı track, yanlış merge’den daha güvenlidir.
+- Causal online tracker ile future-aware offline reconciler sonuçlarını ayrı kategoride raporla.
+
+----------------------------------------------------------------------
+8.6 Quality primitive’leri
+----------------------------------------------------------------------
+
+Tek opaque scalar yeterli değildir.
+
+Kaydet:
+
+- detector score
+- face short-side
+- face area
+- relative face area
+- inter-eye distance
+- border clipping/margin
+- landmark geometry validity
+- yaw/pitch/roll proxy
+- alignment RMS residual
+- luminance mean
+- dark clipped ratio
+- light clipped ratio
+- contrast
+- sharpness/Tenengrad
+- motion blur proxy
+- embedding norm/finite
+- provisional-track embedding consistency
+- temporal redundancy
+
+Gerçek occlusion modeli yoksa `occlusion_score` deme; `occlusion_proxy` de.
+
+Quality iki aşamalıdır:
+
+A. Hard gate
+
+- invalid landmark
+- non-finite embedding
+- zero norm
+- impossible bbox
+- unusable alignment
+- catastrophic clipping/exposure
+
+B. Soft ranking
+
+- blur
+- brightness
+- pose
+- size
+- detector score
+- temporal novelty
+
+Brightness biraz düşük diye otomatik reject etmek yerine ranking penalty uygulanabilir.
+
+Her rejection reason-coded olmalı.
+
+----------------------------------------------------------------------
+8.7 Best shot ve template
+----------------------------------------------------------------------
+
+İki ayrı sonuç:
+
+1. UI representative shot
+2. Identity evidence top-K
+
+Representative shot:
+
+- quality iyi
+- track template/medoid’e yakın
+- keskin
+- yeterince frontal
+- alignment iyi
+- border clipping düşük
+- track’in geri kalanıyla tutarlı
+
+Template varyantları:
+
+- all-frame mean
+- first
+- max detector score
+- max quality
+- best-1
+- top-K mean
+- quality-weighted mean
+- medoid
+- trimmed centroid
+- cosine outlier-rejected centroid
+- temporal-diverse top-K
+
+Algoritma:
+
+1. Hard gate
+2. PTS-based minimum temporal separation
+3. Diversity
+4. Quality ranking
+5. Near-duplicate suppression
+6. Embedding outlier rejection
+7. Weighted centroid/medoid
+8. Final L2 normalization
+9. Evidence count + dispersion + config version
+
+----------------------------------------------------------------------
+8.8 Reconciliation
+----------------------------------------------------------------------
+
+Constrained graph merge:
+
+1. Raw tracks node.
+2. Candidate edges embedding/evidence score.
+3. Same-frame co-occurrence hard cannot-link.
+4. Overlapping interval hard cannot-link.
+5. Cluster merge öncesi cluster-level cannot-link kontrolü.
+6. Single-link transitive yanlış merge engeli.
+7. Belirsiz edge merge edilmez.
+8. Accepted/rejected edge reason log.
+9. Scene-cut cross-scene merge yalnız explicit identity evidence ile.
+10. Deterministic order/hash.
+
+----------------------------------------------------------------------
+8.9 Lab CLI
+----------------------------------------------------------------------
+
+Önerilen komutlar:
+
+mv-gpu-video-lab capture \
+  --video test_videos/Friends.mp4 \
+  --config configs/capture/friends_full.yaml
+
+mv-gpu-video-lab replay \
+  --bundle artifacts/captures/<capture_id> \
+  --config configs/baselines/production_current.yaml
+
+mv-gpu-video-lab sweep \
+  --bundle artifacts/captures/<capture_id> \
+  --config configs/experiments/hybrid_tracker_grid.yaml
+
+mv-gpu-video-lab compare \
+  --baseline artifacts/runs/<baseline> \
+  --candidate artifacts/runs/<candidate>
+
+mv-gpu-video-lab report \
+  --run artifacts/runs/<run_id>
+
+mv-gpu-video-lab failure-gallery \
+  --run artifacts/runs/<run_id>
+
+mv-gpu-video-lab validate-native \
+  --video <video> \
+  --candidate artifacts/runs/<candidate>
+
+mv-gpu-video-lab clean \
+  --older-than 7d
+
+Run ID content-addressed:
+
+hash(
+  capture_id
+  + resolved config
+  + algorithm source SHA
+  + seed
+  + runtime fingerprint
+)
+
+----------------------------------------------------------------------
+8.10 Lab artifacts
+----------------------------------------------------------------------
+
+artifacts/runs/<run_id>/
+  run_manifest.json
+  resolved_config.yaml
+  quality.parquet
+  assignments.parquet
+  raw_tracks.parquet
+  canonical_tracks.parquet
+  templates.parquet
+  best_shots.json
+  reconciliation.json
+  metrics.json
+  performance.json
+  timeline.html
+  contact_sheets/
+  failure_gallery/
+  logs/
+
+Artifacts Git’e girmez.
+
+======================================================================
+9. BÜTÜN FRAMELERİ ETİKETLEMEDEN EVALUATION
+======================================================================
+
+Her frame’i elle bbox label yapmak zorunlu değildir.
+
+Ground-truth pyramid kullan.
+
+----------------------------------------------------------------------
+9.1 L0 — Sıfır label invariants
+----------------------------------------------------------------------
+
+- PTS monotonic
+- frame/detection association complete
+- observation kayıp/duplicate yok
+- 512-D finite L2
+- same-frame cannot-link violation sıfır
+- deterministic repeated hash
+- batch/chunk invariance
+- resize/re-encode/brightness perturbation başka known kişiye flip olmuyor; gerekirse unknown oluyor
+- raw tracker scene cut üzerinden taşmıyor
+
+----------------------------------------------------------------------
+9.2 L1 — Track contact-sheet review
+----------------------------------------------------------------------
+
+Her track için göster:
+
+- first
+- middle
+- last
+- predicted best
+- predicted worst
+- highest ambiguity
+- representative shot
+
+Human label:
+
+- identity/person
+- unknown
+- pure
+- split
+- merged
+- uncertain
+- false detection
+- bad best shot
+
+Böylece her frame etiketlenmeden track purity ve fragmentation ölçülebilir.
+
+----------------------------------------------------------------------
+9.3 L2 — Sparse keyframes
+----------------------------------------------------------------------
+
+Her 1–2 saniyede bir ve olay karelerinde bbox+identity:
+
+- track birth/death
+- scene cut
+- lost/reacquire
+- association tie
+- low top1/top2 margin
+- quality-feature disagreement
+- overlapping/cannot-link
+- border/pose/blur failure
+
+Metrikleri açıkça “sparse labeled subset” olarak raporla.
+
+----------------------------------------------------------------------
+9.4 L3 — Dense challenge clips
+----------------------------------------------------------------------
+
+Yalnız failure çevresindeki 10–30 saniyelik parçaları her frame label et.
+
+Burada hesaplanabilir:
+
+- HOTA
+- DetA
+- AssA
+- IDF1
+- ID switches
+- localization error
+
+Official TrackEval/reference source kullan; hafızadan metrik implementasyonu uydurma.
+
+----------------------------------------------------------------------
+9.5 Identity pair set
+----------------------------------------------------------------------
+
+Curated:
+
+- same-person cross-source pairs
+- different-person pairs
+- co-occurring kişiler güçlü negatives
+- uncertain ayrı label
+
+Gallery görüntüsü ile probe exact duplicate olmamalı.
+
+======================================================================
+10. METRİKLER
+======================================================================
+
+Detection:
+
+- precision/recall labeled subset
+- IoU distribution
+- miss/duplicate rate
+- small/profile/blur/occlusion buckets
+
+Tracking:
+
+- track purity
+- completeness
+- fragmentation
+- tracks per real appearance/person
+- merge contamination
+- ID switches/person-minute
+- raw→canonical merge precision/recall
+- cannot-link violations
+- dense clips HOTA/IDF1
+
+Quality:
+
+- acceptance coverage
+- good-frame rejection
+- harmful-frame acceptance
+- error-versus-discard curve
+- feature ablation
+
+Recognition utility:
+
+u_i =
+cos(e_i, same-person held-out reference)
+-
+max cos(e_i, impostor references)
+
+Reference farklı source’dan olmalı.
+
+Best shot/template:
+
+- best-shot oracle regret
+- top-K redundancy
+- temporal diversity
+- genuine similarity
+- max impostor similarity
+- genuine/impostor margin
+- template stability
+- leave-one-source-out performance
+
+Open-set identity:
+
+- known recall
+- known → wrong-known
+- unknown → known false assignment
+- duplicate faceId/person
+- same person cross-video consistency
+- top1/top2 margin
+- overlapping same-faceId collision
+
+Sistem:
+
+- detector/raw tracker FPS
+- full native observation FPS
+- replay FPS
+- end-to-end worker FPS
+- p50/p95
+- peak RSS/VRAM
+- artifact bytes
+- deterministic hash
+
+Ground truth yokken accuracy PASS deme.
+
+======================================================================
+11. ABLATION PLANI
+======================================================================
+
+Aynı immutable capture ve aynı dev/validation/holdout split üzerinde:
+
+Tracker:
+
+- IoU
+- Kalman
+- ByteTrack high/low
+- embedding association on/off
+- scene-cut reset
+- max_age
+- gap thresholds
+
+Quality:
+
+- detector score
+- size
+- blur
+- brightness/clipping
+- pose
+- landmark geometry
+- alignment residual
+- border clipping
+
+Best-shot/template:
+
+- best-1
+- top-K
+- medoid
+- weighted mean
+- trimmed centroid
+- outlier rejection
+- temporal diversity
+
+Reconciliation:
+
+- cosine threshold
+- margin
+- temporal gap
+- cannot-link on/off
+- scene segmentation
+
+Önce her feature tek başına ve leave-one-out.
+
+Sonra coarse sweep.
+
+Yalnız iyi bölgelerde narrow sweep.
+
+Sonsuz grid üretme.
+
+Her candidate en az iki kez determinism için çalıştırılır.
+
+Friends’e overfit olma.
+
+Minimum corpus:
+
+- Friends
+- talking head
+- group scene
+- rapid cuts
+- occlusion
+- low light
+- motion blur
+- profile/small faces
+- visually similar co-occurring people
+- short/long disappearance
+
+Dev, validation ve holdout video/source bazında ayrılmalı; frame bazında leakage yapma.
+
+======================================================================
+12. UI FEEDBACK → LAB LABEL DÖNGÜSÜ
+======================================================================
+
+Product UI’daki manual correction event’leri audit edilerek lab label package’e export edilsin:
+
+- assign person
+- create person
+- same person
+- different person
+- merge tracks
+- split track
+- false detection
+- bad best shot
+- uncertain
+
+Bu eventler production kararını otomatik değiştiren training loop olmasın.
+
+Export edilen immutable label package:
+
+- video SHA
+- job ID
+- track/detection keys
+- person ID/label
+- action
+- annotator
+- timestamp
+- revision
+- source config/model version
+
+Auto-propagated label ground truth sayılmaz; human confirmation gerekir.
+
+======================================================================
+13. GLOBAL GALLERY POLLUTION DÜZELTMESİ
+======================================================================
+
+Mevcut video identity flow unmatched her canonical track için global anonymous identity/sample oluşturuyor olabilir.
+
+Tracker fragmentation varsa:
+
+Jennifer
+→ raw/canonical parçalar
+→ anonymous faceId A
+→ anonymous faceId B
+→ anonymous faceId C
+
+ve Qdrant kirlenir.
+
+Daha güvenli admission:
+
+- Yeterli quality/evidence canonical track:
+  global anonymous FaceIdentity oluşturabilir.
+
+- Insufficient-quality/short/ambiguous track:
+  job-local unresolved kalır.
+  Qdrant’a yazılmaz.
+  kullanıcı doğrularsa global identity oluşturulur veya mevcut Person’a bağlanır.
+
+Bu değişiklik schema migration gerektiriyorsa:
+
+- published migration rewrite etme
+- yeni migration ekle
+- video_track.face_id nullable/unresolved semantics’i açıkça test et
+- mevcut kayıtları bozma
+- UI unresolved durumu desteklesin
+
+Yanlış known üretmek, unknown bırakmaktan daha ağır hatadır.
+
+======================================================================
+14. LAB → PRODUCTION PROMOTION
+======================================================================
+
+Lab sonucu production’a otomatik uygulanmaz.
+
+Lab şunu üretir:
+
+promotion_candidate.json
+
+İçerik:
+
+- candidate config/source hash
+- baseline comparison
+- dev/validation/holdout metrics
+- cannot-link violations
+- known→wrong-known etkisi
+- false-known etkisi
+- fragmentation/merge etkisi
+- throughput/memory etkisi
+- regression/failure gallery
+- config/model/container/GPU fingerprint
+- exact commands
+
+Promotion hard gates:
+
+- cannot-link violation = 0
+- NaN/invalid embedding = 0
+- missing/mis-associated observation = 0
+- deterministic hash
+- holdout known→wrong-known artmıyor
+- cross-person merge artmıyor
+- coverage sessizce çökmüyor
+- başlangıç guardrail:
+  - full-native throughput regression yaklaşık <= %5
+  - peak VRAM regression yaklaşık <= %10
+  aksi explicit review gerektirir
+
+Önce feature flag/shadow mode:
+
+- Production current sonucu kullanıcıya gösterilir.
+- Candidate sonucu shadow artifact olarak kaydedilir.
+- Farklar lab raporunda incelenir.
+
+Sonra minimal reviewed production patch yapılır.
+
+Production hiçbir zaman lab klasöründen runtime import yapmaz.
+
+======================================================================
+15. MEVCUT PRODUCT HARDENING BORÇLARI
+======================================================================
+
+Bu ana görevleri yaparken aşağıdaki açıkları saklama:
+
+1. Worker native process sırasında lease heartbeat.
+2. Fencing/version predicate ile stale worker finalization engeli.
+3. In-flight cancellation:
+   SIGTERM → grace → SIGKILL.
+4. Native subprocess timeout.
+5. Gerçek progress update.
+6. MinIO video download bounded streaming.
+7. Playback gerçek Range streaming; full video RAM’e alınmamalı.
+8. Observation reader bounded/streamed.
+9. Timeline gerçek chunk/window contract.
+10. Artifact SHA/input SHA/model version.
+11. Strict JSON; NaN yerine null.
+12. Fresh-checkout reproducible worker image.
+13. Native binary image içinde source’tan build.
+14. Local build/ artifact copy bağımlılığını kaldır.
+15. Generated biometric artifacts/loglar Git’e girmesin.
+16. Completed video overlay Playwright acceptance.
+17. Retry duplicate identity/sample/vector/track üretmesin.
+18. Container exit sonrası GPU memory baseline.
+
+Identity ve lab işini tekrar worker’ı sıfırdan yazma bahanesine dönüştürme; fakat final PASS öncesi bu gate’leri dürüstçe raporla.
+
+======================================================================
+16. TOOL / MCP DİSİPLİNİ
+======================================================================
+
+Yeni agent context bilmediği için tool kullanımı zorunludur.
+
+codebase-memory-mcp:
+
+- başlangıçta repo graph
+- Person/FaceIdentity/FaceSample callers
+- video_track/result callers
+- enrollment UI/API path
+- worker/native path
+- tests
+- büyük refactor etkisi
+
+context7:
+
+- FastAPI
+- SQLAlchemy
+- Alembic
+- Qdrant
+- MinIO
+- React Query
+- Playwright
+- Protobuf/zstd
+- CMake/CUDA/TensorRT
+gibi version-sensitive API’lerde official/current docs.
+
+deepwiki:
+
+- ByteTrack/TrackEval/RetinaFace/ArcFace/upstream repo architecture gerektiğinde.
+
+exa:
+
+- context7/deepwiki eksikse official vendor docs/paper/upstream source.
+
+postman:
+
+- gerçek enrollment
+- person assignment
+- bulk enrollment
+- video result API acceptance
+
+playwright:
+
+- video track enrollment
+- existing person assignment
+- refresh/current name
+- bulk job UI
+- completed overlay
+
+mem0/prompt memory:
+
+- doğrulanmış kararlar
+- blocker’lar
+- tamamlanan gate’ler
+- context compaction recovery
+
+21st:
+
+FORBIDDEN_NOT_USED
+
+Ruflo:
+
+FORBIDDEN_NOT_USED
+
+Her MCP’yi göstermelik çağırma; relevant olanı gerçekten kullan. Final raporda used/skipped gerekçesi yaz.
+
+======================================================================
+17. TEST-DRIVEN IMPLEMENTATION
+======================================================================
+
+Her production behavior:
+
+1. Failing test/reproducer
+2. Minimum implementation
+3. Targeted unit
+4. Integration
+5. Real dependency/runtime
+6. Static/type/build
+7. Git diff/scope review
+
+Mock test:
+
+- real PG
+- real MinIO
+- real Qdrant
+- real GPU
+- real browser UI
+
+kanıtı değildir.
+
+Native skip PASS sayılmaz.
+
+Manuel screenshot otomatik E2E sayılmaz; fakat kullanıcı tarafından doğrulanmış manual runtime evidence olarak ayrı raporlanabilir.
+
+======================================================================
+18. HARD STOPS
+======================================================================
+
+Yapma:
+
+- Model değiştirme
+- Model/dataset indirme
+- CPU inference fallback
+- Production OpenCV/PIL decode
+- FFmpeg crop provider
+- Annotated MP4
+- video_person adlı ikinci global identity sistemi
+- track_id = face_id
+- İsim üzerinden identity dedup
+- Her weak track’i global Qdrant identity yapmak
+- Qdrant sonucunu PG doğrulaması olmadan truth kabul etmek
+- PostgreSQL’e embedding yazmak
+- Dataset/biometric artifacts’i Git’e eklemek
+- Labı production dependency yapmak
+- Lab sonucunu otomatik production’a taşımak
+- Existing working native pipeline’ı sıfırdan yeniden yazmak
+- Ground truth olmadan accuracy PASS demek
+- Threshold’u tek Friends videosuna overfit etmek
+- Existing migrations’ı rewrite etmek
+- Kullanıcı değişikliklerini silmek
+- git add/commit/push
+- docker volume deletion/prune
+- system CUDA/driver değiştirmek
+- production secrets’i lab’a mount etmek
+
+Gerçek external blocker dışında durup mikro-onay isteme.
+
+======================================================================
+19. UYGULAMA SIRASI
+======================================================================
+
+Bu sırayla ilerle:
+
+1. Repository/source/call-graph audit.
+2. Enrollment failure reproducer.
+3. Error envelope parser fix.
+4. Snapshot vs current identity read-model fix.
+5. Enrollment query invalidation.
+6. New/existing Person assignment UI.
+7. Person schema/backfill/compatibility.
+8. Identity assignment/merge audit semantics.
+9. Global identity E2E.
+10. Small-fixture bulk enrollment.
+11. Gallery aggregation/idempotency.
+12. Image + video cross-source recognition.
+13. GPU lab boundary/scaffold.
+14. Immutable capture bundle.
+15. Production baseline replay parity.
+16. Quality primitives/contact sheets.
+17. Tracker strategy sweep.
+18. Best-shot/template sweep.
+19. Cannot-link-safe reconciliation.
+20. Sparse labels/dense challenge clips.
+21. Comparison/failure reports.
+22. Promotion candidate/shadow mode.
+23. Winning minimal production patch.
+24. Full video/image/bulk/UI regression.
+25. Worker/reproducibility hardening gates.
+26. Final review package/docs.
+
+Bir milestone green olduğunda kullanıcıdan mikro-onay istemeden sıradakine geç.
+
+Ancak devasa dataset full import’u küçük-fixture vertical slice ve user-provided path/license confirmation olmadan başlatma.
+
+======================================================================
+20. ACCEPTANCE TARGETS
+======================================================================
+
+Ekle veya mevcut target’larla uyumlu hale getir:
+
+make global-identity-enrollment-acceptance
+
+make bulk-enrollment-e2e
+
+make gpu-video-lab-capture
+
+make gpu-video-lab-replay
+
+make gpu-video-lab-sweep
+
+make gpu-video-lab-acceptance
+
+make phase2-video-e2e-acceptance
+
+Full final PASS için:
+
+- Video anonymous track UI’dan enroll edilir.
+- Aynı face_id korunur.
+- Current known name video UI’da görünür.
+- At-processing snapshot değişmez.
+- Track existing Person’a bağlanır.
+- Duplicate identity oluşmaz.
+- Küçük dataset GPU ile bulk import edilir.
+- Holdout image ve video aynı global Person/faceId’ye döner.
+- PG/MinIO/Qdrant tutarlı.
+- Retry idempotent.
+- Lab production’dan izole.
+- Frozen capture deterministic.
+- En az üç tracker/config karşılaştırılır.
+- Quality/best-shot/template ablation üretilir.
+- Cannot-link violation sıfır.
+- Friends dışında en az iki video.
+- Contact sheets/failure gallery.
+- Candidate promotion evidence.
+- Full product E2E regression green.
+- Dataset/embedding/artifacts Git’e girmez.
+
+======================================================================
+21. DOKÜMANTASYON VE FINAL RAPOR
+======================================================================
+
+Güncelle:
+
+- docs/implementation/CURRENT_SPRINT.md
+- docs/implementation/IMPLEMENTATION_DETAILS.md
+- docs/implementation/REFERENCE_DECISION_LOG.md
+- README gerekli ise
+- yeni immutable review package
+
+Önerilen review package:
+
+docs/implementation/review_packages/
+SPRINT-GLOBAL-IDENTITY-BULK-ENROLLMENT-GPU-LAB-CODE-REVIEW-PACKAGE.md
+
+Final rapor:
+
+1. PASS/PARTIAL/BLOCKED/NOT_TESTED.
+2. Kullanıcı açısından çalışan yeni davranış.
+3. Enrollment root cause.
+4. Person/FaceIdentity/VideoTrack modeli.
+5. Migration/backfill sonucu.
+6. Bulk importer sonucu.
+7. Küçük fixture gerçek GPU evidence.
+8. Image/video aynı identity evidence.
+9. Lab architecture.
+10. Capture/replay parity.
+11. Tracker/quality/best-shot ablation.
+12. Sparse/dense metrics.
+13. Cannot-link ve wrong-known safety.
+14. Performance/memory.
+15. PostgreSQL/MinIO/Qdrant counts/keys.
+16. UI Playwright.
+17. Exact commands/raw summaries.
+18. Changed-file map.
+19. Bilinen sınırlamalar.
+20. MCP/skill accountability.
+21. Tek önerilen sonraki çalışma.
+
+Kanıt olmadan:
+
+- production-ready
+- accuracy verified
+- optimal tracker
+- optimal quality score
+- universal celebrity recognition
+- fully optimized
+- 600 FPS full product
+
+deme.
+
+======================================================================
+22. BUILD MODE FIRST ACTION
+======================================================================
+
+İlk somut iş:
+
+1. Enrollment call graph çıkar.
+2. Anonymous video track seç.
+3. Global FaceIdentity state’ini kontrol et.
+4. POST enroll’ı doğrudan API ile çalıştır.
+5. Global identity ile video result snapshot/current projection farkını kanıtla.
+6. Frontend error parser’ın gerçek backend message’ı gizlediğini test et.
+7. Failing integration + Playwright testi yaz.
+8. Minimum identity/read-model/UI fix’i uygula.
+9. Sonra Person/bulk enrollment’a geç.
+
+İlk milestone tamamlanmadan GPU lab’a dalıp kullanıcı-visible enrollment sorununu açık bırakma.
+
+Şimdi Build Mode’da başla. Yeniden ürün/model/runtime kararı sorma.

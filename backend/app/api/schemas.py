@@ -73,6 +73,14 @@ class EnrollRequest(_PublicBaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class EnrollExistingPersonRequest(_PublicBaseModel):
+    person_id: str
+
+
+class AssignFaceToPersonRequest(_PublicBaseModel):
+    person_id: str
+
+
 class EnrollResponse(_PublicBaseModel):
     request_id: str
     process_id: str
@@ -80,6 +88,7 @@ class EnrollResponse(_PublicBaseModel):
     status: str
     name: str
     metadata: dict[str, Any]
+    person_id: str | None = None
 
 
 class IdentityDetailResponse(_PublicBaseModel):
@@ -87,6 +96,7 @@ class IdentityDetailResponse(_PublicBaseModel):
     face_id: str
     status: str
     name: str | None = None
+    person_id: str | None = None
     metadata: dict[str, Any]
     created_at: str | None = None
     updated_at: str | None = None
@@ -120,6 +130,77 @@ class IdentityListResponse(_PublicBaseModel):
     request_id: str
     count: int
     identities: list[IdentitySummary]
+
+
+class PersonSummary(_PublicBaseModel):
+    person_id: str
+    display_name: str
+    is_active: bool
+    face_count: int = 0
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class CreatePersonItem(_PublicBaseModel):
+    display_name: str = Field(..., min_length=1)
+    metadata: dict[str, Any] | None = None
+
+
+class PeopleBatchCreateRequest(_PublicBaseModel):
+    people: list[CreatePersonItem] = Field(..., min_length=1, max_length=1000)
+
+
+class PeopleBatchCreateResponse(_PublicBaseModel):
+    request_id: str
+    count: int
+    people: list[PersonSummary]
+
+
+class BulkEnrollPhotoItem(_PublicBaseModel):
+    filename: str = Field(..., min_length=1)
+    image_base64: str = Field(..., min_length=1)
+
+
+class BulkEnrollIdentityItem(_PublicBaseModel):
+    display_name: str = Field(..., min_length=1)
+    photos: list[BulkEnrollPhotoItem] = Field(..., min_length=1, max_length=100)
+    metadata: dict[str, Any] | None = None
+    source_dataset: str | None = None
+
+
+class BulkEnrollRequest(_PublicBaseModel):
+    identities: list[BulkEnrollIdentityItem] = Field(..., min_length=1, max_length=1000)
+
+
+class BulkEnrollResponse(_PublicBaseModel):
+    request_id: str
+    process_id: str
+    discovered_identities: int
+    discovered_photos: int
+    enrolled_identities: int
+    enrolled_photos: int
+    no_face: int
+    decode_error: int
+    failed: int
+    errors: list[str] = Field(default_factory=list)
+
+
+class PersonListResponse(_PublicBaseModel):
+    request_id: str
+    count: int
+    people: list[PersonSummary]
+
+
+class PersonDetailResponse(_PublicBaseModel):
+    request_id: str
+    person_id: str
+    display_name: str
+    is_active: bool
+    metadata: dict[str, Any]
+    face_count: int = 0
+    faces: list[IdentitySummary] = Field(default_factory=list)
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class FaceSampleResponse(_PublicBaseModel):
@@ -239,6 +320,8 @@ class VideoPersonSummary(_PublicBaseModel):
     face_id: str
     status: str
     name: str | None = None
+    current_status: str | None = None
+    current_name: str | None = None
     first_frame_index: int
     last_frame_index: int
     first_pts_ns: int

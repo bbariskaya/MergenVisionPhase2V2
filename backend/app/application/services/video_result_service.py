@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, cast
 from uuid import UUID
 
 from app.application.ports.unit_of_work import UnitOfWorkFactory
+from app.domain.entities.face_identity import FaceIdentity
 from app.domain.errors import JobNotFoundError
-from app.domain.value_objects import JobId
+from app.domain.value_objects import FaceId, JobId
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,8 @@ class PersonSummary:
     face_id: UUID
     status: str
     name: str | None
+    current_status: str | None
+    current_name: str | None
     first_frame_index: int
     last_frame_index: int
     first_pts_ns: int
@@ -61,12 +65,15 @@ class VideoResultService:
             summaries: list[PersonSummary] = []
             for track in tracks:
                 appearances = await uow.video_appearance_intervals.list_by_track_id(track.track_id)
+                current = await self._current_identity(uow, track.face_id)
                 summaries.append(
                     PersonSummary(
                         track_id=track.track_id,
                         face_id=track.face_id,
                         status=track.status_at_processing,
                         name=track.name_at_processing,
+                        current_status=current.status if current else None,
+                        current_name=current.display_name if current else None,
                         first_frame_index=track.first_frame_index,
                         last_frame_index=track.last_frame_index,
                         first_pts_ns=track.first_pts_ns,
@@ -123,3 +130,14 @@ class VideoResultService:
             return JobId(UUID(job_id_str))
         except ValueError as exc:
             raise JobNotFoundError(f"Job id {job_id_str!r} is not a valid UUID") from exc
+
+    async def _current_identity(
+        self,
+        uow: Any,
+        face_id: UUID,
+    ) -> FaceIdentity | None:
+        """Resolve the canonical face identity for current name/status projection."""
+        return cast(
+            FaceIdentity | None,
+            await uow.face_identities.get_canonical_by_id(FaceId(face_id)),
+        )

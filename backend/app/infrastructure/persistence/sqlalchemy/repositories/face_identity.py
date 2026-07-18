@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities.face_identity import FaceIdentity
 from app.domain.errors import ConcurrentUpdateError
-from app.domain.value_objects import FaceId
+from app.domain.value_objects import FaceId, PersonId
 from app.infrastructure.persistence.sqlalchemy.models.face_identity import FaceIdentityOrm
 
 
@@ -18,6 +18,8 @@ def _to_domain(orm: FaceIdentityOrm) -> FaceIdentity:
         is_active=orm.is_active,
         display_name=orm.display_name,
         identity_metadata=dict(orm.identity_metadata or {}),
+        person_id=PersonId(orm.person_id) if orm.person_id else None,
+        redirect_to_face_id=FaceId(orm.redirect_to_face_id) if orm.redirect_to_face_id else None,
         version=orm.version,
         created_at=orm.created_at,
         updated_at=orm.updated_at,
@@ -36,6 +38,8 @@ class SqlAlchemyFaceIdentityRepository:
             is_active=identity.is_active,
             display_name=identity.display_name,
             identity_metadata=identity.identity_metadata,
+            person_id=identity.person_id,
+            redirect_to_face_id=identity.redirect_to_face_id,
             version=identity.version,
             created_at=identity.created_at,
             updated_at=identity.updated_at,
@@ -59,6 +63,21 @@ class SqlAlchemyFaceIdentityRepository:
         orm = result.scalar_one_or_none()
         return _to_domain(orm) if orm else None
 
+    async def get_canonical_by_id(self, face_id: FaceId) -> FaceIdentity | None:
+        """Return the identity, following at most one redirect to its canonical target."""
+        identity = await self.get_by_id(face_id)
+        if identity is None or identity.redirect_to_face_id is None:
+            return identity
+        return await self.get_by_id(identity.redirect_to_face_id)
+
+    async def list_by_person_id(self, person_id: PersonId) -> list[FaceIdentity]:
+        result = await self._session.execute(
+            select(FaceIdentityOrm)
+            .where(FaceIdentityOrm.person_id == person_id)
+            .order_by(desc(FaceIdentityOrm.created_at))
+        )
+        return [_to_domain(orm) for orm in result.scalars().all()]
+
     async def update(self, identity: FaceIdentity) -> None:
         result = await self._session.execute(
             select(FaceIdentityOrm).where(FaceIdentityOrm.face_id == identity.face_id)
@@ -70,6 +89,8 @@ class SqlAlchemyFaceIdentityRepository:
         orm.is_active = identity.is_active
         orm.display_name = identity.display_name
         orm.identity_metadata = identity.identity_metadata
+        orm.person_id = identity.person_id
+        orm.redirect_to_face_id = identity.redirect_to_face_id
         orm.version = identity.version
         orm.updated_at = identity.updated_at
         orm.deleted_at = identity.deleted_at
@@ -90,6 +111,8 @@ class SqlAlchemyFaceIdentityRepository:
                 is_active=identity.is_active,
                 display_name=identity.display_name,
                 identity_metadata=identity.identity_metadata,
+                person_id=identity.person_id,
+                redirect_to_face_id=identity.redirect_to_face_id,
                 version=FaceIdentityOrm.version + 1,
                 updated_at=identity.updated_at,
                 deleted_at=identity.deleted_at,
@@ -107,6 +130,8 @@ class SqlAlchemyFaceIdentityRepository:
             is_active=identity.is_active,
             display_name=identity.display_name,
             identity_metadata=dict(identity.identity_metadata),
+            person_id=identity.person_id,
+            redirect_to_face_id=identity.redirect_to_face_id,
             version=new_version,
             created_at=identity.created_at,
             updated_at=identity.updated_at,

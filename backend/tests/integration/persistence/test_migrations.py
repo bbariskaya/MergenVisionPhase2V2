@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.infrastructure.uuid7 import generate_uuid7
 
-pytestmark = pytest.mark.asyncio(scope="session")
+pytestmark = pytest.mark.asyncio
 
 
 def _pg_url() -> str:
@@ -98,11 +98,27 @@ async def test_required_constraints_and_indexes() -> None:
 async def test_invalid_inserts_are_rejected_by_constraints() -> None:
     conn = await asyncpg.connect(_pg_url())
     try:
-        await conn.execute("DELETE FROM recognition_result")
-        await conn.execute("DELETE FROM face_sample")
-        await conn.execute("DELETE FROM video_job")
-        await conn.execute("DELETE FROM process_record")
-        await conn.execute("DELETE FROM face_identity")
+        await conn.execute(
+            """
+            TRUNCATE TABLE
+                video_track_sample,
+                video_timeline_chunk,
+                appearance_interval,
+                video_tracklet,
+                video_track,
+                process_event,
+                recognition_result,
+                face_sample,
+                face_identity,
+                person,
+                outbox_event,
+                idempotency_record,
+                video_job,
+                video_asset,
+                process_record
+            RESTART IDENTITY CASCADE
+            """
+        )
 
         with pytest.raises(
             asyncpg.exceptions.IntegrityConstraintViolationError

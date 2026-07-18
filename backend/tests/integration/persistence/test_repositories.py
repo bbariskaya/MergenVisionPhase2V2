@@ -6,14 +6,15 @@ import pytest
 
 from app.domain.entities.face_identity import FaceIdentity
 from app.domain.entities.face_sample import FaceSample
+from app.domain.entities.person import Person
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.entities.recognition_result import RecognitionResult
-from app.domain.value_objects import BoundingBox, FaceId, ProcessId, ResultId, SampleId
+from app.domain.value_objects import BoundingBox, FaceId, PersonId, ProcessId, ResultId, SampleId
 from app.infrastructure.config import settings
 from app.infrastructure.persistence.sqlalchemy.unit_of_work import SqlAlchemyUnitOfWork
 from app.infrastructure.uuid7 import generate_uuid7
 
-pytestmark = pytest.mark.asyncio(scope="session")
+pytestmark = pytest.mark.asyncio
 
 
 def _face_id() -> FaceId:
@@ -32,6 +33,10 @@ def _result_id() -> ResultId:
     return ResultId(generate_uuid7())
 
 
+def _person_id() -> PersonId:
+    return PersonId(generate_uuid7())
+
+
 async def test_face_identity_crud(unit_of_work: SqlAlchemyUnitOfWork) -> None:
     face_id = _face_id()
     identity = FaceIdentity(face_id=face_id)
@@ -48,7 +53,15 @@ async def test_face_identity_crud(unit_of_work: SqlAlchemyUnitOfWork) -> None:
     async with unit_of_work:
         loaded = await unit_of_work.face_identities.get_by_id(face_id)
         assert loaded is not None
-        loaded.promote_to_known("Alice", {"department": "Engineering"})
+        person_id = _person_id()
+        person = Person(
+            person_id=person_id,
+            display_name="Alice",
+            person_metadata={"department": "Engineering"},
+        )
+        await unit_of_work.people.add(person)
+        await unit_of_work.flush()
+        loaded.promote_to_known(person_id, "Alice", {"department": "Engineering"})
         await unit_of_work.face_identities.update(loaded)
         await unit_of_work.commit()
 

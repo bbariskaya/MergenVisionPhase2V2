@@ -12,12 +12,16 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse, Response
 
+from app.api.controllers.bulk_enrollment_controller import BulkEnrollmentController
 from app.api.controllers.face_controller import FaceController
-from app.api.routes import faces, processes, videos
+from app.api.controllers.person_controller import PersonController
+from app.api.routes import faces, people, processes, videos
+from app.application.services.bulk_enrollment_service import BulkEnrollmentService
 from app.application.services.identity_storage_lifecycle_service import (
     IdentityStorageLifecycleService,
 )
 from app.application.services.image_recognition_service import ImageRecognitionService
+from app.application.services.person_management_service import PersonManagementService
 from app.application.services.video_upload_service import VideoUploadService
 from app.domain.errors import (
     DomainError,
@@ -78,6 +82,36 @@ def _create_face_controller() -> FaceController:
     return FaceController(service, object_store=object_store)
 
 
+def _create_person_controller() -> PersonController:
+    unit_of_work_factory = lambda: SqlAlchemyUnitOfWork(async_session_maker)  # noqa: E731
+    service = PersonManagementService(unit_of_work_factory=unit_of_work_factory)
+    return PersonController(service)
+
+
+def _create_bulk_enrollment_controller() -> BulkEnrollmentController:
+    unit_of_work_factory = lambda: SqlAlchemyUnitOfWork(async_session_maker)  # noqa: E731
+    object_store = MinIOObjectStore()
+    vector_store = QdrantVectorStore()
+    id_generator = Uuid7Generator()
+
+    lifecycle_service = IdentityStorageLifecycleService(
+        unit_of_work_factory=unit_of_work_factory,
+        object_store=object_store,
+        vector_store=vector_store,
+        id_generator=id_generator,
+    )
+    person_service = PersonManagementService(unit_of_work_factory=unit_of_work_factory)
+
+    service = BulkEnrollmentService(
+        lifecycle_service=lifecycle_service,
+        person_service=person_service,
+        engine_factory=NativeImageRecognitionAdapter,
+        model_version=settings.model_version,
+        max_image_bytes=settings.max_image_bytes,
+    )
+    return BulkEnrollmentController(service)
+
+
 def _create_video_upload_service() -> VideoUploadService:
     unit_of_work_factory = lambda: SqlAlchemyUnitOfWork(async_session_maker)  # noqa: E731
     object_store = MinIOObjectStore()
@@ -127,41 +161,65 @@ def create_app(readiness_probe: ReadinessProbe | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        logger = logging.getLogger(__name__)
         report = await readiness_probe.check()
         app.state.readiness_report = report
 
         try:
             app.state.video_upload_service = _create_video_upload_service()
         except Exception as exc:
-            logger = logging.getLogger(__name__)
             logger.exception("video_upload_service initialization failed: %s", exc)
             app.state.video_upload_service = None
 
         if report.ready:
+            app.state.face_controller = None
+            app.state.person_controller = None
+            app.state.bulk_enrollment_controller = None
+
+            controller_errors: list[str] = []
             try:
                 app.state.face_controller = _create_face_controller()
             except Exception as exc:
+                controller_errors.append(f"face_controller: {exc}")
+                logger.exception("face_controller initialization failed: %s", exc)
+
+            try:
+                app.state.person_controller = _create_person_controller()
+            except Exception as exc:
+                controller_errors.append(f"person_controller: {exc}")
+                logger.exception("person_controller initialization failed: %s", exc)
+
+            try:
+                app.state.bulk_enrollment_controller = _create_bulk_enrollment_controller()
+            except Exception as exc:
+                controller_errors.append(f"bulk_enrollment_controller: {exc}")
+                logger.exception("bulk_enrollment_controller initialization failed: %s", exc)
+
+            if controller_errors:
                 controller_report = ReadinessReport(
                     ready=False,
                     status="not_ready",
-                    message=f"native_runtime_init_failed: {exc}",
+                    message=f"controller_init_failed: {'; '.join(controller_errors)}",
                     checks=report.checks + (
                         ReadinessCheck(
-                            name="native_runtime",
+                            name="controllers",
                             ready=False,
-                            message=f"native runtime initialization failed: {exc}",
+                            message="one or more controllers failed to initialize",
                             retryable=True,
                         ),
                     ),
                 )
                 app.state.readiness_report = controller_report
-                app.state.face_controller = None
         else:
             app.state.face_controller = None
+            app.state.person_controller = None
+            app.state.bulk_enrollment_controller = None
 
         yield
 
         app.state.face_controller = None
+        app.state.person_controller = None
+        app.state.bulk_enrollment_controller = None
         app.state.video_upload_service = None
 
     app = FastAPI(
@@ -331,6 +389,7 @@ def create_app(readiness_probe: ReadinessProbe | None = None) -> FastAPI:
         )
 
     app.include_router(faces.router, prefix="/api/v1")
+    app.include_router(people.router, prefix="/api/v1")
     app.include_router(processes.router, prefix="/api/v1")
     app.include_router(videos.router, prefix="/api/v1")
     return app

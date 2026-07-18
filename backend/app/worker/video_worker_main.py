@@ -15,6 +15,7 @@ from pathlib import Path
 
 import zstandard
 
+from app.application.ports.video_observations import VideoObservationFrame
 from app.domain.entities.video_job import VideoJob
 from app.domain.value_objects import JobId
 from app.infrastructure.config import settings

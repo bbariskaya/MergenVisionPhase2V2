@@ -591,23 +591,48 @@ Finalde her MCP ve kullanılan skill için gerçekten ne yaptığı veya neden s
 Her sprint cohesive, çalışan bir vertical outcome veya açık teknik gate üretir. Report-only sprint açılmaz. Sprint sonunda `CURRENT_SPRINT.md` ve `IMPLEMENTATION_DETAILS.md` güncellenir; meaningful implementation için `docs/implementation/review_packages/SPRINT-<NNN>-CODE-REVIEW-PACKAGE.md` hazırlanır.
 
 Completion verdict yalnız `PASS`, `PARTIAL`, `BLOCKED` veya `NOT_TESTED` olur. Final cevapta çalışan kullanıcı davranışı, exact validation komutları, raw sonuç özeti, changed-source map, known limitations, MCP/skill accountability ve tek önerilen sonraki sprint bulunur. Kanıtsız `production-ready`, `GPU-only`, `600 FPS`, `fully optimized` veya `accuracy verified` denmez.
-## 36. prompt-memory-mcp zorunlu kullanımı — compaction, snapshot ve retrieve
+## 36. Memory / context kullanımı — sadece açık talimatla
 
-OpenCode uzun konuşmalarda `compaction` yaparak eski mesajları özetleyip atabilir. Bu durumda agent’ın görev devamlılığı ve kullanıcı talimatlarını hatırlaması bozulmamalıdır. prompt-memory-mcp'yi **sürekli ve zorunlu** olarak kullan.
+Memory araçları (prompt-memory-mcp, mem0-mcp vb.) yalnızca kullanıcı açıkça "bunu hatırla", "kaydet" veya "memory'ye al" dediğinde çalışır. Otomatik snapshot, periyodik retrieve veya session başı context dump yapma.
 
-### Zorunlu kurallar
+### Kurallar
 
-1. **Compaction ÖNCESİ**: Compaction'dan hemen önce son 20-50 mesajı/özetini `prompt-memory-mcp` `store_memory` ile `Decision` veya `Memory` olarak kaydet. `source_session` olarak mevcut session UUID'sini ekle, tag'lere `["opencode","compaction",<sessionID>]` koy.
+1. **Açık talimat yoksa çağırma**: Session başlangıcında, her turda, compaction'da veya sabit aralıklarla otomatik `store_memory` / `search_memory` / `index_sessions` çağrısı yapma.
+2. **Kullanıcı "hatırla/kaydet" dediğinde**: Kısa ve öz bir `Memory` veya `Decision` kaydet; gereksiz uzunlukta olmasın.
+3. **Araç seçimi**: `prompt-memory-mcp` Claude Code tarafında açık kalır. OpenCode tarafında kapalıdır. Kullanıcı hangi MCP'yi işaret ederse onu kullan; aktif olmayanı zorla çalıştırma.
 
-2. **Her 30 saniyede bir snapshot**: Aktif session'da yapılan son değişiklikleri, kararları ve kullanıcı taleplerini `store_memory` ile `opencode-snapshot-<sessionID>-latest` adında `Memory` olarak kaydet.
+Bu kural kesindir; otomatik hafıza çağrıları atlanmadan devam edilemez.
 
-3. **Her 1 dakikada bir retrieve**: `prompt-memory-mcp` `search_memory` çağrısı ile mevcut session ve görevle ilgili son `Decision`, `Memory`, `Message`, `Session` kayıtlarını çek. `labels` olarak `["Memory","Decision","Message","Session"]` kullan.
+## 37. Context recovery (compaction / startup / resume)
 
-4. **Compaction SONRASI**: Kullanıcıya cevap vermeden veya kod/doküman değiştirmeden ÖNCE:
-   - `search_memory` ile görevle ilgili son kararları ve context'i geri getir.
-   - Session UUID biliniyorsa `get_session_context` ile tam geçmişi çek.
-   - Geri getirilen context'i yeni kararının bir parçası olarak kullan. **"Hatırlamıyorum" veya "Önceki konuşmadan bahset" deme.**
+Session `startup`, `resume` ve `/compact` sonrası context sıfırlanma riski vardır. Bu nedenle `~/.claude/settings.json` içinde `SessionStart` hook'uyla `get-full-context-after-compact` otomatik çalıştırılır. Hook şunları yapar:
 
-5. **Kullanıcı "bunu hatırla/kaydet" dediğinde**: Hemen `store_memory` ile `Memory` veya `Decision` olarak kaydet.
+1. `python3 /home/user/.claude/skills/get_full_context/get_full_context.py` çalıştırılır; DB'deki tüm kullanıcı mesajları, Decision/özet node'ları ve dosya başlıkları konuşmaya eklenir.
+2. Tam digest ayrıca `/home/user/.claude/projects/-home-user-Workspace-MergenVisionPhase2v2/get_full_context_latest.txt` dosyasına kaydedilir.
+3. Kod/implementation bağlamı gerekiyorsa `mcp__codebase-memory-mcp__get_architecture(project="home-user-Workspace-MergenVisionPhase2v2", aspects=["overview"])` çağrılır.
+4. Elde edilen özet üzerinden konuşmaya kaldığı yerden devam edilir.
 
-Bu adımlar MANDATORY'dir. Atlanmadan devam edilemez. Gerekirse önce `index_sessions` çağrıp sonra `search_memory` ile ara.
+**Hedefli büyük retrieval:** Eğer belirli bir konuya ait çok sayıda satır (örneğin 1000 satırlık bir prompt) DB'den tek seferde çekilmek isteniyorsa `mcp__prompt-memory__search_memory` yerine `mcp__prompt-memory__retrieve_memory` tool’u, `/recall` skill’i veya doğrudan SQLite script'i kullanılır; MCP limitlerine ve sayfalamaya takılmaz:
+
+```text
+mcp__prompt-memory__retrieve_memory(query="MergenVision")
+mcp__prompt-memory__retrieve_memory(tag="MergenVision", label="Memory")
+mcp__prompt-memory__retrieve_memory(query="worker heartbeat")
+```
+
+Claude slash command olarak:
+
+```bash
+/recall MergenVision
+/recall --tag MergenVision
+/recall --query "worker heartbeat"
+/recall --tag MergenVision --output /tmp/tum_memoryler.txt
+```
+
+Slash command arkasında şu script çalışır:
+`python3 /home/user/.claude/skills/get_full_context/prompt_memory_retrieve_all.py <args>`
+
+Ayrıca `python3 /home/user/.claude/skills/get_full_context/get_full_context.py "MergenVision faceId"` komutu FTS5 ile eşleşen tüm node'ları tam içerikleriyle döndürür.
+
+Bu kural Section 36'daki "açık talimat" kuralının bir istisnasıdır; context recovery açıkça AGENTS.md ile zorunlu tutulmuştur.
+

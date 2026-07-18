@@ -146,3 +146,6 @@ test-reports/video-reference/*
 
 # Friends character test image data (large, already removed from working tree)
 research/friends_characters/
+
+# Codebase-memory persistent graph artifacts
+.codebase-memory/

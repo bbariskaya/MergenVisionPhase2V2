@@ -28,7 +28,7 @@ from app.domain.entities.face_identity import FaceIdentity
 from app.domain.entities.face_sample import FaceSample
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.errors import ValidationError
-from app.domain.value_objects import BoundingBox, FaceId, ProcessId, SampleId
+from app.domain.value_objects import BoundingBox, FaceId, PersonId, ProcessId, SampleId
 
 logger = logging.getLogger(__name__)
 
@@ -212,12 +212,29 @@ class ImageRecognitionService:
             metadata=metadata or {},
         )
 
+    async def assign_face_to_person(
+        self,
+        face_id: FaceId,
+        target_person_id: PersonId,
+    ) -> FaceIdentity:
+        """Merge an anonymous face into an existing person.
+
+        The source identity becomes inactive and redirects to the canonical
+        face of the target person. This is the "existing person" enrollment
+        mode.
+        """
+        return await self._lifecycle.assign_identity_to_person(
+            face_id=face_id,
+            target_person_id=target_person_id,
+        )
+
     async def get_identity_detail(self, face_id: FaceId) -> FaceIdentity | None:
         async with self._unit_of_work_factory() as uow:
-            return await uow.face_identities.get_active_by_id(face_id)
+            return await uow.face_identities.get_canonical_by_id(face_id)
 
     async def delete_identity(self, face_id: FaceId) -> bool:
-        await self._lifecycle.deactivate_identity(face_id)
+        canonical_id = await self._canonical_face_id(face_id)
+        await self._lifecycle.deactivate_identity(canonical_id)
         return True
 
     async def list_identities(
@@ -234,8 +251,9 @@ class ImageRecognitionService:
         return list(identities)
 
     async def list_face_samples(self, face_id: FaceId) -> list[FaceSample]:
+        canonical_id = await self._canonical_face_id(face_id)
         async with self._unit_of_work_factory() as uow:
-            samples = await uow.face_samples.list_active_by_face_id(face_id)
+            samples = await uow.face_samples.list_active_by_face_id(canonical_id)
         return list(samples)
 
     async def add_face_sample(self, face_id: FaceId, image_bytes: bytes) -> FaceSample:
@@ -246,6 +264,7 @@ class ImageRecognitionService:
                 f"Image exceeds maximum allowed size of {self._max_image_bytes} bytes"
             )
 
+        canonical_id = await self._canonical_face_id(face_id)
         engine = await self._get_engine()
         raw = await engine.detect_and_embed(image_bytes)
         if not raw.detections:
@@ -254,7 +273,7 @@ class ImageRecognitionService:
         primary = max(raw.detections, key=lambda d: d.detector_confidence)
 
         matches_identity = await self._lifecycle.verify_identity_match(
-            face_id=face_id,
+            face_id=canonical_id,
             embedding=primary.embedding,
             threshold=self._match_threshold,
         )
@@ -262,21 +281,30 @@ class ImageRecognitionService:
             raise ValidationError("The uploaded face does not match the selected person")
 
         return await self._lifecycle.add_sample(
-            face_id=face_id,
+            face_id=canonical_id,
             crop_bytes=primary.aligned_crop_bytes,
             embedding=primary.embedding,
         )
 
     async def delete_face_sample(self, face_id: FaceId, sample_id: SampleId) -> None:
-        await self._lifecycle.delete_sample(face_id, sample_id)
+        canonical_id = await self._canonical_face_id(face_id)
+        await self._lifecycle.delete_sample(canonical_id, sample_id)
+
+    async def _canonical_face_id(self, face_id: FaceId) -> FaceId:
+        async with self._unit_of_work_factory() as uow:
+            identity = await uow.face_identities.get_canonical_by_id(face_id)
+        if identity is None:
+            raise ValidationError("Face identity not found")
+        return identity.face_id
 
     async def get_face_history(
         self,
         face_id: FaceId,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        canonical_id = await self._canonical_face_id(face_id)
         async with self._unit_of_work_factory() as uow:
-            results = await uow.recognition_results.list_by_face_id(face_id, limit=limit)
+            results = await uow.recognition_results.list_by_face_id(canonical_id, limit=limit)
             process_ids = [r.process_id for r in results]
             processes = {
                 p.process_id: p

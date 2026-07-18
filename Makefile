@@ -505,3 +505,24 @@ phase2-video-e2e-acceptance: phase2-services
 	@echo "==> stopping managed backend (if any)"
 	@if [ -f $(PHASE2_E2E_PID) ]; then kill `cat $(PHASE2_E2E_PID)` 2>/dev/null || true; rm -f $(PHASE2_E2E_PID); fi
 	@echo "==> phase2-video-e2e-acceptance finished"
+
+# ------------------------------------------------------------------------------
+# MCP / Codebase Memory helpers
+# ------------------------------------------------------------------------------
+MCP_PROJECT     ?= home-user-Workspace-MergenVisionPhase2v2
+MCP_REFRESH_SINCE ?= HEAD
+
+mcp-context:
+	@echo "==> mcp-context: $(QUERY)"
+	python3 scripts/mcp_context.py "$(QUERY)" --project $(MCP_PROJECT)
+
+mcp-refresh:
+	@echo "==> mcp-refresh since $(MCP_REFRESH_SINCE)"
+	python3 scripts/mcp_refresh.py --project $(MCP_PROJECT) --since $(MCP_REFRESH_SINCE)
+
+mcp-impact:
+	@echo "==> mcp-impact: $(TARGET)"
+	python3 scripts/mcp_impact.py "$(TARGET)" --project $(MCP_PROJECT)
+
+mcp-status:
+	@python3 scripts/mcp_status.py --project $(MCP_PROJECT)

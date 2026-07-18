@@ -443,6 +443,8 @@ def _to_person_summary(person: Any) -> VideoPersonSummary:
         face_id=str(person.face_id),
         status=person.status,
         name=person.name,
+        current_status=person.current_status,
+        current_name=person.current_name,
         first_frame_index=person.first_frame_index,
         last_frame_index=person.last_frame_index,
         first_pts_ns=person.first_pts_ns,

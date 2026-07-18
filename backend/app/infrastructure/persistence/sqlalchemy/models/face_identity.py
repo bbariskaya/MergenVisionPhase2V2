@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,8 +20,12 @@ class FaceIdentityOrm(Base):
         CheckConstraint("status IN ('anonymous', 'known')", name="ck_face_identity_status"),
         CheckConstraint("version >= 1", name="ck_face_identity_version_positive"),
         CheckConstraint(
-            "status != 'known' OR (display_name IS NOT NULL AND btrim(display_name) != '')",
-            name="ck_face_identity_known_name",
+            "status != 'known' OR (person_id IS NOT NULL AND display_name IS NOT NULL AND btrim(display_name) != '')",
+            name="ck_face_identity_known_requires_person",
+        ),
+        CheckConstraint(
+            "(redirect_to_face_id IS NULL) OR (redirect_to_face_id IS NOT NULL AND is_active = false)",
+            name="ck_face_identity_redirect_inactive",
         ),
         CheckConstraint(
             "(is_active = true AND deleted_at IS NULL) OR (is_active = false AND deleted_at IS NOT NULL)",
@@ -35,6 +39,12 @@ class FaceIdentityOrm(Base):
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     identity_metadata: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("person.person_id", ondelete="RESTRICT"), nullable=True
+    )
+    redirect_to_face_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("face_identity.face_id", ondelete="RESTRICT"), nullable=True
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(

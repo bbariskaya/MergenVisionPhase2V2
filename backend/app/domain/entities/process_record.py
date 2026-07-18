@@ -45,8 +45,8 @@ class ProcessRecord:
         self.error_code = error_code
         self.face_count = None
         self.cancelled_at = None
+        self.completed_at = None
         self.details = details or {}
-        self.completed_at = now
         self.failed_at = now
 
     def cancel(self, details: dict[str, Any] | None = None) -> None:
@@ -57,6 +57,6 @@ class ProcessRecord:
         self.error_code = None
         self.face_count = None
         self.failed_at = None
+        self.completed_at = None
         self.details = details or {}
-        self.completed_at = now
         self.cancelled_at = now

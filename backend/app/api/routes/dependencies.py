@@ -9,7 +9,9 @@ from typing import cast
 
 from fastapi import HTTPException, Request, status
 
+from app.api.controllers.bulk_enrollment_controller import BulkEnrollmentController
 from app.api.controllers.face_controller import FaceController
+from app.api.controllers.person_controller import PersonController
 from app.application.services.video_overlay_service import VideoOverlayService
 from app.application.services.video_result_service import VideoResultService
 from app.application.services.video_upload_service import VideoUploadService
@@ -82,3 +84,43 @@ def get_video_overlay_service() -> VideoOverlayService:
         object_store=MinIOObjectStore(),
         bucket_name=settings.minio_bucket_name,
     )
+
+
+def get_person_controller(request: Request) -> PersonController:
+    """Return the singleton person controller from app state."""
+    controller = getattr(request.app.state, "person_controller", None)
+    if controller is None:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "requestId": request_id,
+                "error": {
+                    "code": "DEPENDENCY_UNAVAILABLE",
+                    "message": "Service is not ready. Check /health/ready for details.",
+                    "retryable": True,
+                    "details": {},
+                },
+            },
+        )
+    return cast(PersonController, controller)
+
+
+def get_bulk_enrollment_controller(request: Request) -> BulkEnrollmentController:
+    """Return the singleton bulk enrollment controller from app state."""
+    controller = getattr(request.app.state, "bulk_enrollment_controller", None)
+    if controller is None:
+        request_id = str(getattr(request.state, "request_id", "unknown"))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "requestId": request_id,
+                "error": {
+                    "code": "DEPENDENCY_UNAVAILABLE",
+                    "message": "Service is not ready. Check /health/ready for details.",
+                    "retryable": True,
+                    "details": {},
+                },
+            },
+        )
+    return cast(BulkEnrollmentController, controller)

@@ -30,7 +30,18 @@ def test_fail_sets_error() -> None:
     process.fail("minio_timeout", details={"key": "faces/face/sample.webp"})
     assert process.status == "failed"
     assert process.error_code == "minio_timeout"
-    assert process.completed_at is not None
+    assert process.failed_at is not None
+    assert process.completed_at is None
+
+
+def test_cancel_sets_cancelled_at() -> None:
+    process = _process()
+    process.cancel(details={"reason": "user_request"})
+    assert process.status == "cancelled"
+    assert process.cancelled_at is not None
+    assert process.completed_at is None
+    assert process.failed_at is None
+    assert process.error_code is None
 
 
 def test_cannot_complete_completed_process() -> None:

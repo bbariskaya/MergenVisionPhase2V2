@@ -33,7 +33,7 @@ from app.application.services.image_recognition_service import (
 from app.domain.entities.face_sample import FaceSample
 from app.domain.entities.process_record import ProcessRecord
 from app.domain.errors import ValidationError
-from app.domain.value_objects import FaceId, ProcessId, SampleId
+from app.domain.value_objects import FaceId, PersonId, ProcessId, SampleId
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,30 @@ class FaceController:
             status=identity.status,
             name=identity.display_name or display_name,
             metadata=dict(identity.identity_metadata),
+            person_id=str(identity.person_id) if identity.person_id else None,
+        )
+
+    async def assign_to_person(
+        self,
+        request_id: str,
+        face_id_str: str,
+        person_id_str: str,
+    ) -> EnrollResponse:
+        try:
+            face_id = FaceId(UUID(face_id_str))
+            person_id = PersonId(UUID(person_id_str))
+        except ValueError as exc:
+            raise ValidationError("face_id and person_id must be valid UUIDs") from exc
+
+        identity = await self._service.assign_face_to_person(face_id, person_id)
+        return EnrollResponse(
+            request_id=request_id,
+            process_id=request_id,
+            face_id=str(identity.face_id),
+            status=identity.status,
+            name=identity.display_name or "",
+            metadata=dict(identity.identity_metadata),
+            person_id=str(identity.person_id) if identity.person_id else None,
         )
 
     async def get_identity(self, request_id: str, face_id_str: str) -> IdentityDetailResponse | None:
@@ -105,6 +129,7 @@ class FaceController:
             face_id=str(identity.face_id),
             status=identity.status,
             name=identity.display_name,
+            person_id=str(identity.person_id) if identity.person_id else None,
             metadata=dict(identity.identity_metadata),
             created_at=self._format_dt(identity.created_at),
             updated_at=self._format_dt(identity.updated_at),

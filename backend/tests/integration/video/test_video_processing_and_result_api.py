@@ -245,3 +245,138 @@ async def test_video_processing_completes_job_and_result_apis(
     assert playback_response.status_code in (200, 206), playback_response.text
     assert playback_response.headers["accept-ranges"] == "bytes"
     assert playback_response.content == b"fake-video-bytes"
+
+
+@pytest.mark.asyncio
+async def test_video_people_projection_reflects_current_identity_after_enrollment(
+    client: TestClient,
+    test_bucket: str,
+    crop_bytes: bytes,
+) -> None:
+    object_store = MinIOObjectStore()
+    vector_store = QdrantVectorStore()
+    id_generator = Uuid7Generator()
+    uow_factory = lambda: SqlAlchemyUnitOfWork(async_session_maker)  # noqa: E731
+
+    lifecycle = IdentityStorageLifecycleService(
+        unit_of_work_factory=uow_factory,
+        object_store=object_store,
+        vector_store=vector_store,
+        id_generator=id_generator,
+    )
+    tracking_service = VideoTrackingService(max_gap_frames=2, iou_threshold=0.3)
+    reconciliation_service = VideoReconciliationService(merge_threshold=0.6)
+    identity_service = VideoIdentityResolutionService(
+        lifecycle=lifecycle,
+        match_threshold=0.55,
+        margin_multiplier=0.95,
+    )
+    persistence_service = VideoTrackPersistenceService(unit_of_work_factory=uow_factory)
+    overlay_service = VideoOverlayService(
+        unit_of_work_factory=uow_factory,
+        object_store=object_store,
+        bucket_name=test_bucket,
+    )
+    crop_provider = PlaceholderTrackCropProvider(b"fake-crop-for-test")
+
+    service = VideoProcessingService(
+        unit_of_work_factory=uow_factory,
+        object_store=object_store,
+        lifecycle_service=lifecycle,
+        tracking_service=tracking_service,
+        reconciliation_service=reconciliation_service,
+        identity_resolution_service=identity_service,
+        track_persistence_service=persistence_service,
+        overlay_service=overlay_service,
+        crop_provider=crop_provider,
+        bucket_name=test_bucket,
+        result_prefix="videos/",
+    )
+
+    video_id = VideoId(generate_uuid7())
+    process_id = ProcessId(generate_uuid7())
+    job_id = JobId(generate_uuid7())
+
+    async with uow_factory() as uow:
+        process = ProcessRecord(
+            process_id=process_id,
+            process_type="video_recognize",
+            status="processing",
+            details={"request_id": "r1", "video_id": str(video_id), "job_id": str(job_id)},
+        )
+        await uow.processes.add(process)
+
+        asset = VideoAsset(
+            video_id=video_id,
+            upload_session_id=generate_uuid7(),
+            state="ready",
+            bucket=test_bucket,
+            object_key=f"videos/{video_id}/source/original",
+            content_sha256="a" * 64,
+            size_bytes=1024,
+            content_type="video/mp4",
+            container_format="mp4",
+            video_codec="h264",
+            display_width=640,
+            display_height=480,
+            duration_ns=165_000_000,
+            time_base_num=1,
+            time_base_den=30_000,
+            total_frames=5,
+            retention_until=datetime.now(UTC),
+            ready_at=datetime.now(UTC),
+        )
+        await uow.video_assets.add(asset)
+
+        job = VideoJob(
+            job_id=job_id,
+            video_id=video_id,
+            process_id=process_id,
+            state="processing",
+            stage="decode_infer",
+            lease_owner="test-worker",
+            lease_token=generate_uuid7(),
+            lease_expires_at=datetime.now(UTC),
+            heartbeat_at=datetime.now(UTC),
+        )
+        await uow.video_jobs.add(job)
+        await uow.commit()
+
+    await object_store.upload(
+        f"videos/{video_id}/source/original",
+        b"fake-video-bytes",
+        "video/mp4",
+    )
+
+    frames = _observation_frames(video_id, job_id)
+    await service.process(job_id, frames)
+
+    async with uow_factory() as uow:
+        tracks = await uow.video_tracks.list_by_job_id(job_id)
+        assert len(tracks) == 1
+        anonymous_face_id = tracks[0].face_id
+
+    first_people = client.get(f"/api/v1/videos/jobs/{job_id}/people")
+    assert first_people.status_code == 200, first_people.text
+    first_person = first_people.json()["people"][0]
+    assert first_person["status"] == "new_anonymous"
+    assert first_person["name"] is None
+    assert first_person["currentStatus"] == "anonymous"
+    assert first_person["currentName"] is None
+
+    enrolled = await lifecycle.enroll_identity(
+        face_id=anonymous_face_id,
+        display_name="VideoPerson",
+        metadata={"source": "test"},
+    )
+
+    second_people = client.get(f"/api/v1/videos/jobs/{job_id}/people")
+    assert second_people.status_code == 200, second_people.text
+    second_person = second_people.json()["people"][0]
+    # Snapshot fields stay immutable.
+    assert second_person["status"] == "new_anonymous"
+    assert second_person["name"] is None
+    # Current projection reflects canonical identity.
+    assert second_person["currentStatus"] == "known"
+    assert second_person["currentName"] == "VideoPerson"
+    assert second_person["faceId"] == str(enrolled.face_id)
