@@ -76,14 +76,28 @@ export default function EnrollPage() {
               <span className="text-sm text-navy-500">Durum</span>
               <span className="text-sm font-medium text-navy-900">{result.status}</span>
             </div>
+            {result.person_id && (
+              <div className="flex items-center justify-between border-b border-navy-100 py-2">
+                <span className="text-sm text-navy-500">Kişi kaydı</span>
+                <span className="text-sm font-medium text-navy-900">{result.person_id.slice(0, 8)}…</span>
+              </div>
+            )}
             <div className="flex flex-col gap-2 pt-2 sm:flex-row">
               <Button variant="secondary" onClick={reset} className="w-full sm:w-auto">
                 <RotateCcw className="mr-2 h-4 w-4" />
                 Yeni Kayıt
               </Button>
               <Link to={`/faces/${result.face_id}`} className="btn-primary w-full justify-center sm:w-auto">
-                Detayı Gör
+                Yüz Detayı
               </Link>
+              {result.person_id && (
+                <Link
+                  to={`/people/${result.person_id}`}
+                  className="btn-secondary w-full justify-center sm:w-auto"
+                >
+                  Kişi Detayı
+                </Link>
+              )}
             </div>
           </CardContent>
         </Card>

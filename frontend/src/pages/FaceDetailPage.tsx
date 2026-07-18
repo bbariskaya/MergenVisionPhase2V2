@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { formatDate, mapRecognizeStatus } from '@/lib/utils'
-import { CalendarDays, Plus, Trash2, User, X } from 'lucide-react'
+import { CalendarDays, Plus, Trash2, User, UserCircle, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
@@ -125,6 +125,18 @@ export default function FaceDetailPage() {
                 <span className="text-sm text-navy-500">Durum</span>
                 <Badge status={face.status}>{mapRecognizeStatus(face.status)}</Badge>
               </div>
+              {face.person_id && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-navy-500">Kişi</span>
+                  <Link
+                    to={`/people/${face.person_id}`}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                  >
+                    <UserCircle className="h-3.5 w-3.5" />
+                    {face.person_id.slice(0, 8)}…
+                  </Link>
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <span className="text-sm text-navy-500">face_id</span>
                 <span className="truncate pl-2 text-xs font-medium text-navy-900">{face.face_id}</span>

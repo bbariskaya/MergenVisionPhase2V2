@@ -32,7 +32,10 @@ export interface EnrollRequest {
 }
 
 export interface EnrollResponse {
+  request_id: UUID
+  process_id: UUID
   face_id: UUID
+  person_id: UUID | null
   status: string
   name: string
   metadata: Record<string, unknown> | null
@@ -42,9 +45,61 @@ export interface FaceDetail {
   face_id: UUID
   status: RecognitionStatus
   name: string | null
+  person_id: UUID | null
   metadata: Record<string, unknown> | null
   created_at: string
   updated_at: string
+}
+
+export interface PersonSummary {
+  person_id: UUID
+  display_name: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface PersonDetail {
+  request_id: UUID
+  person_id: UUID
+  display_name: string
+  is_active: boolean
+  metadata: Record<string, unknown> | null
+  face_count: number
+  faces: IdentitySummary[]
+  created_at: string
+  updated_at: string
+}
+
+export interface PersonListResponse {
+  request_id: UUID
+  count: number
+  people: PersonSummary[]
+}
+
+export interface CreatePersonRequest {
+  display_name: string
+  metadata?: Record<string, unknown>
+}
+
+export interface UpdatePersonRequest {
+  display_name?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface CreatePersonBatchItem {
+  display_name: string
+  metadata?: Record<string, unknown>
+}
+
+export interface CreatePersonBatchRequest {
+  people: CreatePersonBatchItem[]
+}
+
+export interface PeopleBatchCreateResponse {
+  request_id: UUID
+  count: number
+  people: PersonSummary[]
 }
 
 export interface FaceHistoryEntry {
@@ -227,6 +282,8 @@ export interface VideoPersonSummary {
   face_id: UUID
   status: RecognitionStatus
   name: string | null
+  current_status: RecognitionStatus | null
+  current_name: string | null
   first_frame_index: number
   last_frame_index: number
   first_pts_ns: number
