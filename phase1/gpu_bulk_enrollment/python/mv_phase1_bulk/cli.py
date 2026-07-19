@@ -225,7 +225,9 @@ async def _run_enrollment(
             for sample, result in zip(bundle.samples, results, strict=True):
                 if result.status == "accepted" and result.faces:
                     face = result.faces[0]
-                    sample.set_extraction(face.crop_bytes, face.embedding)
+                    # Persist the original source bytes (octet-stream) like
+                    # MergenVisionDemo; the aligned crop is not re-encoded.
+                    sample.set_extraction(sample.image_bytes, face.embedding)
                     accepted.append(sample)
                 else:
                     reason = result.rejection_reason or result.status
@@ -236,8 +238,8 @@ async def _run_enrollment(
             persisted = await orchestrator.persist_bundle(bundle, rejected=rejected)
 
             persisted_ids = {s.sample_id for s in persisted.persisted}
-            failed_ids = [sid for sid, _ in persisted.failed + rejected if sid not in persisted_ids]
-            errors = [f"{sid}:{code}" for sid, code in persisted.failed + rejected]
+            failed_ids = [sid for sid, _ in persisted.failed if sid not in persisted_ids]
+            errors = [f"{sid}:{code}" for sid, code in persisted.failed]
             outcomes.append(
                 EnrollmentOutcome(
                     external_subject_key=bundle.face.display_name,
@@ -250,6 +252,9 @@ async def _run_enrollment(
             typer.echo(
                 f"enrolled {bundle.face.display_name}: persisted={len(persisted.persisted)} failed={len(failed_ids)}"
             )
+            # Release device tensors before the next batch or pipeline close so
+            # arenas can be freed without dangling references.
+            del accepted, rejected, results, bundle
         return outcomes
     finally:
         if pipeline is not None:

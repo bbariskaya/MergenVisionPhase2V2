@@ -3,7 +3,9 @@
 Lifecycle per sample:
 
 1. PostgreSQL: face_identity row + ``face_sample`` in ``pending`` state.
-2. MinIO: upload the canonical 112×112 aligned WebP crop, verifying size/SHA.
+2. MinIO: upload the original source bytes as ``application/octet-stream``,
+   verifying size/SHA.  (Aligned crops are not re-encoded; the embedding is the
+   canonical identity evidence.)
 3. Qdrant: upsert the 512-D embedding with the required payload.
 4. PostgreSQL: move ``face_sample`` to ``active``.
 
@@ -71,11 +73,10 @@ class PersistenceOrchestrator:
 
         Returns a summary of which samples succeeded and which failed.
         """
-        sample_records = [s.sample_record for s in bundle.samples]
-        await self._postgres.prepare_enrollment([bundle.face], sample_records)
         rejected = rejected or []
 
         if not bundle.samples:
+            # No accepted samples: do not create a face identity at all.
             if rejected:
                 await self._postgres.fail_samples_tx(rejected)
             return PersistedSubject(
@@ -84,12 +85,12 @@ class PersistenceOrchestrator:
                 failed=rejected,
             )
 
-        # 2. MinIO upload of the aligned WebP crop (idempotent, conflict-detecting).
-        upload_items = [
-            (bundle.face.face_id, s.sample_record.sample_id, s.crop_bytes)
-            for s in bundle.samples
-        ]
-        upload_results = await self._minio.upload_many(upload_items, content_type="image/jpeg")
+        sample_records = [s.sample_record for s in bundle.samples]
+        await self._postgres.prepare_enrollment([bundle.face], sample_records)
+
+        # 2. MinIO upload of the original source bytes (idempotent, conflict-detecting).
+        upload_items = [(bundle.face.face_id, s.sample_record.sample_id, s.crop_bytes) for s in bundle.samples]
+        upload_results = await self._minio.upload_many(upload_items, content_type="application/octet-stream")
 
         successful: list[tuple[EnrolledSample, str]] = []
         failed: list[tuple[str, str]] = []
@@ -103,6 +104,7 @@ class PersistenceOrchestrator:
 
         if not successful:
             await self._postgres.fail_samples_tx(failed)
+            await self._postgres.deactivate_face_if_no_active_samples_tx(bundle.face.face_id)
             return PersistedSubject(
                 face_id=bundle.face.face_id,
                 persisted=[],
@@ -123,6 +125,7 @@ class PersistenceOrchestrator:
                 with contextlib.suppress(Exception):
                     await self._minio.delete_best_effort(object_key)
             await self._postgres.fail_samples_tx(failed)
+            await self._postgres.deactivate_face_if_no_active_samples_tx(bundle.face.face_id)
             return PersistedSubject(
                 face_id=bundle.face.face_id,
                 persisted=[],
@@ -144,6 +147,7 @@ class PersistenceOrchestrator:
                 with contextlib.suppress(Exception):
                     await self._qdrant.delete_best_effort(sample.sample_record.sample_id)
             await self._postgres.fail_samples_tx(failed)
+            await self._postgres.deactivate_face_if_no_active_samples_tx(bundle.face.face_id)
             return PersistedSubject(
                 face_id=bundle.face.face_id,
                 persisted=[],

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,6 +60,14 @@ class SqlAlchemyFaceIdentityRepository:
         )
         orm = result.scalar_one_or_none()
         return _to_domain(orm) if orm else None
+
+    async def get_many_by_ids(self, face_ids: Collection[FaceId]) -> list[FaceIdentity]:
+        if not face_ids:
+            return []
+        result = await self._session.execute(
+            select(FaceIdentityOrm).where(FaceIdentityOrm.face_id.in_(list(face_ids)))
+        )
+        return [_to_domain(orm) for orm in result.scalars().all()]
 
     async def update(self, identity: FaceIdentity) -> None:
         result = await self._session.execute(

@@ -87,8 +87,8 @@ def make_sample_id(
 
 
 def make_object_key(face_id: FaceId | str, sample_id: SampleId | str) -> str:
-    """Phase 2 object key for the canonical aligned face crop (JPEG)."""
-    return f"faces/{face_id}/{sample_id}/aligned.jpg"
+    """Phase 2 object key for the original enrollment source bytes."""
+    return f"faces/{face_id}/{sample_id}/source.bin"
 
 
 def normalize_uuid(value: str) -> str:

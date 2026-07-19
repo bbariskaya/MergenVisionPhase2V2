@@ -67,6 +67,11 @@ class EnrollByFaceIdRequest(_PublicBaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class UpdateFaceRequest(_PublicBaseModel):
+    name: str = Field(..., min_length=1)
+    metadata: dict[str, Any] | None = None
+
+
 class EnrollRequest(_PublicBaseModel):
     face_id: str
     name: str = Field(..., min_length=1)
@@ -239,6 +244,9 @@ class VideoPersonSummary(_PublicBaseModel):
     face_id: str
     status: str
     name: str | None = None
+    current_status: str | None = None
+    current_name: str | None = None
+    current_metadata: dict[str, Any] | None = None
     first_frame_index: int
     last_frame_index: int
     first_pts_ns: int

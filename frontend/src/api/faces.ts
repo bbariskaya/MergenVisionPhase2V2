@@ -5,6 +5,7 @@ import type {
   EnrollRequest,
   EnrollResponse,
   FaceDetail,
+  UpdateFaceRequest,
   FaceHistoryResponse,
   FaceSample,
   FaceSamplesResponse,
@@ -40,6 +41,31 @@ export function useEnrollMutation() {
       queryClient.invalidateQueries({ queryKey: queryKeys.face(variables.face_id) })
       queryClient.invalidateQueries({ queryKey: queryKeys.faceHistory(variables.face_id) })
       queryClient.invalidateQueries({ queryKey: queryKeys.faces({}) })
+      queryClient.invalidateQueries({ queryKey: ['video-people'] })
+      queryClient.invalidateQueries({ queryKey: ['video-appearances'] })
+      queryClient.invalidateQueries({ queryKey: ['video-timeline-frames'] })
+      queryClient.invalidateQueries({ queryKey: ['video-result'] })
+    },
+  })
+}
+
+export function useUpdateFaceMutation() {
+  const queryClient = useQueryClient()
+  return useMutation<EnrollResponse, Error, { faceId: string; body: UpdateFaceRequest }>({
+    mutationFn: async ({ faceId, body }) => {
+      return apiFetch<EnrollResponse>(`/faces/${faceId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.face(variables.faceId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.faces({}) })
+      queryClient.invalidateQueries({ queryKey: ['video-people'] })
+      queryClient.invalidateQueries({ queryKey: ['video-appearances'] })
+      queryClient.invalidateQueries({ queryKey: ['video-timeline-frames'] })
+      queryClient.invalidateQueries({ queryKey: ['video-result'] })
     },
   })
 }

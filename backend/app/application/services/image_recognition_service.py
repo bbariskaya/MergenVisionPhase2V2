@@ -12,7 +12,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from app.application.ports.image_recognition import (
@@ -211,6 +211,31 @@ class ImageRecognitionService:
             display_name=display_name,
             metadata=metadata or {},
         )
+
+    async def update_identity(
+        self,
+        face_id: FaceId,
+        display_name: str,
+        metadata: dict[str, Any] | None,
+    ) -> FaceIdentity:
+        if not display_name or not display_name.strip():
+            raise ValidationError("display_name is required and must be non-empty")
+        async with self._unit_of_work_factory() as uow:
+            identity = await uow.face_identities.get_active_by_id(face_id)
+            if identity is None:
+                raise ValidationError(f"Face identity {face_id} not found")
+            if identity.status != "known":
+                raise ValidationError(f"Cannot update identity with status {identity.status}")
+            expected_version = identity.version
+            identity.display_name = display_name.strip()
+            identity.identity_metadata = metadata or {}
+            identity.version += 1
+            identity.updated_at = datetime.now(UTC)
+            updated = await uow.face_identities.update_with_expected_version(
+                identity, expected_version=expected_version
+            )
+            await uow.commit()
+        return updated
 
     async def get_identity_detail(self, face_id: FaceId) -> FaceIdentity | None:
         async with self._unit_of_work_factory() as uow:

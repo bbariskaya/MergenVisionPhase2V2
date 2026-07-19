@@ -173,7 +173,16 @@ class PostgresStore:
             for f in faces
         ]
         stmt = pg_insert(face_identity_table).values(rows)
-        stmt = stmt.on_conflict_do_nothing(index_elements=["face_id"])
+        # On conflict, reactivate a previously soft-deleted identity without
+        # overwriting name/metadata from a prior successful enrollment.
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["face_id"],
+            set_={
+                "is_active": True,
+                "deleted_at": None,
+                "updated_at": _utcnow(),
+            },
+        )
         await conn.execute(stmt)
 
     async def upsert_samples_pending(
@@ -321,6 +330,27 @@ class PostgresStore:
         async with self._engine.begin() as conn:  # type: ignore[union-attr]
             for sample_id, failure_code in failures:
                 await self.fail_samples(conn, [sample_id], failure_code)
+
+    async def deactivate_face_if_no_active_samples_tx(self, face_id: str) -> None:
+        """Deactivate a face identity only if it has no active samples.
+
+        Used as a fail-safe when every sample for a subject failed to persist.
+        If the identity already has active samples from a previous run, it is
+        left untouched.
+        """
+        async with self._engine.begin() as conn:  # type: ignore[union-attr]
+            active_count = await conn.scalar(
+                select(func.count()).where(
+                    face_sample_table.c.face_id == face_id,
+                    face_sample_table.c.state == "active",
+                )
+            )
+            if active_count == 0:
+                await conn.execute(
+                    update(face_identity_table)
+                    .where(face_identity_table.c.face_id == face_id)
+                    .values(is_active=False, deleted_at=_utcnow(), updated_at=_utcnow())
+                )
 
     async def get_samples_for_face_ids(
         self,

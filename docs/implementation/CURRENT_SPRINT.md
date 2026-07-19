@@ -127,6 +127,41 @@ in a later explicit UI gate):
 
 Next: React canvas overlay + Playwright acceptance (`make phase2-video-e2e-acceptance`).
 
+---
+
+## Recovery Build Mode — Sprint 04
+
+### Canonical product decisions (binding)
+
+- `faceId` is the sole global persistent identity key across image, video and bulk flows.
+- `/people` is a frontend presentation route only; its canonical data source is `GET /api/v1/faces`.
+- Backend identity source-of-truth is `/api/v1/faces` (`POST /faces/{faceId}/enroll`, `PATCH /faces/{faceId}` for known name/metadata update, `DELETE /faces/{faceId}`).
+- The `Person` backend aggregate, table and `/api/v1/people` endpoint are removed and will not be resurrected.
+- Video historical result rows (`status_at_processing`, `name_at_processing`, `metadata_at_processing`) are immutable snapshots.
+- Current identity projection (`current_status`, `current_name`, `current_metadata`) is resolved at read-time in `VideoResultService` from `face_identity`, not written back to track rows or overlay artifacts.
+- Bulk, image and video flows reuse the same `face_identity` / `face_sample` / MinIO / Qdrant storage contract.
+
+### Recently closed gates
+
+| Gate | Evidence |
+|------|----------|
+| M0 — frontend identity directory contract | `frontend/src/pages/__tests__/PeoplePage.contract.test.tsx` + `npm test -- --run` (43 passed) |
+| M2 — backend known identity update | `PATCH /api/v1/faces/{faceId}` + `tests/integration/services/test_face_api_update.py` (5 passed) |
+| M3 — video current projection | `tests/integration/video/test_video_current_projection.py` (1 passed) |
+| M0 — bulk CLI accounting correctness | `phase1/gpu_bulk_enrollment/tests/unit/test_persistence_orchestrator.py` (5 passed) |
+| M0 — bulk pipeline close idempotency | `GpuFacePipeline.close()` `_closed` guard + phase1 unit tests green |
+
+### Current verdict
+
+**PARTIAL** — M0/M2/M3 unit and targeted integration tests green. Live GPU teardown (M4), bulk lifecycle dry-run audit (M5) and cross-mode identity continuity (M8) are not yet proven.
+
+### Next (in order)
+
+1. M4 — native clean shutdown with real GPU process lifecycle evidence.
+2. M5 — bulk accepted/rejected/failed accounting and read-only dry-run audit on the existing 12,578 samples.
+3. M8 — bulk ↔ image ↔ video embedding parity and held-out identity continuity.
+4. M6/M7 scale and streaming optimizations only after M4/M5/M8 are green.
+
 ## Review Package
 
 Final package: `docs/implementation/review_packages/SPRINT-003-CODE-REVIEW-PACKAGE.md`

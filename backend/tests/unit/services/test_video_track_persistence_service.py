@@ -141,6 +141,9 @@ class _FakeFaceIdentityRepo(FaceIdentityRepository):
     async def get_by_id(self, face_id: FaceId) -> Any:
         return None
 
+    async def get_many_by_ids(self, face_ids: Any) -> Any:
+        return []
+
     async def list_all(self) -> Any:
         return []
 

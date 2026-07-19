@@ -24,6 +24,7 @@ from app.api.schemas import (
     IdentitySummary,
     ProcessResponse,
     RecognizeResponse,
+    UpdateFaceRequest,
 )
 from app.application.ports.object_store import ObjectStore
 from app.application.services.image_recognition_service import (
@@ -88,6 +89,31 @@ class FaceController:
             face_id=str(identity.face_id),
             status=identity.status,
             name=identity.display_name or display_name,
+            metadata=dict(identity.identity_metadata),
+        )
+
+    async def update_identity(
+        self,
+        request_id: str,
+        face_id: str,
+        body: UpdateFaceRequest,
+    ) -> EnrollResponse:
+        try:
+            parsed_face_id = FaceId(UUID(face_id))
+        except ValueError as exc:
+            raise ValidationError("face_id must be a valid UUID") from exc
+
+        identity = await self._service.update_identity(
+            face_id=parsed_face_id,
+            display_name=body.name,
+            metadata=body.metadata,
+        )
+        return EnrollResponse(
+            request_id=request_id,
+            process_id=request_id,
+            face_id=str(identity.face_id),
+            status=identity.status,
+            name=identity.display_name or "",
             metadata=dict(identity.identity_metadata),
         )
 

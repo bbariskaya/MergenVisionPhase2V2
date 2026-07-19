@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from app.domain.entities.face_identity import FaceIdentity
 from app.domain.entities.face_sample import FaceSample
@@ -29,6 +29,9 @@ class FaceIdentityRepository(ABC):
 
     @abstractmethod
     async def get_active_by_id(self, face_id: FaceId) -> FaceIdentity | None: ...
+
+    @abstractmethod
+    async def get_many_by_ids(self, face_ids: Collection[FaceId]) -> Sequence[FaceIdentity]: ...
 
     @abstractmethod
     async def update(self, identity: FaceIdentity) -> None: ...

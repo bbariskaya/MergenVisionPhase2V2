@@ -10,9 +10,7 @@ from typing import Any, cast
 
 import numpy as np
 from cuda.bindings import runtime as cuda_runtime
-from nvidia import nvimgcodec
 
-from mv_phase1_bulk._gpu_ops import nchw_float_to_hwc_uint8
 from mv_phase1_bulk.alignment import GpuFaceAligner
 from mv_phase1_bulk.buffer_arena import BufferArena
 from mv_phase1_bulk.decoder import DecodeInfo, JpegGpuDecoder
@@ -25,26 +23,10 @@ from mv_phase1_bulk.types import FaceExtraction, ImageExtractionResult
 
 logger = logging.getLogger(__name__)
 
-
-class _CudaHwCImage:
-    """Minimal __cuda_array_interface__ wrapper for a contiguous uint8 HWC chip."""
-
-    def __init__(self, ptr: int, shape: tuple[int, int, int]) -> None:
-        self._ptr = ptr
-        self._shape = shape
-        # C-contiguous HWC uint8 strides.
-        h, w, c = shape
-        self._strides = (w * c, c, 1)
-
-    @property
-    def __cuda_array_interface__(self) -> dict[str, Any]:
-        return {
-            "shape": self._shape,
-            "typestr": "|u1",
-            "data": (self._ptr, False),
-            "version": 3,
-            "strides": self._strides,
-        }
+# One pipeline stream per device is reused across pipeline lifetimes.  Destroying
+# the handle while CV-CUDA may cache the underlying stream value causes
+# cudaErrorInvalidResourceHandle on the next pipeline creation in the same process.
+_SHARED_STREAMS: dict[int, int] = {}
 
 
 class GpuFacePipeline:
@@ -93,20 +75,11 @@ class GpuFacePipeline:
         )
         self._arena = BufferArena(device_id=device_id)
         self._set_device()
-        err, self._stream = cuda_runtime.cudaStreamCreate()
-        check_cuda(err, "pipeline stream create")
-
-        # JPEG encoder for aligned face chips.  HYBRID_CPU_GPU selects the
-        # nvJPEG CUDA encoder path; if unavailable, default auto-selection is
-        # still GPU-accelerated and never falls back to PIL/FFmpeg.
-        try:
-            self._jpeg_encoder = nvimgcodec.Encoder(
-                device_id=device_id,
-                backends=[nvimgcodec.Backend(backend_kind=nvimgcodec.BackendKind.HYBRID_CPU_GPU)],
-            )
-        except Exception as exc:
-            logger.warning("HYBRID_CPU_GPU JPEG encoder unavailable (%s); using default", exc)
-            self._jpeg_encoder = nvimgcodec.Encoder(device_id=device_id)
+        if device_id not in _SHARED_STREAMS:
+            err, stream = cuda_runtime.cudaStreamCreate()
+            check_cuda(err, "pipeline stream create")
+            _SHARED_STREAMS[device_id] = stream
+        self._stream = _SHARED_STREAMS[device_id]
 
     def _set_device(self) -> None:
         err = cuda_runtime.cudaSetDevice(self._device_id)
@@ -120,23 +93,42 @@ class GpuFacePipeline:
         logger.info("GPU face pipeline warmup complete")
 
     def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        with contextlib.suppress(Exception):
+            cuda_runtime.cudaSetDevice(self._device_id)
+        if hasattr(self, "_stream"):
+            with contextlib.suppress(Exception):
+                cuda_runtime.cudaStreamSynchronize(self._stream)
         for obj in (
             self._decoder,
             self._preprocessor,
-            self._detector_engine,
             self._postprocess,
             self._aligner,
             self._recognizer,
+            self._detector_engine,
             self._arena,
         ):
-            with contextlib.suppress(Exception):
-                obj.close()
-        if hasattr(self, "_stream"):
-            with contextlib.suppress(Exception):
-                cuda_runtime.cudaStreamDestroy(self._stream)
-            del self._stream
+            close_method = getattr(obj, "close", None)
+            if callable(close_method):
+                with contextlib.suppress(Exception):
+                    close_method()
+        # Drop references to CUDA-heavy objects while the context is still valid.
+        # This avoids destructors running during interpreter teardown with a stale
+        # context / stream handle.
+        self._decoder = cast(Any, None)
+        self._preprocessor = cast(Any, None)
+        self._detector_engine = cast(Any, None)
+        self._postprocess = cast(Any, None)
+        self._aligner = cast(Any, None)
+        self._recognizer = cast(Any, None)
+        self._arena = cast(Any, None)
+        # The shared stream is intentionally kept alive; see _SHARED_STREAMS note.
 
     def __del__(self) -> None:
+        if getattr(self, "_closed", False):
+            return
         with contextlib.suppress(Exception):
             self.close()
 
@@ -312,8 +304,43 @@ class GpuFacePipeline:
         err = cuda_runtime.cudaStreamSynchronize(int(self._stream))
         check_cuda(err, "valid sync")
 
+        # Pull all selected detection metadata to the host in one set of async
+        # copies and synchronize once before any host-side read.  This removes
+        # the prior race where score_h[0] was read before the stream completed.
+        num_valid_detections = len(scaled_list)
+        boxes_h = np.empty((num_valid_detections, 4), dtype=np.float32)
+        landmarks_h = np.empty((num_valid_detections, 10), dtype=np.float32)
+        scores_h = np.empty((num_valid_detections,), dtype=np.float32)
+        if num_valid_detections:
+            err = cuda_runtime.cudaMemcpyAsync(
+                boxes_h.ctypes.data,
+                batch_selections.boxes.ptr,
+                boxes_h.nbytes,
+                cuda_runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                int(self._stream),
+            )
+            check_cuda(err, "selected boxes D2H")
+            err = cuda_runtime.cudaMemcpyAsync(
+                landmarks_h.ctypes.data,
+                batch_selections.landmarks.ptr,
+                landmarks_h.nbytes,
+                cuda_runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                int(self._stream),
+            )
+            check_cuda(err, "selected landmarks D2H")
+            err = cuda_runtime.cudaMemcpyAsync(
+                scores_h.ctypes.data,
+                batch_selections.scores.ptr,
+                scores_h.nbytes,
+                cuda_runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost,
+                int(self._stream),
+            )
+            check_cuda(err, "selected scores D2H")
+            err = cuda_runtime.cudaStreamSynchronize(int(self._stream))
+            check_cuda(err, "selected rows sync")
+
         # Build compact selected metadata in host order.
-        selected: list[tuple[int, int, np.ndarray, np.ndarray, float]] = []
+        selected: list[tuple[int, int]] = []
         valid_idx = 0
         for i in range(b):
             res = results[chunk_start + i]
@@ -338,47 +365,8 @@ class GpuFacePipeline:
                 valid_idx += 1
                 continue
 
-            box_h = np.empty((4,), dtype=np.float32)
-            lms_h = np.empty((10,), dtype=np.float32)
-            score_h = np.empty((1,), dtype=np.float32)
-            err = cuda_runtime.cudaMemcpyAsync(
-                box_h.ctypes.data,
-                batch_selections.boxes.ptr + valid_idx * 4 * 4,
-                4 * 4,
-                cuda_runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost,
-                int(self._stream),
-            )
-            check_cuda(err, "selected box D2H")
-            err = cuda_runtime.cudaMemcpyAsync(
-                lms_h.ctypes.data,
-                batch_selections.landmarks.ptr + valid_idx * 10 * 4,
-                10 * 4,
-                cuda_runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost,
-                int(self._stream),
-            )
-            check_cuda(err, "selected landmarks D2H")
-            err = cuda_runtime.cudaMemcpyAsync(
-                score_h.ctypes.data,
-                batch_selections.scores.ptr + valid_idx * 4,
-                1 * 4,
-                cuda_runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost,
-                int(self._stream),
-            )
-            check_cuda(err, "selected score D2H")
-
-            selected.append(
-                (
-                    chunk_start + i,
-                    valid_idx,
-                    box_h,
-                    lms_h,
-                    float(score_h[0]),
-                )
-            )
+            selected.append((chunk_start + i, valid_idx))
             valid_idx += 1
-
-        err = cuda_runtime.cudaStreamSynchronize(int(self._stream))
-        check_cuda(err, "selected rows sync")
 
         if not selected:
             return
@@ -392,7 +380,7 @@ class GpuFacePipeline:
         )
         chip_plane_bytes = 3 * 112 * 112 * 4
 
-        for j, (_, valid_idx, _, _lms_h, _) in enumerate(selected):
+        for j, (_, valid_idx) in enumerate(selected):
             d_landmarks = DeviceTensor(
                 batch_selections.landmarks.ptr + valid_idx * 10 * 4,
                 (1, 10),
@@ -433,54 +421,24 @@ class GpuFacePipeline:
         )
         check_cuda(err, "extract_batch embeddings D2H")
 
-        # Convert aligned float32 NCHW batch to uint8 HWC on the GPU and encode
-        # each chip to JPEG using nvImageCodec.  Only embeddings and the encoded
-        # JPEG bitstreams cross to the CPU; the 112×112 crop stays on device.
-        chips_uint8_hwc = self._arena.reserve(
-            (m, 112, 112, 3),
-            ctypes.c_uint8,
-            stream=int(self._stream),
-        )
-        nchw_float_to_hwc_uint8(
-            chip_batch.ptr,
-            chips_uint8_hwc.ptr,
-            m,
-            112,
-            112,
-            int(self._stream),
-        )
-
+        # Wait for the embedding D2H before the host reads it.
         err = cuda_runtime.cudaStreamSynchronize(int(self._stream))
         check_cuda(err, "extract_batch final sync")
 
-        chip_stride = 112 * 112 * 3
-        crop_bytes_list: list[bytes] = []
-        for j in range(m):
-            chip_img = nvimgcodec.as_image(
-                _CudaHwCImage(
-                    chips_uint8_hwc.ptr + j * chip_stride,
-                    (112, 112, 3),
-                ),
-                sample_format=nvimgcodec.SampleFormat.I_RGB,
-                color_spec=nvimgcodec.ColorSpec.SRGB,
-            )
-            encoded = self._jpeg_encoder.encode(chip_img, "jpeg")
-            crop_bytes_list.append(bytes(encoded))
-
-        for j, (global_idx, _img_idx, box_h, lms_h, score) in enumerate(selected):
+        for j, (global_idx, valid_idx) in enumerate(selected):
             res = results[global_idx]
             embedding = embeddings_host[j]
             norm = float(np.linalg.norm(embedding))
             face = FaceExtraction(
                 source_index=global_idx,
                 detection_ordinal=0,
-                bbox_original=box_h,
-                landmarks_original=lms_h.reshape(5, 2),
-                detector_score=score,
+                bbox_original=boxes_h[valid_idx],
+                landmarks_original=landmarks_h[valid_idx].reshape(5, 2),
+                detector_score=float(scores_h[valid_idx]),
                 quality_primitives={"l2_norm": norm},
                 embedding=embedding,
                 embedding_norm=norm,
-                crop_bytes=crop_bytes_list[j],
+                crop_bytes=b"",  # aligned crop is not persisted; original bytes stored separately
                 model_version=self._model_version,
                 preprocess_version=self._preprocess_version,
             )

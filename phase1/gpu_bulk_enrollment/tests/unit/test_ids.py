@@ -63,7 +63,7 @@ def test_object_key_follows_phase2_contract() -> None:
     face_id = make_face_id("ns", "subject_A")
     sample_id = make_sample_id(face_id, "sha", "model_v1", "pre_v1")
     key = make_object_key(face_id, sample_id)
-    assert key == f"faces/{face_id}/{sample_id}/aligned.jpg"
+    assert key == f"faces/{face_id}/{sample_id}/source.bin"
 
 
 def test_hmac_fingerprint_is_stable() -> None:

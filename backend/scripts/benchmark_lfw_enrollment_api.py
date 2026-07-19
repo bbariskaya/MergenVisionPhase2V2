@@ -24,7 +24,6 @@ from typing import Any
 
 import httpx
 
-
 API_BASES = ["http://localhost:8090", "http://localhost:8091", "http://localhost:8092"]
 
 

@@ -54,6 +54,7 @@ def orchestrator() -> PersistenceOrchestrator:
     pg.prepare_enrollment = AsyncMock()
     pg.activate_samples_tx = AsyncMock()
     pg.fail_samples_tx = AsyncMock()
+    pg.deactivate_face_if_no_active_samples_tx = AsyncMock()
 
     minio = MagicMock()
     minio._bucket_name = "test-bucket"
@@ -142,3 +143,48 @@ async def test_pg_activation_failure_rolls_back_minio_and_qdrant(
     assert len(result.failed) == 2
     assert orchestrator._minio.delete_best_effort.await_count == 2
     assert orchestrator._qdrant.delete_best_effort.await_count == 2
+
+
+async def test_rejected_samples_reported_once_in_failed(orchestrator: PersistenceOrchestrator) -> None:
+    bundle = _sample_bundle(count=1)
+    orchestrator._minio.upload_many.return_value = [_upload_result("s0")]
+    rejected = [("pre-existing", "no_face")]
+
+    result = await orchestrator.persist_bundle(bundle, rejected=rejected)
+
+    assert len(result.persisted) == 1
+    assert result.failed == rejected
+    orchestrator._postgres.fail_samples_tx.assert_awaited_once_with([("pre-existing", "no_face")])
+
+
+async def test_no_accepted_samples_does_not_create_face_identity(
+    orchestrator: PersistenceOrchestrator,
+) -> None:
+    bundle = _sample_bundle(count=1)
+    bundle.samples = []
+    rejected = [("s0", "no_face")]
+
+    result = await orchestrator.persist_bundle(bundle, rejected=rejected)
+
+    orchestrator._postgres.prepare_enrollment.assert_not_awaited()
+    orchestrator._postgres.fail_samples_tx.assert_awaited_once_with(rejected)
+    orchestrator._postgres.activate_samples_tx.assert_not_awaited()
+    orchestrator._postgres.deactivate_face_if_no_active_samples_tx.assert_not_awaited()
+    assert result.persisted == []
+    assert result.failed == rejected
+
+
+async def test_all_samples_failed_deactivates_empty_face_identity(
+    orchestrator: PersistenceOrchestrator,
+) -> None:
+    bundle = _sample_bundle(count=2)
+    orchestrator._minio.upload_many.return_value = [
+        RuntimeError("network"),
+        RuntimeError("network"),
+    ]
+
+    result = await orchestrator.persist_bundle(bundle)
+
+    assert len(result.persisted) == 0
+    assert len(result.failed) == 2
+    orchestrator._postgres.deactivate_face_if_no_active_samples_tx.assert_awaited_once_with(bundle.face.face_id)

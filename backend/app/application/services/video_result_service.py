@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from app.application.ports.unit_of_work import UnitOfWorkFactory
@@ -16,6 +17,9 @@ class PersonSummary:
     face_id: UUID
     status: str
     name: str | None
+    current_status: str | None
+    current_name: str | None
+    current_metadata: dict[str, Any] | None
     first_frame_index: int
     last_frame_index: int
     first_pts_ns: int
@@ -58,15 +62,23 @@ class VideoResultService:
             if job is None:
                 raise JobNotFoundError(f"Job {job_id_str} not found")
             tracks = await uow.video_tracks.list_by_job_id(job_id)
+            face_ids = list({track.face_id for track in tracks})
+            identities = await uow.face_identities.get_many_by_ids(face_ids)
+            identity_by_id = {identity.face_id: identity for identity in identities}
+
             summaries: list[PersonSummary] = []
             for track in tracks:
                 appearances = await uow.video_appearance_intervals.list_by_track_id(track.track_id)
+                current = identity_by_id.get(track.face_id)
                 summaries.append(
                     PersonSummary(
                         track_id=track.track_id,
                         face_id=track.face_id,
                         status=track.status_at_processing,
                         name=track.name_at_processing,
+                        current_status=current.status if current else None,
+                        current_name=current.display_name if current else None,
+                        current_metadata=dict(current.identity_metadata) if current else None,
                         first_frame_index=track.first_frame_index,
                         last_frame_index=track.last_frame_index,
                         first_pts_ns=track.first_pts_ns,

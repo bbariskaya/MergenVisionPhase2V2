@@ -16,6 +16,7 @@ from app.api.schemas import (
     IdentityDetailResponse,
     IdentityListResponse,
     RecognizeResponse,
+    UpdateFaceRequest,
 )
 from app.application.services.image_validation_service import ImageValidator
 from app.infrastructure.config import settings
@@ -76,6 +77,20 @@ async def enroll_face(
         face_id=face_id,
         display_name=body.name,
         metadata=body.metadata or {},
+    )
+
+
+@router.patch("/{face_id}", response_model=EnrollResponse)
+async def update_face(
+    request: Request,
+    face_id: str,
+    body: UpdateFaceRequest,
+    controller: FaceController = Depends(get_face_controller),
+) -> EnrollResponse:
+    return await controller.update_identity(
+        request_id=str(request.state.request_id),
+        face_id=face_id,
+        body=body,
     )
 
 
